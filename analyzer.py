@@ -335,7 +335,8 @@ def analyze_and_adjust() -> list[str]:
             and t.get("bars_ago", 0) > cur_limit * 0.6
         ]
         if len(old_losses) >= 2:
-            new_limit = max(cur_limit - 2, 3)
+            # floor = 8: PIVOT_RIGHT(5)+3 이상 유지해야 신호가 통과 가능
+            new_limit = max(cur_limit - 2, 8)
             if new_limit < cur_limit:
                 swing_fresh[tf] = new_limit
                 hours_new = new_limit * TF_HOURS.get(tf, 1)

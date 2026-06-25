@@ -1,5 +1,40 @@
 # CryptoSignal CHANGELOG
 
+## 2026-06-26 (v15 — 신선도 게이트 버그 수정: PIVOT_RIGHT 미고려로 4h/1d 영구 차단)
+
+### 문제
+- `SWING_FRESHNESS["1d"] = 3`이었는데 `PIVOT_RIGHT = 5` → 1d 신호는 최소 5봉 후 확정이라 **한도 자체가 불가능**
+- Adaptive 로직이 4h 신선도를 `8 → 6 → 4 → 3봉`으로 축소 (floor=3이 PIVOT_RIGHT보다 작음) → 4h 스윙 신호 100% 차단
+- `min_vol_ratio`도 `2.5x`까지 상승 → 대부분 심볼에서 볼륨 게이트 차단
+- `get_freshness_score`의 4h 상한(8봉)이 GATE1 한도(8봉)와 같은데, bars_ago>8 시 0.0 반환 → GATE1 통과 후에도 포지션 0 발생
+
+### 수정 내용 (3파일)
+
+#### config.py
+- `SWING_FRESHNESS`: `{"1h": 12, "4h": 8, "1d": 3}` → `{"1h": 20, "4h": 20, "1d": 8}`
+  - 규칙: 모든 값은 PIVOT_RIGHT(5)+3 이상 (최소 8봉)
+
+#### analyzer.py
+- Adaptive freshness floor: `max(cur_limit - 2, 3)` → `max(cur_limit - 2, 8)`
+  - 학습에 의해 절대 8봉 미만으로 줄어들지 않도록
+
+#### divergence.py (`get_freshness_score`)
+- 4h 임계값: `(2, 5, 8)` → `(7, 13, 20)` (PIVOT_RIGHT 고려)
+- 1d 임계값: `(1, 2, 3)` → `(3, 6, 8)` (SWING_FRESHNESS["1d"]=8 기준)
+- 1h 임계값: `(4, 8, 12)` → `(7, 13, 20)`
+- 최솟값 반환: `0.0` → `0.30` (GATE1 통과한 신호를 포지션 0으로 막지 않음)
+
+#### trade_state.json (수동 초기화)
+- `adaptive.swing_freshness`: `{'4h': 3}` → `{}` (config 기본값 복귀)
+- `adaptive.min_vol_ratio`: `2.5` → `1.8` (과도 강화 완화)
+
+### 기대 효과
+- 4h/1d 스윙 신호가 다시 GATE1 통과 가능
+- 신선도는 소프트 스코어(×0.30~1.00)로 포지션 크기 조정만 담당
+- 볼륨 게이트 1.8x → 더 많은 종목 통과 (기존 2.5x는 과도)
+
+---
+
 ## 2026-06-26 (v14 — Market Radar: 진입 전 거래량 Top10 실시간 조회 → 우선 스캔)
 
 ### 스캔 흐름 전면 개편: 거래량 → 신호 → 진입

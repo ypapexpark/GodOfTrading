@@ -401,24 +401,22 @@ def detect(df: pd.DataFrame) -> list[dict]:
 
 def get_freshness_score(bars_ago: int, tf_key: str) -> float:
     """
-    신호 신선도 점수 (0.0 ~ 1.0).
-    최신 신호일수록 신뢰도 높음 → 포지션 배율에 반영.
-    0.0 반환 시 해당 신호 완전 스킵.
-
-    프로 원칙: "다이버전스는 타이밍 게임 — 신선한 신호만 진입 가치가 있다"
+    신호 신선도 점수 (0.30 ~ 1.0) — 포지션 배율에만 반영 (차단 아님).
+    차단은 HARD GATE1(SWING_FRESHNESS 기준)에서 담당.
+    PIVOT_RIGHT=5 때문에 4h/1d 신호는 최소 5봉 후 확정 → 하한값 반드시 >=5.
     """
-    thresholds = {       # (fresh, recent, max)
+    thresholds = {       # (fresh_until, decent_until, old_until=SWING_FRESHNESS 한도)
         "5m":  (3,  6, 10),
         "15m": (3,  5,  8),
-        "1h":  (4,  8, 12),
-        "4h":  (2,  5,  8),
-        "1d":  (1,  2,  3),
+        "1h":  (7, 13, 20),   # SWING_FRESHNESS["1h"]=20 기준
+        "4h":  (7, 13, 20),   # SWING_FRESHNESS["4h"]=20 기준 (과거 2/5/8은 PIVOT_RIGHT보다 작아 버그)
+        "1d":  (3,  6,  8),   # SWING_FRESHNESS["1d"]=8 기준
     }
-    t = thresholds.get(tf_key, (4, 8, 12))
+    t = thresholds.get(tf_key, (6, 12, 20))
     if bars_ago <= t[0]:  return 1.00  # 매우 신선 → 풀 포지션
     if bars_ago <= t[1]:  return 0.75  # 신선 → 75% 포지션
     if bars_ago <= t[2]:  return 0.50  # 다소 오래됨 → 50% 포지션
-    return 0.0                          # 기회 지남 → 스킵
+    return 0.30                         # GATE1 통과했지만 오래됨 → 30% 감소 (차단 아님)
 
 
 def check_candle_momentum(df: pd.DataFrame, direction: str, bars: int = 3,
