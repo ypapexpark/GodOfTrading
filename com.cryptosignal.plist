@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cryptosignal</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Frameworks/Python.framework/Versions/3.11/bin/python3</string>
+        <string>/Users/nh_ig_mac01/Documents/GitHub/CryptoSignal/main.py</string>
+        <string>--auto-trade</string>
+    </array>
+
+    <!-- 5분마다 실행 (300초) — 스캘핑 신호 신선도 유지 -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/nh_ig_mac01/Documents/GitHub/CryptoSignal</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/nh_ig_mac01</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/cryptosignal.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/cryptosignal_err.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
