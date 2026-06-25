@@ -1,5 +1,35 @@
 # CryptoSignal CHANGELOG
 
+## 2026-06-26 (v17 — Adaptive 시스템 사망 나선형 수정 + 전략 구조 냉정 평가)
+
+### 진단
+- 13건 중 1건 승리(7.7%) — 전략 실패가 아닌 구현 버그 3개로 인한 손실
+  - 10건: vol<1.5x / bars>20 신호 — 게이트 미작동 시기에 진입
+  - 3건: API 키 불량(ㅇ 문자) 기간 진입
+- Adaptive 시스템이 비대칭(+0.3 상승 vs -0.1 하락) → 항상 MAX_VOL_RATIO에 수렴
+  - 결과: min_vol_ratio = 2.5x 도달 → 사실상 모든 신호 차단
+  - 유일한 승리 AVAX vol=1.46도 1.8x 기준으로는 차단 → 1.5x로 복원
+
+### 수정 내용 (analyzer.py, trade_state.json)
+
+#### analyzer.py
+- `MAX_VOL_RATIO`: 2.5 → 2.0 (상한 낮춤)
+- Vol 조정 비대칭 수정:
+  - 상승: +0.3 → +0.2 (완화), 트리거 손실 3회 유지
+  - 하락: -0.1 → -0.2 (대칭), 트리거 승리 3회 → 2회 (더 빠른 완화)
+- `swing_freshness` adaptive 비활성화: 항상 `{}` 반환 → config 기본값 사용
+  - 이유: PIVOT_RIGHT=5 때문에 어떤 값이든 결국 진입 불가 상태 만듦
+
+#### trade_state.json
+- `min_vol_ratio`: 1.8 → 1.5 (유일한 승리 거래 vol=1.46 기준)
+
+### 전략 구조 평가 결과
+- R:R은 수학적으로 양수 (STRONG 1.6:1, ELITE 2.2:1)
+- 손익분기 승률 31-38% — 제대로 필터링된 다이버전스 신호로 달성 가능
+- RSI+StochRSI 이중 카운팅 (StochRSI는 RSI에서 파생) → known limitation, 나중에 MFI로 교체 검토
+
+---
+
 ## 2026-06-26 (v16 — 레버리지/증거금 공격적 상향: $88 잔고 기준 수익 구조 개선)
 
 ### 문제

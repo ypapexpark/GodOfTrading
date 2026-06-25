@@ -19,7 +19,7 @@ ANALYSIS_LOOKBACK  = 20
 MIN_TRADES         = 5
 MAX_MIN_RR         = 2.5
 SKIP_DURATION_H    = 12
-MAX_VOL_RATIO      = 2.5   # min_vol_ratio 상한
+MAX_VOL_RATIO      = 2.0   # 2.5 → 2.0: 상한 낮춤 (2.5는 대부분 신호 차단)
 MIN_VOL_RATIO      = 1.5   # min_vol_ratio 하한 (완화 시 이 값까지만)
 
 # SL 1.5 ATR 기준: 코인별 ATR% 감안. 너무 넓다 = 3.0 ATR 이상 (리스크 과대)
@@ -301,50 +301,36 @@ def analyze_and_adjust() -> list[str]:
                 adjustments.append(f"{tf}봉 STRONG 기준 {mc[tf]}/5로 강화 (승률 {wr_s*100:.0f}%)")
     filters["min_confirmed_by_tf"] = mc
 
-    # ── 5. 저볼륨 손실 패턴 → min_vol_ratio 자동 상향 ──────────────────────
+    # ── 5. 저볼륨 손실 패턴 → min_vol_ratio 자동 조정 (대칭 설계) ──────────
+    # 비대칭(+0.3/-0.1)은 항상 MAX_VOL_RATIO에 수렴 → 신호 전부 차단되는 버그
+    # 수정: 증감 속도를 동일(0.2)하게 맞춰 진동하되 한계를 벗어나지 않도록
     cur_vol = filters.get("min_vol_ratio", 1.5)
     low_vol_losses = [
         t for t in recent
         if t["status"] == "loss" and 0 < t.get("vol_ratio", 99) < cur_vol + 0.3
     ]
-    low_vol_wins = [
+    high_vol_wins = [
         t for t in recent
-        if t["status"] == "win" and 0 < t.get("vol_ratio", 0) >= cur_vol + 0.3
+        if t["status"] == "win" and 0 < t.get("vol_ratio", 0) >= cur_vol
     ]
     if len(low_vol_losses) >= 3:
-        new_vol = round(min(cur_vol + 0.3, MAX_VOL_RATIO), 1)
+        new_vol = round(min(cur_vol + 0.2, MAX_VOL_RATIO), 1)  # 0.3 → 0.2 (완화)
         if new_vol > cur_vol:
             filters["min_vol_ratio"] = new_vol
             adjustments.append(
                 f"볼륨 기준 {cur_vol}x → {new_vol}x 강화 (저볼륨 손실 {len(low_vol_losses)}회)"
             )
-    elif len(low_vol_wins) >= 3 and cur_vol > MIN_VOL_RATIO:
-        new_vol = round(max(cur_vol - 0.1, MIN_VOL_RATIO), 1)
+    elif len(high_vol_wins) >= 2 and cur_vol > MIN_VOL_RATIO:
+        # 승리 2회만 있어도 완화 (기존 3회 → 2회), 감소폭 0.1→0.2 (대칭)
+        new_vol = round(max(cur_vol - 0.2, MIN_VOL_RATIO), 1)
         filters["min_vol_ratio"] = new_vol
-        adjustments.append(f"볼륨 기준 {cur_vol}x → {new_vol}x 완화 (고볼륨 성과 양호)")
+        adjustments.append(f"볼륨 기준 {cur_vol}x → {new_vol}x 완화 (고볼륨 성과 {len(high_vol_wins)}회)")
 
-    # ── 6. 오래된 신호 손실 패턴 → swing_freshness 자동 강화 ────────────────
-    from config import SWING_FRESHNESS as CFG_FRESH
-    swing_fresh = filters.setdefault("swing_freshness", {})
-    for tf, default_limit in CFG_FRESH.items():
-        cur_limit = swing_fresh.get(tf, default_limit)
-        old_losses = [
-            t for t in recent
-            if t["status"] == "loss"
-            and t.get("tf") == tf
-            and t.get("bars_ago", 0) > cur_limit * 0.6
-        ]
-        if len(old_losses) >= 2:
-            # floor = 8: PIVOT_RIGHT(5)+3 이상 유지해야 신호가 통과 가능
-            new_limit = max(cur_limit - 2, 8)
-            if new_limit < cur_limit:
-                swing_fresh[tf] = new_limit
-                hours_new = new_limit * TF_HOURS.get(tf, 1)
-                adjustments.append(
-                    f"{tf}봉 신선도 {cur_limit}→{new_limit}봉 강화 "
-                    f"(≤{hours_new:.0f}h, 오래된신호 손실 {len(old_losses)}회)"
-                )
-    filters["swing_freshness"] = swing_fresh
+    # ── 6. swing_freshness 자동 강화 비활성화 ───────────────────────────────
+    # PIVOT_RIGHT=5 때문에 강화 로직이 항상 진입 불가 상태를 만들었음.
+    # config.py SWING_FRESHNESS(1h=20, 4h=20, 1d=8)가 이미 충분히 보수적.
+    # 신선도는 소프트 스코어(get_freshness_score)로만 반영하고, 하드게이트는 고정.
+    filters["swing_freshness"] = {}   # 항상 config 기본값 사용
 
     # ── 8. 승리 패턴 → EMA 정렬 포지션 부스트 자동 조정 ────────────────────────
     patterns = _extract_win_patterns(recent)
