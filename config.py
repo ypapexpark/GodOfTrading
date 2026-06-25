@@ -73,40 +73,47 @@ SL_ATR_MULT = 1.5
 # ─── 레버리지 추천표 (신호강도 × 타임프레임) ────────────────────────────────
 # 100억 프로젝트: 고신뢰도 자리엔 최대 레버리지 투입, 복리로 스케일업
 LEVERAGE_MAP = {
-    ("ELITE",       "1d"):  20,   # 15 → 20
-    ("ELITE",       "4h"):  18,   # 12 → 18
-    ("ELITE",       "1h"):  15,   # 10 → 15
-    ("ELITE",       "15m"): 8,    #  5 → 8
-    ("ELITE",       "5m"):  5,    #  3 → 5
-    ("VERY STRONG", "1d"):  12,   # 10 → 12
-    ("VERY STRONG", "4h"):  10,   #  7 → 10
-    ("VERY STRONG", "1h"):  7,    #  5 → 7
-    ("VERY STRONG", "15m"): 5,    #  3 → 5
-    ("VERY STRONG", "5m"):  3,    #  2 → 3
-    ("STRONG",      "1d"):  7,    #  5 → 7
-    ("STRONG",      "4h"):  5,    #  4 → 5
-    ("STRONG",      "1h"):  4,    #  3 → 4
-    ("STRONG",      "15m"): 3,    #  2 → 3
-    ("STRONG",      "5m"):  2,
+    # ── ELITE (6/6): 최고 확신도 — 최대 레버리지 ──
+    ("ELITE",       "1d"):  20,
+    ("ELITE",       "4h"):  20,   # 18 → 20
+    ("ELITE",       "1h"):  20,   # 15 → 20
+    ("ELITE",       "15m"): 12,   #  8 → 12
+    ("ELITE",       "5m"):  8,    #  5 → 8
+    # ── VERY STRONG (5/6): 강한 신호 — 공격적 레버 ──
+    ("VERY STRONG", "1d"):  15,   # 12 → 15
+    ("VERY STRONG", "4h"):  15,   # 10 → 15
+    ("VERY STRONG", "1h"):  12,   #  7 → 12
+    ("VERY STRONG", "15m"): 8,    #  5 → 8
+    ("VERY STRONG", "5m"):  5,    #  3 → 5
+    # ── STRONG (4/6): 조건부 허용 ──
+    ("STRONG",      "1d"):  10,   #  7 → 10
+    ("STRONG",      "4h"):  8,    #  5 → 8
+    ("STRONG",      "1h"):  6,    #  4 → 6
+    ("STRONG",      "15m"): 5,    #  3 → 5
+    ("STRONG",      "5m"):  3,
+    # ── MODERATE (3/6): 구조레벨+EMA 조건 시 소액 ──
+    ("MODERATE",    "1d"):  6,
+    ("MODERATE",    "4h"):  5,
+    ("MODERATE",    "1h"):  4,
+    ("MODERATE",    "15m"): 3,
+    ("MODERATE",    "5m"):  2,
 }
 
-# ─── 신호 강도별 증거금 비율 (확신도 높을수록 베팅 증가) ───────────────────
-# 복리 성장용 공격적 배분 — 황금 진입 시 GOLDEN_ENTRY_POSITION_PCT로 오버라이드
-#
-# MODERATE (3/6): 구조레벨+EMA 조건 충족 시만 허용, 소액 7% 베팅
-# STRONG (4/6): 10% — 조건부 허용 (EMA 정렬 필수)
+# ─── 신호 강도별 증거금 비율 ────────────────────────────────────────────────
+# MODERATE: 구조레벨+EMA 조건 시만 허용
+# STRONG: EMA 정렬 필수
 MARGIN_BY_STRENGTH = {
-    "MODERATE":    0.07,   # 신규: 구조레벨+EMA 조건 충족 시 소액 베팅
-    "STRONG":      0.10,   # 13% → 10%: 더 자주 진입 but 소액 유지
-    "VERY STRONG": 0.18,
-    "ELITE":       0.25,
+    "MODERATE":    0.10,   #  7% → 10%
+    "STRONG":      0.15,   # 10% → 15%
+    "VERY STRONG": 0.25,   # 18% → 25%
+    "ELITE":       0.35,   # 25% → 35%
 }
 
 # ─── 황금 진입 (ELITE + MTF 전정렬 + EMA 정렬) ───────────────────────────────
-# 세 조건이 동시 충족 = 최고 확신도 → 최대 베팅, 복리 극대화
-GOLDEN_ENTRY_POSITION_PCT = 0.45   # 잔고의 45% 증거금
+# 세 조건 동시 충족 = 최고 확신도 → 최대 베팅
+GOLDEN_ENTRY_POSITION_PCT = 0.55   # 45% → 55%
 GOLDEN_LEVERAGE_BOOST     = 1.50   # 기본 레버리지 × 1.5
-GOLDEN_MAX_LEVERAGE       = 25     # 황금 진입 레버리지 절대 상한
+GOLDEN_MAX_LEVERAGE       = 30     # 25 → 30: 황금 진입 레버리지 절대 상한
 
 TIMEFRAMES = {
     "1d":  {"label": "일봉",    "limit": 120},
