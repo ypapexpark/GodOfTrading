@@ -13,6 +13,10 @@ _EXCLUDE = {"BULL", "BEAR", "UP", "DOWN", "3L", "3S", "HALF", "SOXL", "TQQQ"}
 # 코어 심볼: Top10 순위 밖이어도 항상 추적
 CORE_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 
+# 토큰화 주식 (Bybit 선물 xStocks) — 거래량 상위 종목만 선별
+# NVDA(4M), TSLA(2M) — 나머지는 거래대금 < 1M 으로 유동성 부족
+STOCK_SYMBOLS = ["NVDA/USDT", "TSLA/USDT"]
+
 
 def _get_exchange():
     global _exchange

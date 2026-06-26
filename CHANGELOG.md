@@ -1,5 +1,33 @@
 # CryptoSignal CHANGELOG
 
+## 2026-06-26 (v18 — 스캘핑 복구 + 토큰화 주식 추가 + ZEC 에러 처리)
+
+### 문제
+- Adaptive 학습이 5m/1h 봉을 12시간 차단 → 스캘핑 완전 불가
+- 변동성 장에서 신규 거래 0건의 주요 원인
+- ZEC/USDT 등 Bybit 미지원 심볼이 매 스캔마다 5번 에러 출력
+
+### 수정 내용
+
+#### analyzer.py
+- `SKIP_DURATION_H`: 12 → 3시간 (TF 제외 기간 단축)
+- 심볼 제외 기간: 12h → 3h (3연패 시)
+
+#### fetcher.py
+- `STOCK_SYMBOLS = ["NVDA/USDT", "TSLA/USDT"]` 추가
+  - Bybit 선물 xStocks 중 거래대금 상위 2종목만 선별 (NVDA 4M, TSLA 2M)
+  - AAPL/AMZN/META 등은 거래대금 <1M → 유동성 부족으로 제외
+
+#### main.py
+- `STOCK_SYMBOLS` 스캔 대상에 포함 (Top10 → CORE → STOCK 순서)
+- 심볼 유효성 사전 체크: Bybit 미지원 심볼(ZEC 등) 자동 스킵
+
+#### trade_state.json (즉시 적용)
+- `skip_tfs`: 5m/1h 차단 해제
+- `skip_symbols`: BNB 차단 해제
+
+---
+
 ## 2026-06-26 (v17 — Adaptive 시스템 사망 나선형 수정 + 전략 구조 냉정 평가)
 
 ### 진단

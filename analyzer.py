@@ -18,7 +18,7 @@ KST = timezone(timedelta(hours=9))
 ANALYSIS_LOOKBACK  = 20
 MIN_TRADES         = 5
 MAX_MIN_RR         = 2.5
-SKIP_DURATION_H    = 12
+SKIP_DURATION_H    = 3    # 12 → 3시간: 스캘핑 TF 차단이 너무 길어 기회 소멸
 MAX_VOL_RATIO      = 2.0   # 2.5 → 2.0: 상한 낮춤 (2.5는 대부분 신호 차단)
 MIN_VOL_RATIO      = 1.5   # min_vol_ratio 하한 (완화 시 이 값까지만)
 
@@ -268,11 +268,11 @@ def analyze_and_adjust() -> list[str]:
             else:
                 break
         if consec >= 3 and sym not in skip_sym:
-            until = now + 12 * 3600
+            until = now + 3 * 3600   # 12h → 3h
             skip_sym[sym] = until
             coin = sym.split("/")[0]
             h    = datetime.fromtimestamp(until, KST).strftime("%H:%M")
-            adjustments.append(f"{coin} 12시간 제외 ({h} KST까지) — 3연패")
+            adjustments.append(f"{coin} 3시간 제외 ({h} KST까지) — 3연패")
         elif consec == 0 and sym in skip_sym:
             del skip_sym[sym]
             adjustments.append(f"{sym.split('/')[0]} 제외 해제")

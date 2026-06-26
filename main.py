@@ -17,7 +17,7 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     GOLDEN_ENTRY_POSITION_PCT, GOLDEN_LEVERAGE_BOOST, GOLDEN_MAX_LEVERAGE)
 from leading import get_market_context
 from mtf import check_mtf, mtf_summary, get_macro_bias, get_daily_bias
-from fetcher import fetch_ohlcv, fetch_market_radar, CORE_SYMBOLS
+from fetcher import fetch_ohlcv, fetch_market_radar, CORE_SYMBOLS, STOCK_SYMBOLS
 from divergence import (detect, calc_vwap, detect_breakout,
                         get_freshness_score, check_candle_momentum, check_entry_zone)
 from strategies import scan_additional
@@ -645,7 +645,8 @@ def scan():
     radar_syms   = [r["symbol"] for r in radar]
 
     # 코어 종목(BTC/ETH/SOL) + Top10 합산, Top10 순서 우선
-    scan_symbols = list(dict.fromkeys(radar_syms + CORE_SYMBOLS))
+    # Top10 → 코어(BTC/ETH/SOL) → 토큰화주식(NVDA/TSLA) 순서로 우선순위
+    scan_symbols = list(dict.fromkeys(radar_syms + CORE_SYMBOLS + STOCK_SYMBOLS))
 
     mode_tag = "[DRY RUN]" if DRY_RUN else ("[AUTO TRADE]" if AUTO_TRADE else "")
     print(f"\n{'='*60}")
@@ -670,6 +671,16 @@ def scan():
 
     for symbol in scan_symbols:
         coin = symbol.split("/")[0]
+        # 심볼 유효성 사전 체크 — Bybit에 없는 종목(ZEC 등) 스캔 낭비 방지
+        try:
+            _chk = fetch_ohlcv(symbol, "1h", 5)
+            if _chk is None or len(_chk) == 0:
+                print(f"\n⚠️  {coin} — 데이터 없음, 스킵")
+                continue
+        except Exception:
+            print(f"\n⚠️  {coin} — Bybit 미지원 심볼, 스킵")
+            continue
+
         print(f"\n🔍 {coin} 스캔 중...")
         # 주봉 + 일봉 추세 바이어스 — 심볼당 1회 조회 (각각 1h/30분 캐시)
         macro = get_macro_bias(symbol)
