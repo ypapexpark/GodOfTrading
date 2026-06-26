@@ -632,11 +632,83 @@ def _print_radar(radar: list[dict]) -> None:
     print("=" * 60)
 
 
+def _reconcile_orphan_positions():
+    """
+    Bybit 실제 포지션 vs trade_state.json 추적 포지션 비교.
+    미추적(orphan) 포지션 발견 시:
+      - 텔레그램 경고 발송
+      - PnL > -30% 손실: 경고만 (SL 미설정)
+      - PnL <= -30% 손실: 긴급 SL 자동 설정 (현재가 기준 3ATR 위 / 아래)
+    퀀트 원칙: SL 없는 포지션은 즉시 관리 대상.
+    """
+    from trader import fetch_all_positions_raw, place_emergency_sl, _load_state
+
+    all_positions = fetch_all_positions_raw()
+    if not all_positions:
+        return
+
+    s = _load_state()
+    tracked = set(s.get("positions", {}).keys())
+
+    orphans = [p for p in all_positions if p["symbol"] not in tracked]
+    if not orphans:
+        return
+
+    lines = [f"⚠️ <b>[미추적 포지션 발견 — SL 없음]</b>\n봇이 열지 않은 포지션 {len(orphans)}개\n"]
+    for o in orphans:
+        sym       = o["symbol"]
+        direction = o["direction"]
+        entry     = o["entry_price"]
+        mark      = o["mark_price"]
+        qty       = o["qty"]
+        lev       = int(o["leverage"])
+        pnl       = o["unrealized_pnl"]
+        margin    = o.get("margin", 0) or (entry * qty / max(lev, 1))
+        margin    = margin if margin > 0 else abs(pnl) + 0.01
+
+        move_pct = ((mark - entry) / entry * 100) if entry > 0 else 0
+        if direction == "SHORT":
+            move_pct = -move_pct
+        margin_pct = (pnl / margin * 100) if margin > 0 else 0
+
+        sign = "+" if pnl >= 0 else ""
+        emoji = "🟢" if pnl >= 0 else "🔴"
+
+        lines.append(
+            f"{emoji} <b>{sym.split('/')[0]} {direction}</b>  {lev}x\n"
+            f"  진입 ${entry:,.2f} → 현재 ${mark:,.2f}  ({move_pct:+.1f}%)\n"
+            f"  미실현: <b>{sign}${pnl:.2f}</b>  (증거금대비 {margin_pct:+.0f}%)"
+        )
+
+        # 증거금 -30% 초과 손실 = 긴급 SL 자동 설정
+        if margin_pct <= -30 and mark > 0:
+            # ATR 대체값: 현재가의 1.5% (실시간 ATR 계산 없이 보수적 거리)
+            atr_proxy = mark * 0.015
+            if direction == "LONG":
+                sl_price = round(mark * 0.985, 4)   # 현재가 -1.5%: 추가 하락 여유
+            else:
+                sl_price = round(mark * 1.015, 4)   # 현재가 +1.5%
+
+            ok = place_emergency_sl(sym, direction, qty, sl_price)
+            if ok:
+                lines.append(f"  🛑 긴급 SL 자동 설정: ${sl_price:,.2f}  (현재가 ±1.5%)")
+            else:
+                lines.append(f"  ❌ 긴급 SL 설정 실패 — Bybit에서 직접 설정 필요")
+        else:
+            lines.append(f"  📌 SL 미설정 — Bybit에서 직접 설정 권장")
+        lines.append("")
+
+    lines.append("💡 관리 방법: Bybit에서 해당 포지션에 SL을 설정하거나 청산하세요.")
+    send("\n".join(lines))
+    print(f"[조정] 미추적 포지션 {len(orphans)}개 처리 완료")
+
+
 def scan():
     # ── Step 0: 포지션 모니터링 먼저 ───────────────────────────────────────────
     if AUTO_TRADE:
         from trader import monitor_positions
         monitor_positions()
+        _reconcile_orphan_positions()
         _maybe_send_periodic_report()
 
     # ── Step 1: 바이빗 거래량 Top10 조회 ──────────────────────────────────────

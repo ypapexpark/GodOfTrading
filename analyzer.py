@@ -301,30 +301,57 @@ def analyze_and_adjust() -> list[str]:
                 adjustments.append(f"{tf}봉 STRONG 기준 {mc[tf]}/5로 강화 (승률 {wr_s*100:.0f}%)")
     filters["min_confirmed_by_tf"] = mc
 
-    # ── 5. 저볼륨 손실 패턴 → min_vol_ratio 자동 조정 (대칭 설계) ──────────
-    # 비대칭(+0.3/-0.1)은 항상 MAX_VOL_RATIO에 수렴 → 신호 전부 차단되는 버그
-    # 수정: 증감 속도를 동일(0.2)하게 맞춰 진동하되 한계를 벗어나지 않도록
-    cur_vol = filters.get("min_vol_ratio", 1.5)
-    low_vol_losses = [
-        t for t in recent
-        if t["status"] == "loss" and 0 < t.get("vol_ratio", 99) < cur_vol + 0.3
-    ]
-    high_vol_wins = [
-        t for t in recent
-        if t["status"] == "win" and 0 < t.get("vol_ratio", 0) >= cur_vol
-    ]
-    if len(low_vol_losses) >= 3:
-        new_vol = round(min(cur_vol + 0.2, MAX_VOL_RATIO), 1)  # 0.3 → 0.2 (완화)
-        if new_vol > cur_vol:
-            filters["min_vol_ratio"] = new_vol
-            adjustments.append(
-                f"볼륨 기준 {cur_vol}x → {new_vol}x 강화 (저볼륨 손실 {len(low_vol_losses)}회)"
-            )
-    elif len(high_vol_wins) >= 2 and cur_vol > MIN_VOL_RATIO:
-        # 승리 2회만 있어도 완화 (기존 3회 → 2회), 감소폭 0.1→0.2 (대칭)
+    # ── 5. 저볼륨 손실 패턴 → min_vol_ratio 자동 조정 ─────────────────────────
+    # 핵심 버그 수정: 4시간마다 동일한 historical 데이터 재분석 → 항상 "저볼륨 손실 >= 3"
+    #   → vol_ratio 영구 MAX 고착 → 신호 전부 차단 → 자기 강화 데스스파이럴
+    #
+    # 해법: last_vol_adj_trade_count 추적
+    #   - 마지막 조정 이후 새 거래가 없으면 vol_ratio 변경 없음
+    #   - 12시간 이상 신규 거래 없으면 자동 완화 (필터가 너무 타이트한 신호)
+    #   - 새 거래 >= 2개 있을 때만 새 데이터로 재평가
+    cur_vol          = filters.get("min_vol_ratio", MIN_VOL_RATIO)
+    last_adj_count   = filters.get("last_vol_adj_trade_count", 0)
+    last_adj_time    = filters.get("last_vol_adj_time", 0.0)
+    closed_count     = len([t for t in all_t if t["status"] in ("win", "loss")])
+    new_since_adj    = closed_count - last_adj_count
+    hours_since_adj  = (now - last_adj_time) / 3600 if last_adj_time > 0 else 0
+
+    if new_since_adj == 0 and hours_since_adj > 12 and cur_vol > MIN_VOL_RATIO and last_adj_time > 0:
+        # 12시간 이상 신규 거래 없음 = 필터가 기회를 막고 있다는 신호 → 완화
         new_vol = round(max(cur_vol - 0.2, MIN_VOL_RATIO), 1)
-        filters["min_vol_ratio"] = new_vol
-        adjustments.append(f"볼륨 기준 {cur_vol}x → {new_vol}x 완화 (고볼륨 성과 {len(high_vol_wins)}회)")
+        filters["min_vol_ratio"]           = new_vol
+        filters["last_vol_adj_time"]        = now
+        adjustments.append(
+            f"볼륨 기준 {cur_vol}x → {new_vol}x 자동완화 "
+            f"(신규거래 없음 {hours_since_adj:.0f}h — 필터 과도)"
+        )
+    elif new_since_adj >= 2:
+        # 새 거래 2개 이상 있을 때만 새 데이터로 재평가
+        new_recent = [t for t in recent if t.get("timestamp", 0) > last_adj_time]
+        low_vol_losses = [
+            t for t in new_recent
+            if t["status"] == "loss" and 0 < t.get("vol_ratio", 99) < cur_vol + 0.3
+        ]
+        high_vol_wins = [
+            t for t in new_recent
+            if t["status"] == "win" and t.get("vol_ratio", 0) >= cur_vol
+        ]
+        if len(low_vol_losses) >= 2:
+            new_vol = round(min(cur_vol + 0.2, MAX_VOL_RATIO), 1)
+            if new_vol > cur_vol:
+                filters["min_vol_ratio"] = new_vol
+                adjustments.append(
+                    f"볼륨 기준 {cur_vol}x → {new_vol}x 강화 (새 저볼륨 손실 {len(low_vol_losses)}회)"
+                )
+        elif len(high_vol_wins) >= 1:
+            new_vol = round(max(cur_vol - 0.2, MIN_VOL_RATIO), 1)
+            if new_vol < cur_vol:
+                filters["min_vol_ratio"] = new_vol
+                adjustments.append(
+                    f"볼륨 기준 {cur_vol}x → {new_vol}x 완화 (신규 고볼륨 승리 {len(high_vol_wins)}회)"
+                )
+        filters["last_vol_adj_trade_count"] = closed_count
+        filters["last_vol_adj_time"]         = now
 
     # ── 6. swing_freshness 자동 강화 비활성화 ───────────────────────────────
     # PIVOT_RIGHT=5 때문에 강화 로직이 항상 진입 불가 상태를 만들었음.

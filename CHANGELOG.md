@@ -1,5 +1,39 @@
 # CryptoSignal CHANGELOG
 
+## 2026-06-26 (v19 — Orphan 포지션 관리 + Adaptive 데스스파이럴 2차 수정)
+
+### 문제 (신규 발견)
+- **미추적 포지션**: ETH LONG 10x, LINK LONG 2x — 봇 기록 없음 (수동 진입)
+  - SL 없이 교차마진으로 방치 → ETH -131% 증거금 손실 발생
+- **vol_ratio 영구 잠금 (데스스파이럴 2차)**: 4시간마다 동일한 historical 손실 재분석
+  - `len(low_vol_losses) >= 3` 항상 참 → vol_ratio 2.0 영구 고착
+  - MIN_VOL_RATIO=1.5로 설정해도 4h마다 다시 올라가는 구조
+
+### 수정 내용
+
+#### trader.py
+- `fetch_all_positions_raw()` 추가: 전체 오픈 포지션 상세 조회 (orphan 감지용)
+- `place_emergency_sl()` 추가: 미추적 포지션에 긴급 SL 자동 배치
+
+#### main.py
+- `_reconcile_orphan_positions()` 추가: 매 스캔마다 Bybit 실포지션 vs 봇 추적 비교
+  - 미추적 포지션 발견 시 텔레그램 경고 자동 발송
+  - 증거금 -30% 초과 손실 포지션: 긴급 SL 자동 설정 (현재가 ±1.5%)
+- `scan()`: `monitor_positions()` 직후 `_reconcile_orphan_positions()` 호출
+
+#### analyzer.py — vol_ratio 조정 로직 근본 수정
+- `last_vol_adj_trade_count` / `last_vol_adj_time` 추적 필드 추가
+- **핵심 변경**: 동일 historical 데이터 재분석 방지
+  - 새 거래 >= 2개 있을 때만 재평가 (이전 조정 이후 기준)
+  - 12시간 이상 신규 거래 없음 → 자동 완화 0.2 (필터가 기회를 막는 신호)
+
+#### trade_state.json (즉시 적용)
+- `min_vol_ratio`: 2.0 → **1.5** (데스스파이럴 리셋)
+- `skip_tfs`, `skip_symbols`: 만료된 차단 해제
+- `last_vol_adj_trade_count: 13`, `last_vol_adj_time: 0.0` 초기화
+
+---
+
 ## 2026-06-26 (v18 — 스캘핑 복구 + 토큰화 주식 추가 + ZEC 에러 처리)
 
 ### 문제

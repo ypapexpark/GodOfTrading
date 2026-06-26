@@ -156,6 +156,69 @@ def get_open_position_count() -> int:
         return MAX_CONCURRENT   # 실패 시 최대값으로 간주 (안전 우선)
 
 
+def fetch_all_positions_raw() -> list[dict]:
+    """
+    Bybit 전체 오픈 포지션 상세 반환 (orphan 감지 + 긴급 SL 설정용).
+    Returns: [{"symbol": "BTC/USDT", "direction", "qty", "entry_price",
+               "mark_price", "leverage", "unrealized_pnl", "margin", "liq_price"}, ...]
+    """
+    try:
+        positions = _ex().fetch_positions(params={"category": "linear"})
+        result = []
+        for p in positions:
+            qty = abs(float(p.get("contracts", 0) or 0))
+            if qty <= 0:
+                continue
+            raw_sym = p.get("symbol", "")   # "SOL/USDT:USDT"
+            sym = raw_sym.split(":")[0]      # "SOL/USDT"
+            result.append({
+                "symbol":          sym,
+                "fsymbol":         raw_sym,
+                "direction":       "LONG" if p.get("side") == "long" else "SHORT",
+                "qty":             qty,
+                "entry_price":     float(p.get("entryPrice", 0)      or 0),
+                "mark_price":      float(p.get("markPrice", 0)        or 0),
+                "leverage":        float(p.get("leverage", 1)         or 1),
+                "unrealized_pnl":  float(p.get("unrealizedPnl", 0)   or 0),
+                "liq_price":       float(p.get("liquidationPrice", 0) or 0),
+                "margin":          float((p.get("info") or {}).get("positionIM", 0) or 0),
+            })
+        return result
+    except Exception as e:
+        print(f"[포지션] 전체 조회 실패: {e}")
+        return []
+
+
+def place_emergency_sl(symbol: str, direction: str, qty: float, sl_price: float) -> bool:
+    """
+    미추적 포지션(orphan)에 긴급 손절가 설정.
+    기존 StopOrder를 모두 취소 후 새 SL 배치.
+    """
+    fsym      = _futures_symbol(symbol)
+    close_side = "sell" if direction == "LONG" else "buy"
+    tg_dir     = 2 if direction == "LONG" else 1
+    ex = _ex()
+    try:
+        ex.load_markets()
+        ex.cancel_all_orders(fsym, params={"category": "linear", "orderFilter": "StopOrder"})
+        time.sleep(0.3)
+        ex.create_order(
+            fsym, "market", close_side, qty,
+            params={
+                "category":         "linear",
+                "stopOrderType":    "StopLoss",
+                "triggerPrice":     str(round(sl_price, 4)),
+                "triggerDirection": tg_dir,
+                "reduceOnly":       True,
+            }
+        )
+        print(f"[긴급SL] {symbol} {direction}  SL=${sl_price:,.4f}  qty={qty}")
+        return True
+    except Exception as e:
+        print(f"[긴급SL] {symbol} 실패: {e}")
+        return False
+
+
 # ─── 수량 계산 ───────────────────────────────────────────────────────────────
 
 def calc_qty(symbol: str, entry_price: float,
