@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 CryptoSignal — BTC/ETH 선물 다이버전스 스캐너 (RSI + MACD + OBV + StochRSI + Volume 5중 확인)
 실행:
@@ -14,7 +15,10 @@ from dotenv import load_dotenv
 
 from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESHNESS,
                     MARGIN_BY_STRENGTH, MTF_POSITION_BOOST, MTF_POSITION_CAP, MODERATE_AUTO_TRADE,
-                    GOLDEN_ENTRY_POSITION_PCT, GOLDEN_LEVERAGE_BOOST, GOLDEN_MAX_LEVERAGE)
+                    GOLDEN_ENTRY_POSITION_PCT, GOLDEN_LEVERAGE_BOOST, GOLDEN_MAX_LEVERAGE,
+                    PAPER_ONLY_STRENGTHS, RISK_PCT_BY_STRENGTH, SCALP_RISK_MULT,
+                    GOLDEN_ENTRY_RISK_PCT, MAX_ACCOUNT_RISK_PCT, AUTO_TRADE_DIAGNOSTICS,
+                    ACTIVE_STRONG_STRATEGIES, STRONG_LIVE_MAX_BARS_AGO, STRONG_LIVE_MIN_VOL)
 from leading import get_market_context
 from mtf import check_mtf, mtf_summary, get_macro_bias, get_daily_bias
 from fetcher import fetch_ohlcv, fetch_market_radar, CORE_SYMBOLS, STOCK_SYMBOLS
@@ -77,18 +81,14 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
                     current_price: float, scalp: bool = False,
                     mtf_boost: float = 1.0):
     """신호가 있을 때 자동매매 실행 시도.
-    강도별 차등 베팅: STRONG 13% / VERY STRONG 18% / ELITE 25% (스캘핑은 절반)
-    황금 진입(ELITE+MTF전정렬+EMA정렬): 잔고 45% + 레버리지 1.5x = 최대 베팅
+    복리형 베팅: 신호 강도별 계좌 위험률을 먼저 정하고,
+    SL폭/레버리지로 증거금 비율을 역산한다.
     """
     from trader import (execute, get_usdt_balance, build_trade_notification,
                         _append_trade, add_trade_context, MAX_MARGIN_USD, MAX_SCALP_MARGIN_USD,
-                        MAX_DAILY_LOSS, get_open_position_count, MAX_CONCURRENT)
-
-    # ── 동시 포지션 상한 (자본 집중 원칙) ──────────────────────────────────────
-    open_cnt = get_open_position_count()
-    if open_cnt >= MAX_CONCURRENT:
-        print(f"  [포지션] 동시 {MAX_CONCURRENT}개 한도 도달({open_cnt}개) → 스킵")
-        return
+                        MAX_DAILY_LOSS, get_open_position_count, MAX_CONCURRENT,
+                        get_daily_loss_limit, get_margin_cap, log_trade_candidate,
+                        notify_trade_block, position_pct_for_risk, _load_state)
 
     best      = max(signals, key=lambda x: x["confirmed_count"])
     meta      = SIGNAL_META.get(best["signal_type"], SIGNAL_META["bullish"])
@@ -96,39 +96,59 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     strength  = best["strength"]
     raw       = _raw_strength(strength)
     ema_trend = best.get("ema_trend", 0)
+    strategy  = best.get("strategy", best.get("signal_type", "다이버전스"))
+
+    def _block(reason: str, send_diag: bool = False, **extra):
+        notify_trade_block(
+            symbol, tf_key, direction, strength, reason,
+            strategy=strategy,
+            send_telegram=(AUTO_TRADE_DIAGNOSTICS and send_diag),
+            price=current_price,
+            confirmed_count=best.get("confirmed_count", 0),
+            bars_ago=best.get("bars_ago", 0),
+            vol_ratio=best.get("vol", {}).get("value", 0),
+            **extra,
+        )
+
+    # ── 동시 포지션 상한 (자본 집중 원칙) ──────────────────────────────────────
+    open_cnt = get_open_position_count()
+    if open_cnt >= MAX_CONCURRENT:
+        _block(f"동시 {MAX_CONCURRENT}개 한도 도달({open_cnt}개) 또는 포지션 조회 실패", send_diag=True)
+        return
 
     ema_aligned = (
         (direction == "LONG"  and ema_trend == 1) or
         (direction == "SHORT" and ema_trend == -1)
     )
 
-    # ── 강도별 자동매매 허용 조건 ────────────────────────────────────────────────
-    #
-    # MODERATE (3/6): 소액(7%) 허용 — 단, 구조레벨 + EMA 정렬 필수
-    #   → 레벨에서 3개 지표 다이버전스 = 충분한 신호, 소액으로 자주 진입
-    # STRONG (4/6):   소액(10%) 허용 — EMA 정렬 필수
-    #   → 구버전에서 음수 기댓값이었지만 새 필터(레벨+EMA)로 개선
-    # VERY STRONG+:   기존대로 허용
-    #
-    if raw == "MODERATE":
-        _at_lv = best.get("at_key_level", {}).get("ok", False)
-        if not _at_lv:
-            print(f"  [MODERATE] 구조레벨 미충족 → 차단 (레벨 없는 3/6 = 노이즈)")
-            return
-        if not ema_aligned:
-            print(f"  [MODERATE] EMA 미정렬 → 차단 (방향성 불명확)")
-            return
-        print(f"  [MODERATE] ✅ 구조레벨+EMA 충족 → 소액(7%) 자동매매 허용")
+    # MODERATE는 후보만 기록한다.
+    # STRONG은 현재봉 기반 전략 + 거래량 + 방향성까지 맞을 때만 실거래로 승격한다.
+    if raw in PAPER_ONLY_STRENGTHS:
+        _block(f"{raw}는 후보 로그 전용 — 실거래는 VERY STRONG 이상부터", paper_only=True)
+        return
 
-    elif raw == "STRONG" and best.get("confirmed_count", 0) < 5:
-        if not ema_aligned:
-            print(f"  [STRONG] EMA 미정렬 → 차단")
+    if raw == "STRONG":
+        vol_r = best.get("vol", {}).get("value", 0)
+        bars_ago = best.get("bars_ago", 99)
+        current_strategy = strategy in ACTIVE_STRONG_STRATEGIES
+        directional_ok = ema_aligned or mtf_boost > 1.0
+        if not current_strategy:
+            _block(f"STRONG 다이버전스는 후보 로그 전용 — 현재봉 전략 아님({strategy})", paper_only=True)
             return
-        print(f"  [STRONG] ✅ EMA 정렬 → 소액(10%) 자동매매 허용")
+        if bars_ago > STRONG_LIVE_MAX_BARS_AGO:
+            _block(f"STRONG 현재봉 아님 — {bars_ago}봉 전 > {STRONG_LIVE_MAX_BARS_AGO}봉")
+            return
+        if vol_r < STRONG_LIVE_MIN_VOL:
+            _block(f"STRONG 거래량 {vol_r:.1f}x < {STRONG_LIVE_MIN_VOL}x")
+            return
+        if not directional_ok:
+            _block("STRONG 방향성 부족 — EMA 정렬 또는 MTF 부스트 없음")
+            return
+        print(f"  [STRONG-LIVE] {strategy} 현재봉 조건 충족 → 소액 실거래 후보")
 
     # ── EMA 중립 게이트 (VERY STRONG+ 대상) ──────────────────────────────────────
-    if ema_trend == 0 and raw not in ("MODERATE", "STRONG") and "ELITE" not in strength:
-        print(f"  [EMA 게이트] EMA 중립 — ELITE 아님 → 차단")
+    if ema_trend == 0 and "ELITE" not in strength:
+        _block("EMA 중립 — ELITE 아님")
         return
 
     # ── 황금 진입 판정: ELITE + MTF 전정렬 + EMA 방향일치 ──────────────────────
@@ -141,7 +161,7 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
 
     t = calc_targets(best, current_price, direction, leverage, tf_key, strength)
     if not t:
-        print("  [자동매매] 타겟 계산 실패 — 스킵")
+        _block("타겟 계산 실패", send_diag=True)
         return
 
     # R:R 필터
@@ -151,59 +171,77 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     best_rr  = max(tp["rr"] for tp in t["tps"])
     tp1_rr   = t["tps"][0]["rr"] if t["tps"] else 0
     if best_rr < active_min_rr:
-        print(f"  [자동매매] R:R {best_rr} < {active_min_rr:.1f} — 스킵")
+        _block(f"R:R {best_rr} < {active_min_rr:.1f}", best_rr=best_rr, min_rr=active_min_rr)
         return
     if tp1_rr < 1.0:
-        print(f"  [자동매매] TP1 R:R {tp1_rr} < 1.0 — 첫 TP조차 손절보다 작음 스킵")
+        _block(f"TP1 R:R {tp1_rr} < 1.0 — 첫 TP조차 손절보다 작음", tp1_rr=tp1_rr)
         return
 
     balance_now = get_usdt_balance()
+    if balance_now <= 0:
+        _block("잔고 조회 실패 또는 잔고 0", send_diag=True)
+        return
 
     # ── 포지션 비율 결정 ────────────────────────────────────────────────────────
     if is_golden:
-        # 황금 진입: 잔고 45% 풀 베팅 (스캘핑도 예외 없이 최대)
-        position_pct = GOLDEN_ENTRY_POSITION_PCT
+        risk_pct = GOLDEN_ENTRY_RISK_PCT
+        max_position_pct = GOLDEN_ENTRY_POSITION_PCT
         print(f"  💰 [황금진입💎] ELITE + MTF전정렬 + EMA정렬")
-        print(f"     → 레버리지 {leverage}x | 포지션 {position_pct*100:.0f}% | 최대 베팅 모드 🚀")
+        print(f"     → 레버리지 {leverage}x | 목표 리스크 {risk_pct*100:.1f}% | 복리 최대 베팅")
         send(
             f"💰 <b>[황금 진입 발동 💎]</b> {symbol.split('/')[0]} {tf_key}\n"
             f"ELITE 신호 + MTF 전정렬 + EMA 방향일치\n"
-            f"레버리지 <b>{leverage}x</b>  |  포지션 <b>{position_pct*100:.0f}%</b>\n"
-            f"🚀 최대 베팅 모드 — 복리 극대화"
+            f"레버리지 <b>{leverage}x</b>  |  목표 계좌위험 <b>{risk_pct*100:.1f}%</b>\n"
+            f"복리 최대 베팅 모드"
         )
     else:
-        # 일반 베팅: 강도별 비율 (스캘핑은 절반)
-        base_pct     = MARGIN_BY_STRENGTH.get(raw, 0.13)
-        position_pct = base_pct * 0.5 if scalp else base_pct
-
-        # SL 잠재 손실 > 일일 한도 시 자동 축소
-        max_m        = MAX_SCALP_MARGIN_USD if scalp else MAX_MARGIN_USD
-        est_margin   = min(balance_now * position_pct, max_m)
-        est_notional = est_margin * leverage
-        est_sl_loss  = est_notional * t["sl_pct"] / 100
-        if est_sl_loss > MAX_DAILY_LOSS:
-            scale        = MAX_DAILY_LOSS / est_sl_loss * 0.9
-            position_pct = max(position_pct * scale, 0.05)
-            print(f"  [리스크] SL 위험 ${est_sl_loss:.2f} > 한도 → 포지션 {position_pct*100:.0f}%로 자동 축소")
+        risk_pct = RISK_PCT_BY_STRENGTH.get(raw, 0.0)
+        if risk_pct <= 0:
+            _block(f"{raw} 리스크 설정 없음 — 후보만 기록", paper_only=True)
+            return
+        if scalp:
+            risk_pct *= SCALP_RISK_MULT
 
         # EMA 방향일치 학습 부스트
         if ema_aligned:
             boost = get_adaptive_filters().get("ema_aligned_boost", 1.0)
             if boost > 1.0:
-                position_pct = min(position_pct * boost, 0.35)
-                print(f"  [학습부스트] EMA 방향일치 → 포지션 {boost:.2f}x ({position_pct*100:.0f}%)")
+                risk_pct = min(risk_pct * boost, MAX_ACCOUNT_RISK_PCT)
+                print(f"  [학습부스트] EMA 방향일치 → 리스크 {boost:.2f}x ({risk_pct*100:.1f}%)")
 
         # MTF 부스트
         if mtf_boost > 1.0:
-            position_pct = min(position_pct * mtf_boost, MTF_POSITION_CAP)
-            print(f"  [MTF부스트] 상위봉 정렬 → {mtf_boost:.2f}x ({position_pct*100:.0f}%)")
+            risk_pct = min(risk_pct * mtf_boost, MAX_ACCOUNT_RISK_PCT)
+            print(f"  [MTF부스트] 상위봉 정렬 → 리스크 {mtf_boost:.2f}x ({risk_pct*100:.1f}%)")
+
+        max_position_pct = min(MARGIN_BY_STRENGTH.get(raw, 0.25), MTF_POSITION_CAP)
+
+    # SL 기준 계좌 위험률로 증거금 비율 역산
+    position_pct, est_sl_loss = position_pct_for_risk(
+        balance_now, leverage, current_price, t["sl"], risk_pct, max_position_pct
+    )
+    if position_pct <= 0:
+        _block("리스크 기반 수량 계산 실패", send_diag=True, risk_pct=risk_pct)
+        return
+
+    daily_limit = get_daily_loss_limit(balance_now)
+    daily_loss  = _load_state().get("daily_loss", 0)
+    remaining_daily_risk = max(daily_limit - daily_loss, 0)
+    if est_sl_loss > remaining_daily_risk:
+        if remaining_daily_risk <= 0:
+            _block(f"일손실 한도 소진 ${daily_loss:.2f} / ${daily_limit:.2f}", send_diag=True)
+            return
+        scale = remaining_daily_risk / est_sl_loss * 0.9
+        position_pct = round(position_pct * scale, 4)
+        est_sl_loss = round(est_sl_loss * scale, 4)
+        print(f"  [리스크] 남은 일손실 한도 ${remaining_daily_risk:.2f} → 포지션 {position_pct*100:.1f}%로 조정")
 
     pct_label = f"{position_pct*100:.0f}%"
 
     # 실제 예상 SL 손실액 (황금 진입도 표시용으로 계산)
-    max_m_final  = MAX_SCALP_MARGIN_USD if scalp else MAX_MARGIN_USD
+    max_m_final  = get_margin_cap(balance_now, scalp=scalp)
     est_margin_f = min(balance_now * position_pct, max_m_final)
-    est_sl_loss  = est_margin_f * leverage * t["sl_pct"] / 100
+    est_sl_loss  = min(est_sl_loss, est_margin_f * leverage * t["sl_pct"] / 100)
 
     # 5m 스캘핑: 단일 TP로 강제 (빠른 확정, 보유 없음)
     if tf_key == "5m" and len(t["tps"]) > 1:
@@ -213,7 +251,7 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         tps = [{"price": tp["price"], "pct": tp["pct"]} for tp in t["tps"]]
 
     golden_tag = " 💰황금진입" if is_golden else ""
-    print(f"  [베팅{golden_tag}] {raw} → 잔고의 {pct_label}  SL위험 ~${est_sl_loss:.1f}")
+    print(f"  [베팅{golden_tag}] {raw} → 잔고의 {pct_label}  목표리스크 {risk_pct*100:.1f}%  SL위험 ~${est_sl_loss:.1f}")
 
     result = execute(
         symbol       = symbol,
@@ -225,11 +263,12 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         position_pct = position_pct,
         atr          = best.get("atr", 0.0),
         is_elite     = ("ELITE" in strength),
+        max_margin_usd = max_m_final,
     )
 
     if result["ok"]:
         # 거래 이력 기록
-        max_m    = MAX_SCALP_MARGIN_USD if scalp else MAX_MARGIN_USD
+        max_m    = max_m_final
         margin_r = min(balance_now * position_pct, max_m)
         trade_num = _append_trade(
             symbol, direction, tf_key, strength,
@@ -244,6 +283,14 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
             vol_ratio       = best["vol"]["value"],
             bars_ago        = best.get("bars_ago", 0),
             sl_pct          = t["sl_pct"],
+            risk_pct        = risk_pct,
+            est_sl_loss     = est_sl_loss,
+        )
+        log_trade_candidate(
+            symbol, tf_key, strategy, direction, strength, "opened",
+            price=current_price, leverage=result["leverage"], qty=result["qty"],
+            position_pct=position_pct, risk_pct=risk_pct,
+            est_sl_loss=est_sl_loss, rr=best_rr,
         )
         scalp_tag = " [스캘핑]" if scalp else ""
         notif     = build_trade_notification(
@@ -254,6 +301,38 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         print(f"  [자동매매{scalp_tag}] ✅ {trade_num}회차 기록 ({pct_label}) — 텔레그램 발송")
     else:
         print(f"  [자동매매] ❌ 주문 실패: {result['error']}")
+        log_trade_candidate(
+            symbol, tf_key, strategy, direction, strength, "order_failed",
+            result["error"], price=current_price, leverage=result["leverage"],
+            position_pct=position_pct, risk_pct=risk_pct,
+        )
+        if AUTO_TRADE_DIAGNOSTICS:
+            send(
+                f"❌ <b>[자동매매 주문 실패]</b> {symbol.split('/')[0]} {tf_key} {direction}\n"
+                f"강도: <b>{strength}</b>\n"
+                f"사유: {result['error']}"
+            )
+
+
+def _log_gate_block(symbol: str, tf_key: str, signal: dict,
+                    direction: str, reason: str, strategy: str = "게이트"):
+    """_try_auto_trade 전 단계에서 차단된 후보도 학습용으로 남긴다."""
+    if not AUTO_TRADE:
+        return
+    try:
+        from trader import log_trade_candidate
+        log_trade_candidate(
+            symbol, tf_key, signal.get("strategy", strategy), direction,
+            signal.get("strength", ""), "blocked", reason,
+            signal_type=signal.get("signal_type", ""),
+            price=signal.get("current_price", signal.get("pivot_price", 0)),
+            confirmed_count=signal.get("confirmed_count", 0),
+            bars_ago=signal.get("bars_ago", 0),
+            vol_ratio=signal.get("vol", {}).get("value", 0),
+            ema_trend=signal.get("ema_trend", 0),
+        )
+    except Exception as e:
+        print(f"  [후보로그] 기록 실패: {e}")
 
 
 def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: float):
@@ -267,23 +346,31 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
     from trader import (execute, get_usdt_balance, build_trade_notification,
                         _append_trade, add_trade_context, MAX_MARGIN_USD,
                         MAX_DAILY_LOSS, get_open_position_count, MAX_CONCURRENT,
-                        has_open_position)
+                        has_open_position, get_daily_loss_limit, get_margin_cap,
+                        log_trade_candidate, notify_trade_block,
+                        position_pct_for_risk, _load_state)
     from config import TP_BY_STRENGTH, SL_ATR_MULT
 
     # 이미 포지션 있으면 스킵
     if has_open_position(symbol):
-        print(f"  [돌파] {symbol} 포지션 이미 있음 → 스킵")
+        notify_trade_block(symbol, tf_key, bsig["direction"], bsig["strength"],
+                           "이미 오픈 포지션 있음", strategy="돌파")
         return
 
     open_cnt = get_open_position_count()
     if open_cnt >= MAX_CONCURRENT:
-        print(f"  [돌파] 동시 포지션 한도 → 스킵")
+        notify_trade_block(symbol, tf_key, bsig["direction"], bsig["strength"],
+                           "동시 포지션 한도 또는 포지션 조회 실패", strategy="돌파",
+                           send_telegram=AUTO_TRADE_DIAGNOSTICS)
         return
 
     balance_now = get_usdt_balance()
     daily_loss  = _load_state().get("daily_loss", 0)
-    if daily_loss >= MAX_DAILY_LOSS:
-        print(f"  [서킷브레이커] 일일 손실 ${daily_loss:.2f} 한도 → 스킵")
+    daily_limit = get_daily_loss_limit(balance_now)
+    if daily_loss >= daily_limit:
+        notify_trade_block(symbol, tf_key, bsig["direction"], bsig["strength"],
+                           f"일일 손실 ${daily_loss:.2f} / 한도 ${daily_limit:.2f}",
+                           strategy="돌파", send_telegram=AUTO_TRADE_DIAGNOSTICS)
         return
 
     direction = bsig["direction"]
@@ -305,19 +392,44 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
 
     # TP1 R:R 체크
     if tps[0]["rr"] < 1.0:
-        print(f"  [돌파] TP1 R:R {tps[0]['rr']} < 1.0 → 스킵")
+        notify_trade_block(symbol, tf_key, direction, strength,
+                           f"TP1 R:R {tps[0]['rr']} < 1.0",
+                           strategy="돌파", tp1_rr=tps[0]["rr"])
         return
 
-    # 포지션 크기: VERY STRONG 기본 18%, 돌파 추세 = 신뢰도 높음
+    # 포지션 크기: 복리 리스크 엔진 적용
     from config import MARGIN_BY_STRENGTH, LEVERAGE_MAP
-    position_pct = MARGIN_BY_STRENGTH.get("VERY STRONG", 0.18)
-    leverage     = LEVERAGE_MAP.get(("VERY STRONG", tf_key), 7)
+    raw_strength = _raw_strength(strength)
+    position_cap = MARGIN_BY_STRENGTH.get(raw_strength, MARGIN_BY_STRENGTH.get("VERY STRONG", 0.25))
+    leverage     = LEVERAGE_MAP.get((raw_strength, tf_key), 7)
 
     sl_pct = abs(current_price - sl) / current_price * 100
+    risk_pct = RISK_PCT_BY_STRENGTH.get(raw_strength, RISK_PCT_BY_STRENGTH["VERY STRONG"])
+    position_pct, est_sl_loss = position_pct_for_risk(
+        balance_now, leverage, current_price, sl, risk_pct, position_cap
+    )
+    if position_pct <= 0:
+        notify_trade_block(symbol, tf_key, direction, strength,
+                           "리스크 기반 수량 계산 실패", strategy="돌파",
+                           send_telegram=AUTO_TRADE_DIAGNOSTICS)
+        return
+    remaining_daily_risk = max(daily_limit - daily_loss, 0)
+    if est_sl_loss > remaining_daily_risk:
+        scale = remaining_daily_risk / est_sl_loss * 0.9 if est_sl_loss > 0 else 0
+        if scale <= 0:
+            notify_trade_block(symbol, tf_key, direction, strength,
+                               "남은 일손실 한도 없음", strategy="돌파",
+                               send_telegram=AUTO_TRADE_DIAGNOSTICS)
+            return
+        position_pct = round(position_pct * scale, 4)
+        est_sl_loss = round(est_sl_loss * scale, 4)
 
     print(f"  [돌파매매] {direction}  레벨:{bsig['breakout_level']:,.2f}  "
           f"vol:{bsig['vol']['value']:.1f}x  ATR확장:{bsig['atr_expand']}")
-    print(f"  [돌파SL] ±{sl_pct:.1f}%  TP1 R:R {tps[0]['rr']:.1f}:1")
+    print(f"  [돌파SL] ±{sl_pct:.1f}%  TP1 R:R {tps[0]['rr']:.1f}:1  "
+          f"리스크 {risk_pct*100:.1f}%  포지션 {position_pct*100:.1f}%")
+
+    max_margin = get_margin_cap(balance_now, scalp=False)
 
     result = execute(
         symbol       = symbol,
@@ -329,11 +441,11 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
         position_pct = position_pct,
         atr          = atr,
         is_elite     = ("ELITE" in strength),
+        max_margin_usd = max_margin,
     )
 
     if result["ok"]:
-        max_m  = MAX_MARGIN_USD
-        margin_r = min(balance_now * position_pct, max_m)
+        margin_r = min(balance_now * position_pct, max_margin)
         trade_num = _append_trade(
             symbol, direction, tf_key, strength,
             result["leverage"], result["qty"],
@@ -346,6 +458,14 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
             vol_ratio       = bsig["vol"]["value"],
             bars_ago        = 0,
             sl_pct          = sl_pct,
+            risk_pct        = risk_pct,
+            est_sl_loss     = est_sl_loss,
+        )
+        log_trade_candidate(
+            symbol, tf_key, "돌파", direction, strength, "opened",
+            price=current_price, leverage=result["leverage"], qty=result["qty"],
+            position_pct=position_pct, risk_pct=risk_pct,
+            est_sl_loss=est_sl_loss, rr=max(tp["rr"] for tp in tps),
         )
         notif = build_trade_notification(
             symbol, direction, result["leverage"],
@@ -356,6 +476,11 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
         print(f"  [돌파매매] ✅ {trade_num}회차 기록")
     else:
         print(f"  [돌파매매] ❌ 주문 실패: {result['error']}")
+        log_trade_candidate(
+            symbol, tf_key, "돌파", direction, strength, "order_failed",
+            result["error"], price=current_price, leverage=result["leverage"],
+            position_pct=position_pct, risk_pct=risk_pct,
+        )
 
 
 def _do_pyramid(symbol: str, tf_key: str, direction: str,
@@ -641,7 +766,7 @@ def _reconcile_orphan_positions():
       - PnL <= -30% 손실: 긴급 SL 자동 설정 (현재가 기준 3ATR 위 / 아래)
     퀀트 원칙: SL 없는 포지션은 즉시 관리 대상.
     """
-    from trader import fetch_all_positions_raw, place_emergency_sl, _load_state
+    from trader import fetch_all_positions_raw, place_emergency_sl, _load_state, _save_state
 
     all_positions = fetch_all_positions_raw()
     if not all_positions:
@@ -654,8 +779,20 @@ def _reconcile_orphan_positions():
     if not orphans:
         return
 
-    lines = [f"⚠️ <b>[미추적 포지션 발견 — SL 없음]</b>\n봇이 열지 않은 포지션 {len(orphans)}개\n"]
-    for o in orphans:
+    now = time.time()
+    cooldown = 6 * 3600
+    alerts = s.setdefault("orphan_alerts", {})
+    fresh_orphans = []
+    for p in orphans:
+        key = f"{p['symbol']}:{p['direction']}:{p['entry_price']}:{p['qty']}"
+        if now - alerts.get(key, 0) >= cooldown:
+            fresh_orphans.append((key, p))
+
+    if not fresh_orphans:
+        return
+
+    lines = [f"⚠️ <b>[미추적 포지션 발견 — SL 없음]</b>\n봇이 열지 않은 포지션 {len(fresh_orphans)}개\n"]
+    for alert_key, o in fresh_orphans:
         sym       = o["symbol"]
         direction = o["direction"]
         entry     = o["entry_price"]
@@ -697,18 +834,23 @@ def _reconcile_orphan_positions():
         else:
             lines.append(f"  📌 SL 미설정 — Bybit에서 직접 설정 권장")
         lines.append("")
+        alerts[alert_key] = now
 
     lines.append("💡 관리 방법: Bybit에서 해당 포지션에 SL을 설정하거나 청산하세요.")
     send("\n".join(lines))
-    print(f"[조정] 미추적 포지션 {len(orphans)}개 처리 완료")
+    _save_state(s)
+    print(f"[조정] 미추적 포지션 {len(fresh_orphans)}개 처리 완료")
 
 
 def scan():
     # ── Step 0: 포지션 모니터링 먼저 ───────────────────────────────────────────
     if AUTO_TRADE:
-        from trader import monitor_positions
+        from trader import monitor_positions, evaluate_trade_candidates
         monitor_positions()
         _reconcile_orphan_positions()
+        eval_notes = evaluate_trade_candidates()
+        if eval_notes:
+            print(f"  [후보평가] {len(eval_notes)}개 완료 — MFE/MAE 학습 로그 누적")
         _maybe_send_periodic_report()
 
     # ── Step 1: 바이빗 거래량 Top10 조회 ──────────────────────────────────────
@@ -774,6 +916,8 @@ def scan():
 
             signals = detect(df)
             current_price = float(df["close"].iloc[-1])
+            for _sig in signals:
+                _sig["current_price"] = current_price
 
             # 학습 필터: 이 TF / 심볼이 현재 제외 중인지 확인
             if AUTO_TRADE:
@@ -838,15 +982,20 @@ def scan():
                         _moderate_ok = (not is_moderate) or MODERATE_AUTO_TRADE or mtf_info["strong"]
                         if not _moderate_ok:
                             print(f"  [{tf_label}] MODERATE(3/6) 알림만 (MTF 전정렬 아님)")
+                            _log_gate_block(symbol, tf_key, best, direction,
+                                            "MODERATE 알림 전용 — MTF 전정렬 아님")
                         # MTF 역방향 차단
                         elif mtf_info["block"]:
                             print(f"  [MTF] 전 상위봉 역방향 → 자동매매 차단")
+                            _log_gate_block(symbol, tf_key, best, direction,
+                                            "MTF 전 상위봉 역방향")
                             send(f"⛔ <b>[MTF 차단]</b> {symbol.split('/')[0]} {tf_label}\n"
                                  f"{mtf_summary(mtf_info)}\n역방향 추세 — 자동매매 스킵")
                         # 학습 필터: 제외 중인 심볼/TF는 자동매매 스킵
                         elif not is_tradeable(symbol, tf_key)[0]:
                             _ok2, _why2 = is_tradeable(symbol, tf_key)
                             print(f"  [학습] {_why2} → 자동매매 스킵")
+                            _log_gate_block(symbol, tf_key, best, direction, _why2)
                         elif tf_key in SCALP_TF:
                             # 스캘핑: 신선도 체크
                             max_bars = SCALP_FRESHNESS.get(tf_key, 8)
@@ -854,6 +1003,8 @@ def scan():
                             if not fresh:
                                 oldest = min(s.get("bars_ago", 99) for s in signals)
                                 print(f"  [{tf_label}] 신호 {oldest}봉 전 — 스캘핑은 {max_bars}봉 이내만 (스킵)")
+                                _log_gate_block(symbol, tf_key, best, direction,
+                                                f"스캘핑 신선도 초과 {oldest}봉 > {max_bars}봉")
                             else:
                                 # ── 프로 스캘핑 필터 (VWAP + 캔들 전환) ──────────
                                 best_fresh = max(fresh, key=lambda x: x["confirmed_count"])
@@ -869,10 +1020,14 @@ def scan():
                                 _sc_min  = _trend_min_confirm(tf_key, _sc_ts, _sc_cont)
                                 if _sc_min is None:
                                     print(f"  [{tf_label}] 역추세 continuation — 차단")
+                                    _log_gate_block(symbol, tf_key, best_fresh, direction,
+                                                    "역추세 continuation")
                                     continue
                                 if best_fresh["confirmed_count"] < _sc_min:
                                     _ts_tag = ["❌역추세", "⭐단일일치", "⭐⭐이중일치"][_sc_ts]
                                     print(f"  [{tf_label}] {_ts_tag} {best_fresh['confirmed_count']}/{_sc_min} 미달 스킵")
+                                    _log_gate_block(symbol, tf_key, best_fresh, direction,
+                                                    f"추세 기준 미달 {best_fresh['confirmed_count']}/{_sc_min}")
                                     continue
                                 if _sc_ts == 2:
                                     print(f"  [추세] ⭐⭐ 이중 추세 일치 → 포지션 +20% 보너스")
@@ -897,6 +1052,8 @@ def scan():
                                     ez_scalp = check_entry_zone(best_fresh_s, current_price, direction)
                                     if not ez_scalp["ok"]:
                                         print(f"  [{tf_label}] 스캘핑 기회 지남({ez_scalp['moved_atr']:.1f}ATR) — 스킵")
+                                        _log_gate_block(symbol, tf_key, best_fresh_s, direction,
+                                                        f"스캘핑 기회지남 {ez_scalp['moved_atr']:.1f}ATR")
                                     else:
                                         print(f"  [{tf_label}] VWAP ${vwap:,.2f} ✅  캔들전환 ✅  스캘핑 진입")
                                         _sc_boost = (MTF_POSITION_BOOST if mtf_info["strong"] else 1.0)
@@ -912,6 +1069,8 @@ def scan():
                                     if not candle_ok:
                                         reasons.append("캔들 미전환")
                                     print(f"  [{tf_label}] 스캘핑 보류 — {', '.join(reasons)}")
+                                    _log_gate_block(symbol, tf_key, best_fresh, direction,
+                                                    "스캘핑 보류 — " + ", ".join(reasons))
                         else:
                             # ══════════════════════════════════════════════════
                             # 스윙 자동매매 — 퀀트 원칙: 4 HARD GATE + SOFT SCORE
@@ -936,6 +1095,8 @@ def scan():
                             if not fresh_swing:
                                 oldest = min(s.get("bars_ago", 99) for s in signals)
                                 print(f"  [{tf_label}] ❌GATE1 신호 {oldest}봉전 > 한도{max_bars_swing}봉 (스킵)")
+                                _log_gate_block(symbol, tf_key, best, direction,
+                                                f"GATE1 신선도 초과 {oldest}봉 > {max_bars_swing}봉")
                             else:
                                 # ── HARD GATE 2: 거래량 ────────────────────
                                 best_swing = max(fresh_swing, key=lambda x: x["confirmed_count"])
@@ -943,18 +1104,24 @@ def scan():
                                 min_vol    = get_adaptive_min_vol()
                                 if vol_r < min_vol:
                                     print(f"  [{tf_label}] ❌GATE2 볼륨 {vol_r:.1f}x < {min_vol}x (스킵)")
+                                    _log_gate_block(symbol, tf_key, best_swing, direction,
+                                                    f"GATE2 볼륨 {vol_r:.1f}x < {min_vol}x")
                                 else:
                                     # ── HARD GATE 3: 캔들 모멘텀 ──────────
                                     momentum = check_candle_momentum(df, direction, bars=3, scalp=False)
                                     print(f"  [모멘텀] {momentum['note']}")
                                     if not momentum["ok"]:
                                         print(f"  [{tf_label}] ❌GATE3 {momentum['blocked_by']} (스킵)")
+                                        _log_gate_block(symbol, tf_key, best_swing, direction,
+                                                        f"GATE3 {momentum['blocked_by']}")
                                     else:
                                         # ── HARD GATE 4: 진입 구간 ─────────
                                         ez = check_entry_zone(best_swing, current_price, direction)
                                         print(f"  [진입구간] {ez['note']}")
                                         if not ez["ok"]:
                                             print(f"  [{tf_label}] ❌GATE4 기회지남 {ez['moved_atr']:.1f}ATR (스킵)")
+                                            _log_gate_block(symbol, tf_key, best_swing, direction,
+                                                            f"GATE4 기회지남 {ez['moved_atr']:.1f}ATR")
                                         else:
                                             # ════════════════════════════════
                                             # 4 GATE 통과 → SOFT SCORE 계산
@@ -971,6 +1138,8 @@ def scan():
                                             # (전 TF가 반대 = 너무 위험)
                                             elif mtf_info["block"]:
                                                 print(f"  [{tf_label}] ⛔ MTF 완전역방향 → 자동매매 차단")
+                                                _log_gate_block(symbol, tf_key, best_swing, direction,
+                                                                "MTF 완전역방향")
                                                 continue
 
                                             # [+/-] 추세점수: +20% / -10%
@@ -985,6 +1154,8 @@ def scan():
                                             elif _sw_ts == 0 and _sw_cont:
                                                 # 역추세 continuation만 차단 (반전은 허용)
                                                 print(f"  [{tf_label}] 역추세 히든다이버전스 → 방향 모순 차단")
+                                                _log_gate_block(symbol, tf_key, best_swing, direction,
+                                                                "역추세 히든다이버전스 방향 모순")
                                                 continue
                                             elif _sw_ts == 0:
                                                 boost *= 0.80   # 역추세 반전 = 신중하게 80%
@@ -1043,6 +1214,7 @@ def scan():
             # 다이버전스 여부와 무관하게 항상 실행
             add_sigs = scan_additional(df, tf_key)
             for asig in add_sigs:
+                asig["current_price"] = current_price
                 strategy_tag = asig.get("strategy", "추가전략")
                 adirection   = "LONG" if asig["signal_type"].endswith("long") else "SHORT"
 
@@ -1056,6 +1228,9 @@ def scan():
                     _ts_tag = ["❌역추세", "⭐단일일치", "⭐⭐이중일치"][_ad_ts]
                     print(f"  [{tf_label}] {strategy_tag} {_ts_tag} — "
                           f"{asig['confirmed_count']}/{_ad_min or 6} 미달 스킵")
+                    _log_gate_block(symbol, tf_key, asig, adirection,
+                                    f"{strategy_tag} 추세 기준 미달 {asig['confirmed_count']}/{_ad_min or 6}",
+                                    strategy=strategy_tag)
                     continue
 
                 print(f"  [{tf_label}] ⚡ {strategy_tag} {adirection}  "
@@ -1068,24 +1243,33 @@ def scan():
                     ok_trade, why = is_tradeable(symbol, tf_key)
                     if not ok_trade:
                         print(f"  [학습] {why} → 스킵")
+                        _log_gate_block(symbol, tf_key, asig, adirection, why,
+                                        strategy=strategy_tag)
                         continue
 
                     # 이미 오픈 포지션 있으면 스킵 (중복 방지)
                     from trader import has_open_position
                     if has_open_position(symbol):
                         print(f"  [{strategy_tag}] {symbol} 포지션 이미 있음 → 스킵")
+                        _log_gate_block(symbol, tf_key, asig, adirection,
+                                        "이미 오픈 포지션 있음", strategy=strategy_tag)
                         continue
 
                     # MTF 체크 (차단이면 스킵, 정렬이면 부스트)
                     mtf_a = check_mtf(symbol, tf_key, adirection)
                     if mtf_a["block"]:
                         print(f"  [MTF] 역방향 → {strategy_tag} 스킵")
+                        _log_gate_block(symbol, tf_key, asig, adirection,
+                                        "MTF 역방향", strategy=strategy_tag)
                         continue
 
                     # 펀딩비 게이트
                     lctx_a = get_market_context(symbol, adirection)
                     if not lctx_a["favorable"]:
                         print(f"  [선행] 펀딩비 비우호 → {strategy_tag} 스킵")
+                        _log_gate_block(symbol, tf_key, asig, adirection,
+                                        f"펀딩비 비우호: {lctx_a['reason']}",
+                                        strategy=strategy_tag)
                         continue
 
                     boost_a = MTF_POSITION_BOOST if mtf_a["strong"] else 1.0
@@ -1108,6 +1292,7 @@ def scan():
                 if tf_key not in SCALP_TF and not has_open_position(symbol):
                     bsig = detect_breakout(df)
                     if bsig:
+                        bsig["current_price"] = current_price
                         bdir = bsig["direction"]
                         # 돌파 방향이 주봉/일봉 추세와 일치해야 진입
                         _bt_ts = sum(
@@ -1122,6 +1307,8 @@ def scan():
                             _try_breakout_trade(symbol, tf_key, bsig, current_price)
                         else:
                             print(f"  [돌파] 추세 미일치(0/2) → 역돌파 스킵")
+                            _log_gate_block(symbol, tf_key, bsig, bdir,
+                                            "돌파 추세 미일치 0/2", strategy="돌파")
                     # else: 돌파 없음 — 출력 생략
 
                 # ── 2. 불타기 체크 ───────────────────────────────────────

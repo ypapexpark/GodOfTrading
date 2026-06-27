@@ -8,6 +8,7 @@
   RSI 극단   = 즉각 반전 (잦고 빠름) → 스캘핑 핵심
   EMA 눌림목 = 추세 지속 매매 (승률 최고) → 단타 스윙 핵심
 """
+from __future__ import annotations
 import pandas as pd
 from divergence import calc_rsi, _ema_trend
 
@@ -33,7 +34,7 @@ def _base_signal(signal_type: str, direction: str, strength: str,
         "signal_type":     signal_type,
         "strength":        strength,
         "confirmed_count": confirmed,
-        "atr":             round(atr_val, 4),
+        "atr":             round(atr_val, 8),
         "ema_trend":       ema_t,
         "bars_ago":        0,        # 현재봉 신호 = 항상 신선
         "pivot_price":     round(pivot, 4),
@@ -138,16 +139,20 @@ def detect_ema_touch(df: pd.DataFrame, tf_key: str) -> dict | None:
     prev = df.iloc[-2]
     last_o, last_c = float(last["open"]), float(last["close"])
     prev_l, prev_h = float(prev["low"]),  float(prev["high"])
+    recent = df.iloc[-6:-1]
 
-    touch_zone = atr_val * 0.7   # EMA ± 0.7 ATR = 터치로 인정
+    touch_zone = atr_val * 0.8   # EMA ± 0.8 ATR = 터치/재진입으로 인정
     body       = abs(last_c - last_o)
-    min_body   = atr_val * 0.25  # 의미있는 반등/하락 봉
+    min_body   = atr_val * 0.18  # 현재봉 기반 진입이라 너무 둔하게 보지 않음
 
     # ── 상승 추세 눌림목 LONG ──────────────────────────────────────────────────
     if c_ema20 > c_ema50 * 1.001:
-        ema_touch   = abs(prev_l - c_ema20) <= touch_zone
-        candle_bull = last_c > last_o and body >= min_body
-        if ema_touch and candle_bull and vol_r >= 1.1:
+        pullback_seen = (
+            (recent["low"] <= c_ema20 + touch_zone).any()
+            or abs(prev_l - c_ema20) <= touch_zone
+        )
+        candle_bull = last_c > last_o and last_c >= c_ema20 and body >= min_body
+        if pullback_seen and candle_bull and vol_r >= 1.0:
             return _base_signal(
                 "ema_long", "LONG", "STRONG ⚡", 4,
                 atr_val, 1, prev_l, vol_r, 50.0, "EMA눌림목",
@@ -155,13 +160,64 @@ def detect_ema_touch(df: pd.DataFrame, tf_key: str) -> dict | None:
 
     # ── 하락 추세 반등매도 SHORT ───────────────────────────────────────────────
     elif c_ema20 < c_ema50 * 0.999:
-        ema_touch   = abs(prev_h - c_ema20) <= touch_zone
-        candle_bear = last_c < last_o and body >= min_body
-        if ema_touch and candle_bear and vol_r >= 1.1:
+        pullback_seen = (
+            (recent["high"] >= c_ema20 - touch_zone).any()
+            or abs(prev_h - c_ema20) <= touch_zone
+        )
+        candle_bear = last_c < last_o and last_c <= c_ema20 and body >= min_body
+        if pullback_seen and candle_bear and vol_r >= 1.0:
             return _base_signal(
                 "ema_short", "SHORT", "STRONG ⚡", 4,
                 atr_val, -1, prev_h, vol_r, 50.0, "EMA눌림목",
             )
+
+    return None
+
+
+# ─── 전략 2.5: 마이크로 구조 돌파 ────────────────────────────────────────────
+
+def detect_micro_breakout(df: pd.DataFrame, tf_key: str) -> dict | None:
+    """
+    최근 12봉 구조 돌파.
+    피봇 다이버전스보다 빠른 "현재봉 추세 가속" 진입용.
+    """
+    if len(df) < 80:
+        return None
+
+    close = df["close"]
+    high  = df["high"]
+    low   = df["low"]
+
+    atr_val = _atr(df)
+    vol_r   = _vol_ratio(df)
+    ema_t   = _ema_trend(close)
+
+    cur_c = float(close.iloc[-1])
+    prev_c = float(close.iloc[-2])
+    resistance = float(high.iloc[-15:-3].max())
+    support    = float(low.iloc[-15:-3].min())
+
+    last3 = df.iloc[-4:-1]
+    bull_cnt = int(sum(1 for _, r in last3.iterrows() if r["close"] > r["open"]))
+    bear_cnt = int(sum(1 for _, r in last3.iterrows() if r["close"] < r["open"]))
+
+    if cur_c > resistance and prev_c <= resistance and ema_t >= 0 and bull_cnt >= 2 and vol_r >= 1.15:
+        confirmed = 5 if vol_r >= 1.5 else 4
+        strength  = "VERY STRONG 🔥" if confirmed >= 5 else "STRONG ⚡"
+        return _base_signal(
+            "micro_breakout_long", "LONG", strength, confirmed,
+            atr_val, max(ema_t, 1), float(low.iloc[-1]),
+            vol_r, 50.0, "마이크로돌파",
+        )
+
+    if cur_c < support and prev_c >= support and ema_t <= 0 and bear_cnt >= 2 and vol_r >= 1.15:
+        confirmed = 5 if vol_r >= 1.5 else 4
+        strength  = "VERY STRONG 🔥" if confirmed >= 5 else "STRONG ⚡"
+        return _base_signal(
+            "micro_breakout_short", "SHORT", strength, confirmed,
+            atr_val, min(ema_t, -1), float(high.iloc[-1]),
+            vol_r, 50.0, "마이크로돌파",
+        )
 
     return None
 
@@ -264,5 +320,17 @@ def scan_additional(df: pd.DataFrame, tf_key: str) -> list:
             existing["strategy"] = existing["strategy"] + "+BB"
         else:
             results.append(bb_sig)
+
+    micro_sig = detect_micro_breakout(df, tf_key)
+    if micro_sig:
+        existing = next((s for s in results if s.get("signal_type","").endswith(
+            "long" if micro_sig["signal_type"] == "micro_breakout_long" else "short"
+        )), None)
+        if existing:
+            existing["confirmed_count"] = min(existing["confirmed_count"] + 1, 6)
+            existing["strength"] = "VERY STRONG 🔥" if existing["confirmed_count"] >= 5 else existing["strength"]
+            existing["strategy"] = existing["strategy"] + "+돌파"
+        else:
+            results.append(micro_sig)
 
     return results

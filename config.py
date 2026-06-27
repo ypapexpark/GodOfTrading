@@ -100,8 +100,9 @@ LEVERAGE_MAP = {
 }
 
 # ─── 신호 강도별 증거금 비율 ────────────────────────────────────────────────
-# MODERATE: 구조레벨+EMA 조건 시만 허용
-# STRONG: EMA 정렬 필수
+# 이 값은 "목표 베팅"이 아니라 강도별 최대 증거금 캡이다.
+# 실제 증거금은 아래 RISK_PCT_BY_STRENGTH(계좌 손실위험)와 SL폭으로 계산한다.
+# 목적: 좋은 자리는 크게, 애매한 자리는 후보 기록만 남겨 복리 엔진을 오래 살린다.
 MARGIN_BY_STRENGTH = {
     "MODERATE":    0.10,   #  7% → 10%
     "STRONG":      0.15,   # 10% → 15%
@@ -114,6 +115,28 @@ MARGIN_BY_STRENGTH = {
 GOLDEN_ENTRY_POSITION_PCT = 0.55   # 45% → 55%
 GOLDEN_LEVERAGE_BOOST     = 1.50   # 기본 레버리지 × 1.5
 GOLDEN_MAX_LEVERAGE       = 30     # 25 → 30: 황금 진입 레버리지 절대 상한
+
+# ─── 복리형 리스크 엔진 ─────────────────────────────────────────────────────
+# 자동매매는 계좌 위험률 기준으로 수량을 정한다.
+# 예: ELITE 2.0% 리스크, 평균 2.5R 실현 = 계좌 +5% 내외.
+# 황금진입은 4.0% 리스크까지 허용해 +8~10% 계좌 성장 기회를 만든다.
+PAPER_ONLY_STRENGTHS = {"MODERATE"}  # STRONG은 현재봉 기반 고품질 전략만 소액 허용
+RISK_PCT_BY_STRENGTH = {
+    "STRONG":      0.0060,
+    "VERY STRONG": 0.0125,
+    "ELITE":       0.0200,
+}
+SCALP_RISK_MULT         = 0.55
+GOLDEN_ENTRY_RISK_PCT   = 0.0400
+MAX_ACCOUNT_RISK_PCT    = 0.0450
+MAX_DAILY_LOSS_PCT      = 0.0600
+AUTO_TRADE_DIAGNOSTICS  = True
+CANDIDATE_LOG_FILE      = "trade_candidates.jsonl"
+
+# STRONG 실거래는 "늦게 뜬 다이버전스"가 아니라 현재봉 기반 전략만 허용한다.
+ACTIVE_STRONG_STRATEGIES = {"RSI반전", "EMA눌림목", "BB스퀴즈", "마이크로돌파"}
+STRONG_LIVE_MAX_BARS_AGO = 1
+STRONG_LIVE_MIN_VOL      = 1.10
 
 TIMEFRAMES = {
     "1d":  {"label": "일봉",    "limit": 120},

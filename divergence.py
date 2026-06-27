@@ -1,6 +1,7 @@
 """
 다이버전스 감지 엔진 — RSI / MACD / OBV / StochRSI / Volume 5중 확인
 """
+from __future__ import annotations
 import numpy as np
 import pandas as pd
 from config import (RSI_PERIOD, PIVOT_LEFT, PIVOT_RIGHT, LOOKBACK,
@@ -355,7 +356,7 @@ def detect(df: pd.DataFrame) -> list[dict]:
                 continue
             sig["confirmed_count"] = confirmed
             sig["strength"]        = STRENGTH_MAP.get(confirmed, "WEAK")
-            sig["atr"]             = round(atr, 2)
+            sig["atr"]             = round(atr, 8)
             sig["ema_trend"]       = ema_trend
             sig["at_key_level"]    = check_key_level(sig["pivot_price"], "LONG", key_levels, atr)
             results.append(sig)
@@ -379,7 +380,7 @@ def detect(df: pd.DataFrame) -> list[dict]:
                 continue
             sig["confirmed_count"] = confirmed
             sig["strength"]        = STRENGTH_MAP.get(confirmed, "WEAK")
-            sig["atr"]             = round(atr, 2)
+            sig["atr"]             = round(atr, 8)
             sig["ema_trend"]       = ema_trend
             sig["at_key_level"]    = check_key_level(sig["pivot_price"], "SHORT", key_levels, atr)
             results.append(sig)
@@ -588,7 +589,7 @@ def detect_breakout(df: pd.DataFrame, lookback_bars: int = 20) -> dict | None:
             "direction":      "LONG",
             "breakout_level": round(resistance, 4),
             "pivot_price":    round(cur_close, 4),
-            "atr":            round(atr, 2),
+            "atr":            round(atr, 8),
             "vol":            {"ok": True, "value": vol_ratio},
             "ema_trend":      ema_trend,
             "momentum_bars":  bull_cnt,
@@ -611,7 +612,7 @@ def detect_breakout(df: pd.DataFrame, lookback_bars: int = 20) -> dict | None:
             "direction":      "SHORT",
             "breakout_level": round(support, 4),
             "pivot_price":    round(cur_close, 4),
-            "atr":            round(atr, 2),
+            "atr":            round(atr, 8),
             "vol":            {"ok": True, "value": vol_ratio},
             "ema_trend":      ema_trend,
             "momentum_bars":  bear_cnt,

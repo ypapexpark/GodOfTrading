@@ -5,6 +5,7 @@ secrets/
 
 # ── 거래 상태 / 이력 (로컬 전용) ────────────────────────────
 trade_state.json
+trade_candidates.jsonl
 state.json
 
 # ── Python 캐시 ───────────────────────────────────────────────

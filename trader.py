@@ -2,6 +2,7 @@
 자동매매 모듈 — Bybit V5 USDT 영구 선물
 리스크: 잔고의 20% / 최대 $10 증거금 / 일손실 $10 한도 / 3연패 4시간 중단
 """
+from __future__ import annotations
 import os
 import json
 import time
@@ -11,12 +12,14 @@ from datetime import datetime, timezone, timedelta
 
 import ccxt
 from dotenv import load_dotenv
-from config import MIN_QTY_MAP, QTY_STEP_MAP
+from config import (CANDIDATE_LOG_FILE, MAX_DAILY_LOSS_PCT,
+                    MIN_QTY_MAP, QTY_STEP_MAP)
 
 load_dotenv(Path(__file__).parent / ".env")
 
 KST        = timezone(timedelta(hours=9))
 STATE_FILE = Path(__file__).parent / "trade_state.json"
+CANDIDATE_FILE = Path(__file__).parent / CANDIDATE_LOG_FILE
 
 # ─── 리스크 파라미터 (100억 프로젝트 — 공격적 복리 성장) ─────────────────────
 TRADE_MARGIN_PCT      = 0.25   # 스윙 기본 비율 (강도별 override 됨)
@@ -29,6 +32,8 @@ MAX_CONSEC_LOSS  = 3      # 3연패 후 일시중단 유지
 PAUSE_HOURS      = 4      # 중단 시간 유지
 MAX_LEVERAGE     = 30     # 25 → 30: 황금 진입 시 고레버리지 허용
 MAX_CONCURRENT   = 4      # 최대 동시 오픈 포지션 수 (자본 집중 원칙)
+MAX_MARGIN_PCT_CAP       = 0.55
+MAX_SCALP_MARGIN_PCT_CAP = 0.25
 
 # ─── 트레일링 스톱 파라미터 (ELITE 전용) ─────────────────────────────────────
 TRAIL_ATR_MULT    = 1.5   # 현재가에서 SL까지 ATR 거리
@@ -83,19 +88,237 @@ def _refresh_daily(s: dict) -> dict:
     return s
 
 
+def get_daily_loss_limit(balance: float = 0.0) -> float:
+    """
+    복리 운용용 일손실 한도.
+    소액 구간은 계좌 6%를 우선해 생존성을 확보하고,
+    계좌가 커지면 고정 $30 한도에 묶이지 않게 6% 기준으로 확장한다.
+    """
+    if balance <= 0:
+        return MAX_DAILY_LOSS
+    pct_limit = balance * MAX_DAILY_LOSS_PCT
+    if balance < 500:
+        return round(min(MAX_DAILY_LOSS, pct_limit), 2)
+    return round(max(MAX_DAILY_LOSS, pct_limit), 2)
+
+
+def get_margin_cap(balance: float, scalp: bool = False) -> float:
+    """계좌 성장에 따라 증거금 한도도 같이 커지게 한다."""
+    pct_cap = MAX_SCALP_MARGIN_PCT_CAP if scalp else MAX_MARGIN_PCT_CAP
+    floor   = MAX_SCALP_MARGIN_USD if scalp else MAX_MARGIN_USD
+    return round(max(floor, balance * pct_cap), 2)
+
+
+def position_pct_for_risk(balance: float, leverage: int, entry_price: float,
+                          sl_price: float, risk_pct: float,
+                          max_position_pct: float) -> tuple[float, float]:
+    """
+    목표 계좌 위험률을 만족하는 증거금 비율 계산.
+    Returns: (position_pct, estimated_sl_loss_usd)
+    """
+    if balance <= 0 or leverage <= 0 or entry_price <= 0 or sl_price <= 0:
+        return 0.0, 0.0
+
+    sl_pct = abs(entry_price - sl_price) / entry_price
+    if sl_pct <= 0:
+        return 0.0, 0.0
+
+    target_loss = balance * risk_pct
+    raw_margin  = target_loss / (leverage * sl_pct)
+    pct         = min(raw_margin / balance, max_position_pct)
+    pct         = max(pct, 0.0)
+    est_loss    = balance * pct * leverage * sl_pct
+    return round(pct, 4), round(est_loss, 4)
+
+
+def log_trade_candidate(symbol: str, tf_key: str, strategy: str,
+                        direction: str, strength: str, status: str,
+                        reason: str = "", **extra):
+    """후보/차단/체결 이벤트를 JSONL로 저장해 사후 통계 검증에 사용한다."""
+    candidate_id = extra.pop("candidate_id", None)
+    if not candidate_id:
+        ts_ms = int(time.time() * 1000)
+        safe_symbol = symbol.replace("/", "").replace(":", "")
+        candidate_id = f"{ts_ms}-{safe_symbol}-{tf_key}-{status}"
+    row = {
+        "candidate_id": candidate_id,
+        "time":      datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST"),
+        "timestamp": time.time(),
+        "symbol":    symbol,
+        "tf":        tf_key,
+        "strategy":  strategy,
+        "direction": direction,
+        "strength":  strength,
+        "status":    status,
+        "reason":    reason,
+    }
+    row.update(extra)
+    with CANDIDATE_FILE.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+TF_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+EVAL_HORIZONS = (5, 10, 20)
+
+
+def _candidate_key(row: dict) -> str:
+    if row.get("candidate_id"):
+        return row["candidate_id"]
+    return (
+        f"{int(row.get('timestamp', 0) * 1000)}-"
+        f"{row.get('symbol','').replace('/','')}-{row.get('tf','')}-"
+        f"{row.get('status','')}-{row.get('reason','')[:24]}"
+    )
+
+
+def evaluate_trade_candidates(max_items: int = 80) -> list[str]:
+    """
+    후보 신호 사후 평가.
+    각 후보 이후 5/10/20봉의 MFE/MAE를 기록해 다음 전략 수정의 근거로 쓴다.
+    """
+    if not CANDIDATE_FILE.exists():
+        return []
+
+    try:
+        rows = [
+            json.loads(line)
+            for line in CANDIDATE_FILE.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except Exception as e:
+        print(f"[후보평가] 로그 읽기 실패: {e}")
+        return []
+
+    s = _load_state()
+    evaluated = set(s.get("evaluated_candidate_ids", []))
+    now = time.time()
+    pending = []
+
+    for row in rows[-800:]:
+        if row.get("status") not in ("blocked", "order_failed", "opened"):
+            continue
+        cid = _candidate_key(row)
+        if cid in evaluated:
+            continue
+        tf = row.get("tf")
+        price = float(row.get("price") or 0)
+        ts = float(row.get("timestamp") or 0)
+        if not tf or price <= 0 or ts <= 0:
+            evaluated.add(cid)
+            continue
+        if now - ts < TF_SECONDS.get(tf, 3600) * max(EVAL_HORIZONS):
+            continue
+        pending.append((cid, row))
+        if len(pending) >= max_items:
+            break
+
+    if not pending:
+        if evaluated:
+            s["evaluated_candidate_ids"] = list(evaluated)[-2000:]
+            _save_state(s)
+        return []
+
+    from fetcher import fetch_ohlcv
+
+    notes = []
+    cache = {}
+    for cid, row in pending:
+        symbol = row["symbol"]
+        tf = row["tf"]
+        key = (symbol, tf)
+        try:
+            if key not in cache:
+                cache[key] = fetch_ohlcv(symbol, tf, 240)
+            df = cache[key]
+            ts = float(row["timestamp"])
+            price = float(row["price"])
+            direction = row.get("direction", "")
+
+            idx = None
+            for i, t in enumerate(df.index):
+                if t.timestamp() >= ts:
+                    idx = i
+                    break
+            if idx is None:
+                evaluated.add(cid)
+                continue
+
+            result = {}
+            for h in EVAL_HORIZONS:
+                future = df.iloc[idx + 1: idx + 1 + h]
+                if len(future) < h:
+                    continue
+                hi = float(future["high"].max())
+                lo = float(future["low"].min())
+                if direction == "LONG":
+                    mfe = (hi - price) / price * 100
+                    mae = (lo - price) / price * 100
+                else:
+                    mfe = (price - lo) / price * 100
+                    mae = (price - hi) / price * 100
+                result[str(h)] = {
+                    "mfe_pct": round(mfe, 3),
+                    "mae_pct": round(mae, 3),
+                    "edge_score": round(mfe + mae, 3),
+                }
+
+            if result:
+                log_trade_candidate(
+                    symbol, tf, row.get("strategy", ""), direction,
+                    row.get("strength", ""), "evaluated",
+                    reason="후보 사후평가",
+                    candidate_id=cid,
+                    source_status=row.get("status", ""),
+                    source_reason=row.get("reason", ""),
+                    price=price,
+                    eval=result,
+                )
+                notes.append(f"{symbol} {tf} {direction} {row.get('strategy','')} 평가 완료")
+            evaluated.add(cid)
+        except Exception as e:
+            print(f"[후보평가] {row.get('symbol')} {row.get('tf')} 실패: {e}")
+
+    s["evaluated_candidate_ids"] = list(evaluated)[-2000:]
+    _save_state(s)
+    return notes
+
+
+def notify_trade_block(symbol: str, tf_key: str, direction: str,
+                       strength: str, reason: str,
+                       strategy: str = "자동매매",
+                       send_telegram: bool = False, **extra):
+    """콘솔 + 후보 로그 + 선택적 텔레그램 진단."""
+    msg = f"  [{strategy}] {symbol} {tf_key} {direction} {strength} → {reason}"
+    print(msg)
+    log_trade_candidate(symbol, tf_key, strategy, direction, strength,
+                        "blocked", reason, **extra)
+    if send_telegram:
+        try:
+            from publisher import send as tg_send
+            coin = symbol.split("/")[0]
+            tg_send(
+                f"🧭 <b>[자동매매 차단]</b> {coin} {tf_key} {direction}\n"
+                f"강도: <b>{strength}</b>\n"
+                f"사유: {reason}"
+            )
+        except Exception as e:
+            print(f"[진단] 차단 알림 실패: {e}")
+
+
 # ─── 서킷브레이커 ────────────────────────────────────────────────────────────
 
-def check_circuit_breaker() -> tuple[bool, str]:
+def check_circuit_breaker(balance: float = 0.0) -> tuple[bool, str]:
     """(거래 가능 여부, 이유 메시지) 반환."""
     s = _refresh_daily(_load_state())
     _save_state(s)
+    daily_limit = get_daily_loss_limit(balance)
 
     if s["pause_until"] > time.time():
         resume = datetime.fromtimestamp(s["pause_until"], KST).strftime("%H:%M")
         return False, f"3연패 중단 중 — {resume} KST 이후 재개"
 
-    if s["daily_loss"] >= MAX_DAILY_LOSS:
-        return False, f"일일 손실 한도 도달 — 오늘 손실 ${s['daily_loss']:.2f}"
+    if s["daily_loss"] >= daily_limit:
+        return False, f"일일 손실 한도 도달 — 오늘 손실 ${s['daily_loss']:.2f} / 한도 ${daily_limit:.2f}"
 
     return True, "ok"
 
@@ -224,15 +447,24 @@ def place_emergency_sl(symbol: str, direction: str, qty: float, sl_price: float)
 def calc_qty(symbol: str, entry_price: float,
              leverage: int, balance: float,
              position_pct: float = TRADE_MARGIN_PCT,
-             max_margin: float = MAX_MARGIN_USD) -> tuple[float, int]:
+             max_margin: float = MAX_MARGIN_USD,
+             exchange=None) -> tuple[float, int]:
     """
     포지션 수량 및 실제 레버리지 계산.
     최소 수량 미달 시 레버리지 자동 상향 (MAX_LEVERAGE 한도).
     Returns (qty, leverage). qty=0 이면 거래 불가.
     """
     margin   = min(balance * position_pct, max_margin)
+    fsym     = _futures_symbol(symbol)
     step     = QTY_STEP.get(symbol, 0.001)
     min_q    = MIN_QTY.get(symbol, 0.001)
+
+    if exchange is not None:
+        try:
+            market = exchange.market(fsym)
+            min_q = float((market.get("limits", {}).get("amount", {}) or {}).get("min") or min_q)
+        except Exception:
+            pass
 
     pos_val  = margin * leverage
     qty      = round(math.floor(pos_val / entry_price / step) * step, 8)
@@ -246,13 +478,26 @@ def calc_qty(symbol: str, entry_price: float,
         leverage = req_lev
         qty      = min_q
 
+    if exchange is not None:
+        try:
+            qty = float(exchange.amount_to_precision(fsym, qty))
+        except Exception:
+            pass
+
     return qty, leverage
 
 
-def _split_tps(total_qty: float, tps: list, symbol: str) -> list:
+def _split_tps(total_qty: float, tps: list, symbol: str, exchange=None) -> list:
     """TP 비율에 따라 수량 분할. 최소 수량 미달분은 마지막 TP에 합산."""
+    fsym  = _futures_symbol(symbol)
     step  = QTY_STEP.get(symbol, 0.001)
     min_q = MIN_QTY.get(symbol, 0.001)
+    if exchange is not None:
+        try:
+            market = exchange.market(fsym)
+            min_q = float((market.get("limits", {}).get("amount", {}) or {}).get("min") or min_q)
+        except Exception:
+            pass
     result    = []
     remaining = total_qty
 
@@ -261,13 +506,24 @@ def _split_tps(total_qty: float, tps: list, symbol: str) -> list:
             qty = remaining
         else:
             qty = round(math.floor(total_qty * tp["pct"] / 100 / step) * step, 8)
+        if exchange is not None:
+            try:
+                qty = float(exchange.amount_to_precision(fsym, qty))
+            except Exception:
+                pass
 
         if qty >= min_q:
             result.append({"qty": qty, "price": tp["price"], "pct": tp["pct"]})
             remaining = round(remaining - qty, 8)
 
     if remaining > 1e-9 and result:
-        result[-1]["qty"] = round(result[-1]["qty"] + remaining, 8)
+        final_qty = round(result[-1]["qty"] + remaining, 8)
+        if exchange is not None:
+            try:
+                final_qty = float(exchange.amount_to_precision(fsym, final_qty))
+            except Exception:
+                pass
+        result[-1]["qty"] = final_qty
 
     return result
 
@@ -277,19 +533,14 @@ def _split_tps(total_qty: float, tps: list, symbol: str) -> list:
 def execute(symbol: str, direction: str, leverage: int,
             entry_price: float, sl: float, tps: list,
             position_pct: float = TRADE_MARGIN_PCT,
-            atr: float = 0.0, is_elite: bool = False) -> dict:
+            atr: float = 0.0, is_elite: bool = False,
+            max_margin_usd: float | None = None) -> dict:
     """
     실거래 주문 실행.
     tps: [{"price": float, "pct": int}, ...]
     position_pct: 잔고 대비 증거금 비율 (스캘핑=0.10, 스윙=0.20)
     Returns {"ok": bool, "qty": float, "leverage": int, "error": str}
     """
-    # 서킷브레이커
-    ok, reason = check_circuit_breaker()
-    if not ok:
-        print(f"[자동매매] 거래 차단 — {reason}")
-        return {"ok": False, "qty": 0, "leverage": leverage, "error": reason}
-
     # 잔고 확인
     balance = get_usdt_balance()
     if balance < MIN_BALANCE_USD:
@@ -297,19 +548,38 @@ def execute(symbol: str, direction: str, leverage: int,
         print(f"[자동매매] {msg}")
         return {"ok": False, "qty": 0, "leverage": leverage, "error": msg}
 
+    # 서킷브레이커
+    ok, reason = check_circuit_breaker(balance)
+    if not ok:
+        print(f"[자동매매] 거래 차단 — {reason}")
+        return {"ok": False, "qty": 0, "leverage": leverage, "error": reason}
+
     # 중복 포지션 확인
     if has_open_position(symbol):
         msg = f"{symbol} 이미 오픈 포지션 있음 — 스킵"
         print(f"[자동매매] {msg}")
         return {"ok": False, "qty": 0, "leverage": leverage, "error": msg}
 
+    # ccxt는 USDT 영구선물에 SOL/USDT:USDT 형식 필요
+    fsymbol = _futures_symbol(symbol)
+    ex = _ex()
+    try:
+        ex.load_markets()
+    except Exception as e:
+        msg = f"시장 정보 조회 실패: {e}"
+        print(f"[자동매매] {msg}")
+        return {"ok": False, "qty": 0, "leverage": leverage, "error": msg}
+
     # 수량 계산
-    max_margin = MAX_SCALP_MARGIN_USD if position_pct < TRADE_MARGIN_PCT else MAX_MARGIN_USD
-    qty, leverage = calc_qty(symbol, entry_price, leverage, balance, position_pct, max_margin)
+    if max_margin_usd is None:
+        max_margin = get_margin_cap(balance, scalp=(position_pct <= SCALP_MARGIN_PCT))
+    else:
+        max_margin = max_margin_usd
+    qty, leverage = calc_qty(symbol, entry_price, leverage, balance, position_pct, max_margin, exchange=ex)
     if qty <= 0:
         return {"ok": False, "qty": 0, "leverage": leverage, "error": "수량 계산 실패"}
 
-    tp_splits = _split_tps(qty, tps, symbol)
+    tp_splits = _split_tps(qty, tps, symbol, exchange=ex)
     if not tp_splits:
         return {"ok": False, "qty": 0, "leverage": leverage, "error": "TP 분할 실패"}
 
@@ -317,19 +587,13 @@ def execute(symbol: str, direction: str, leverage: int,
     close_side = "sell" if direction == "LONG"  else "buy"
     tg_dir     = 2 if direction == "LONG" else 1
 
-    # ccxt는 USDT 영구선물에 SOL/USDT:USDT 형식 필요
-    fsymbol = _futures_symbol(symbol)
-
     print(f"\n{'='*50}")
     print(f"  🚀 자동매매 실행: {direction} {qty} {symbol}  {leverage}x")
     print(f"  잔고: ${balance:.2f}  |  증거금: ~${qty * entry_price / leverage:.2f}")
     print(f"  진입≈${entry_price:,.4f}  |  손절: ${sl:,.4f}")
     print(f"{'='*50}")
 
-    ex = _ex()
     try:
-        ex.load_markets()
-
         # 1. 레버리지 설정
         try:
             ex.set_leverage(leverage, fsymbol)

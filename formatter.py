@@ -1,4 +1,5 @@
 """텔레그램 메시지 포맷 — 5지표 확인 + ELITE 등급 + 강도별 TP 전략."""
+from __future__ import annotations
 from datetime import datetime, timezone, timedelta
 from config import ROUND_TRIP_FEE, SL_ATR_MULT, LEVERAGE_MAP, MIN_GROSS_PCT, TP_BY_STRENGTH
 
@@ -56,6 +57,16 @@ SIGNAL_META = {
         "desc": "BB 압축(에너지 축적) → 하단 돌파 = 추세 가속 (VCP 원리)",
         "direction": "SHORT",
     },
+    "micro_breakout_long": {
+        "emoji": "🚀", "label": "마이크로 구조 돌파 LONG",
+        "desc": "최근 구조 고점 돌파 + 추세/거래량 확인 → 단기 추세 합류",
+        "direction": "LONG",
+    },
+    "micro_breakout_short": {
+        "emoji": "🚀", "label": "마이크로 구조 돌파 SHORT",
+        "desc": "최근 구조 저점 이탈 + 추세/거래량 확인 → 단기 추세 합류",
+        "direction": "SHORT",
+    },
 }
 
 TF_ENTRY = {
@@ -109,6 +120,22 @@ def _get_leverage(strength: str, tf_key: str) -> int:
     return LEVERAGE_MAP.get((_raw_strength(strength), tf_key), 2)
 
 
+def _round_price(price: float) -> float:
+    """코인 가격대별 반올림. 저가 코인에서 2자리 반올림은 TP/SL을 망가뜨린다."""
+    p = abs(float(price))
+    if p >= 1000:
+        digits = 2
+    elif p >= 100:
+        digits = 3
+    elif p >= 1:
+        digits = 4
+    elif p >= 0.01:
+        digits = 6
+    else:
+        digits = 8
+    return round(float(price), digits)
+
+
 def _calc_targets(sig: dict, current_price: float,
                   direction: str, leverage: int,
                   tf_key: str, strength: str = "STRONG") -> dict | None:
@@ -122,8 +149,8 @@ def _calc_targets(sig: dict, current_price: float,
     min_gross   = MIN_GROSS_PCT.get(tf_key, 2.0) / 100
 
     if direction == "LONG":
-        entry = round(current_price - 0.15 * atr, 2)
-        sl    = round(sig["pivot_price"] - SL_ATR_MULT * atr, 2)
+        entry = _round_price(current_price - 0.15 * atr)
+        sl    = _round_price(sig["pivot_price"] - SL_ATR_MULT * atr)
         risk  = entry - sl
         if risk <= 0:
             return None
@@ -132,7 +159,7 @@ def _calc_targets(sig: dict, current_price: float,
         for tp_def in tp_plan:
             tp_price_atr = entry + tp_def["atr_mult"] * atr
             tp_price_min = entry * (1 + min_gross + fee_total)
-            tp_price = round(max(tp_price_atr, tp_price_min), 2)
+            tp_price = _round_price(max(tp_price_atr, tp_price_min))
             gain      = tp_price - entry
             gross_pct = round(gain / entry * 100, 2)
             net_pct   = round(gross_pct - fee_total * 100, 2)
@@ -141,8 +168,8 @@ def _calc_targets(sig: dict, current_price: float,
                         "gross_pct": gross_pct, "net_pct": net_pct, "rr": rr})
 
     else:  # SHORT
-        entry = round(current_price + 0.15 * atr, 2)
-        sl    = round(sig["pivot_price"] + SL_ATR_MULT * atr, 2)
+        entry = _round_price(current_price + 0.15 * atr)
+        sl    = _round_price(sig["pivot_price"] + SL_ATR_MULT * atr)
         risk  = sl - entry
         if risk <= 0:
             return None
@@ -151,7 +178,7 @@ def _calc_targets(sig: dict, current_price: float,
         for tp_def in tp_plan:
             tp_price_atr = entry - tp_def["atr_mult"] * atr
             tp_price_min = entry * (1 - min_gross - fee_total)
-            tp_price = round(min(tp_price_atr, tp_price_min), 2)
+            tp_price = _round_price(min(tp_price_atr, tp_price_min))
             gain      = entry - tp_price
             gross_pct = round(gain / entry * 100, 2)
             net_pct   = round(gross_pct - fee_total * 100, 2)
