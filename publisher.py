@@ -1,6 +1,10 @@
 """텔레그램 발송 — 매매 전용봇 단일 라우팅."""
 import os
+from pathlib import Path
 import requests
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent / ".env")
 
 
 def _post(token: str, chat_id: str, text: str) -> bool:
