@@ -1,4 +1,4 @@
-"""텔레그램 메시지 포맷 — 5지표 확인 + ELITE 등급 + 강도별 TP 전략."""
+"""텔레그램 메시지 포맷 — 다이버전스 신뢰도 + ELITE 등급 + 강도별 TP 전략."""
 from __future__ import annotations
 from datetime import datetime, timezone, timedelta
 from config import ROUND_TRIP_FEE, SL_ATR_MULT, LEVERAGE_MAP, MIN_GROSS_PCT, TP_BY_STRENGTH
@@ -78,8 +78,8 @@ TF_ENTRY = {
 }
 
 TF_NOTE = {
-    "5m":  "⚡ 스캘핑 — 신선 신호 자동매매 (단일 TP, 증거금 10%)",
-    "15m": "⚡ 스캘핑 — 신선 신호 자동매매 (증거금 10%)",
+    "5m":  "🔎 타점 확인 전용 — 15m 이상 신호 없이는 단독 자동매매 금지",
+    "15m": "⚡ 최소 자동매매 판단봉 — 5m로 타점 확인 후 진입",
     "1h":  "✅ 주요 진입 타임프레임",
     "4h":  "✅ 메인 포지션 타임프레임",
     "1d":  "✅ 대형 포지션 타임프레임",
@@ -92,9 +92,11 @@ EMA_NOTE = {
 }
 
 STRENGTH_NOTE = {
-    5: "5/5 전부 확인 → ELITE 최고 신뢰도",
-    4: "4/5 확인 → 매우 높은 신뢰도",
-    3: "3/5 확인 → 진입 가능",
+    7: "6개 다이버전스 + 거래량 확인 → ELITE 최고 신뢰도",
+    6: "5개 이상 다이버전스 확인 → 매우 높은 신뢰도",
+    5: "4개 이상 다이버전스 확인 → 높은 신뢰도",
+    4: "3개 이상 다이버전스 + 거래량 확인 → 조건부 신뢰",
+    3: "3개 다이버전스 확인 → 후보 관찰",
 }
 
 # 강도별 TP 아이콘 + 전략 라벨
@@ -227,16 +229,26 @@ def build_alert(symbol: str, tf_label: str, tf_key: str,
 
     for s in signals:
         m = SIGNAL_META.get(s["signal_type"], meta)
+        q = s.get("divergence_quality", {})
+        div_count = s.get("divergence_count", s["confirmed_count"])
+        max_div = q.get("max_divergence", 6)
+        max_conf = q.get("max_confirmed", 7)
+        cci = s.get("cci", {"ok": False, "value": 0.0})
         lines += [
-            f"{m['emoji']} <b>{m['label']}</b>  ({s['confirmed_count']}/5 확인)",
+            f"{m['emoji']} <b>{m['label']}</b>  "
+            f"(Divergence {div_count}/{max_div} | Total {s['confirmed_count']}/{max_conf})",
             f"   {m['desc']}",
             f"   {'✅' if s['rsi']['ok']  else '❌'} RSI      {s['rsi']['value']}",
+            f"   {'✅' if cci['ok']       else '❌'} CCI      {cci['value']}",
             f"   {'✅' if s['macd']['ok'] else '❌'} MACD     {'+' if s['macd']['value'] >= 0 else ''}{s['macd']['value']:.4f}",
             f"   {'✅' if s['obv']['ok']  else '❌'} OBV      {'매집 감지 ✓' if s['obv']['ok'] else '미확인'}",
             f"   {'✅' if s['srsi']['ok'] else '❌'} StochRSI {s['srsi']['value']}",
             f"   {'✅' if s['vol']['ok']  else '❌'} Volume   {s['vol']['value']}x 평균거래량",
-            "",
+            f"   {'✅' if s.get('cvd', {}).get('ok') else '❌'} CVD      {'확인' if s.get('cvd', {}).get('ok') else '미확인'}",
+        "",
         ]
+        if q.get("note"):
+            lines += [f"   신뢰도 기준: {q['note']}", ""]
 
     lines += [
         f"📊 <b>신호 강도: {strength}</b>   |   ⚙️ 추천 레버리지: <b>{leverage}x</b>",

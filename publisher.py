@@ -1,4 +1,4 @@
-"""텔레그램 발송 — 메인봇(신호/매매) + 복기봇(분석 브리핑) 분리."""
+"""텔레그램 발송 — 매매 전용봇 단일 라우팅."""
 import os
 import requests
 
@@ -20,23 +20,18 @@ def _post(token: str, chat_id: str, text: str) -> bool:
 
 
 def send(text: str) -> bool:
-    """메인봇 — 신호 알림 / 자동매매 결과."""
-    token   = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    """매매 전용봇 — 신호 / 자동매매 / 차단 / 복기 전체."""
+    token   = os.getenv("TRADE_BOT_TOKEN")
+    chat_id = os.getenv("TRADE_CHAT_ID")
     if not token or not chat_id:
-        print("[Telegram] 메인봇 토큰/chat_id 없음")
+        print("[매매봇] 토큰/chat_id 없음 — .env에 TRADE_BOT_TOKEN, TRADE_CHAT_ID 입력 필요")
+        return False
+    if "여기에" in token or "여기에" in chat_id:
+        print("[매매봇] 토큰 미입력 상태 — 봇파더 토큰 받으면 .env 업데이트")
         return False
     return _post(token, chat_id, text)
 
 
 def send_review(text: str) -> bool:
-    """복기봇 — 거래 복기 / 패인분석 브리핑 전용."""
-    token   = os.getenv("REVIEW_BOT_TOKEN")
-    chat_id = os.getenv("REVIEW_CHAT_ID")
-    if not token or not chat_id:
-        print("[복기봇] 토큰/chat_id 미설정 — .env에 REVIEW_BOT_TOKEN, REVIEW_CHAT_ID 입력 필요")
-        return False
-    if "여기에" in token or "여기에" in chat_id:
-        print("[복기봇] 토큰 미입력 상태 — 봇파더 토큰 받으면 .env 업데이트")
-        return False
-    return _post(token, chat_id, text)
+    """복기/결산도 같은 매매 전용봇으로 보낸다."""
+    return send(text)

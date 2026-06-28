@@ -41,6 +41,7 @@ def _base_signal(signal_type: str, direction: str, strength: str,
         "strategy":        strategy,
         # 기존 formatter 호환용 (ok/value 형식)
         "rsi":  {"ok": rsi_val > 0,  "value": round(rsi_val, 1)},
+        "cci":  {"ok": False,         "value": 0.0},
         "macd": {"ok": False,         "value": 0.0},
         "obv":  {"ok": False},
         "srsi": {"ok": False,         "value": 0},

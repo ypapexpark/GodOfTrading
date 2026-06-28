@@ -6,12 +6,18 @@
   2. TF별 승률 → 저성과 TF 일시 제외
   3. 심볼 3연패 → 해당 코인 일시 제외
   4. STRONG 신호 패배 → confirmed 요구치 상향
-  5. 역추세 진입 패배 → 역추세 통계 누적 (이미 5/5 강제 적용)
+  5. 역추세 진입 패배 → 역추세 통계 누적 (고확신 신호만 허용)
   6. 저볼륨 손실 패턴 → min_vol_ratio 자동 상향
   7. 오래된 신호 손실 패턴 → swing_freshness 자동 강화
 """
+from __future__ import annotations
+
 import time
 from datetime import datetime, timezone, timedelta
+from config import (DRAWDOWN_RISK_MULT, DRAWDOWN_RISK_OFF_PCT,
+                    DRAWDOWN_WARN_PCT, LOSS_STREAK_RISK_MULT, MIN_DYNAMIC_RISK_MULT,
+                    PROBATION_MIN_TRADES, PROBATION_RISK_MULT,
+                    STRATEGY_LOSS_COOLDOWN, TF_LOSS_COOLDOWN)
 
 KST = timezone(timedelta(hours=9))
 
@@ -49,6 +55,8 @@ def get_adaptive_filters() -> dict:
     }
     s = _load()
     adaptive = s.get("adaptive", {})
+    if not isinstance(adaptive, dict):
+        adaptive = {}
     for k, v in defaults.items():
         adaptive.setdefault(k, v)
     return adaptive
@@ -123,9 +131,9 @@ def _analyze_failure(trade: dict) -> list[str]:
 
     # 2. 신호 신뢰도
     if confirmed == 3:
-        reasons.append("⚠️ 3/6 최소 확인 — 신뢰도 낮음")
+        reasons.append("⚠️ 3개 다이버전스 최소 확인 — 후보급 신뢰도")
     elif confirmed == 4:
-        reasons.append("📊 4/6 확인 — 중간 신뢰도 (ELITE 아님)")
+        reasons.append("📊 4/7 확인 — 조건부 신뢰도 (ELITE 아님)")
 
     # 3. 신호 신선도 (핵심 — 오래된 봉 = 기회 이미 지남)
     all_freshness = {**SCALP_FRESHNESS, **SWING_FRESHNESS}
@@ -192,12 +200,12 @@ def build_next_strategy(trade: dict) -> list[str]:
 
     # ── 신뢰도 부족 ──────────────────────────────────────────────────────────
     if confirmed < 5:
-        plans.append(f"  ④ 신호 강도 조건: {coin} {tf}봉 다음 진입은 5/6 이상 (VERY STRONG 이상) 대기")
+        plans.append(f"  ④ 신호 강도 조건: {coin} {tf}봉 다음 진입은 5/7 이상 (VERY STRONG 이상) 대기")
 
     # ── 공통 황금 진입 조건 ──────────────────────────────────────────────────
     if not plans:
         plans.append(f"  ① {coin} 다음 진입: 현재 설정 조건 유지, 시장 노이즈로 판단")
-        plans.append(f"     → ELITE 6/6 + MTF 전정렬 + EMA정렬 황금 진입 기회 대기")
+        plans.append(f"     → ELITE급 + MTF 전정렬 + EMA정렬 황금 진입 기회 대기")
     else:
         plans.append(f"  💡 이상적 재진입: ELITE + MTF 전정렬 + 신선도 4봉 이내 황금 진입 조건 충족 시")
 
@@ -298,7 +306,7 @@ def analyze_and_adjust() -> list[str]:
             prev = mc.get(tf, 4)
             mc[tf] = min(prev + 1, 5)
             if mc[tf] > prev:
-                adjustments.append(f"{tf}봉 STRONG 기준 {mc[tf]}/5로 강화 (승률 {wr_s*100:.0f}%)")
+                adjustments.append(f"{tf}봉 STRONG 기준 {mc[tf]}/7로 강화 (승률 {wr_s*100:.0f}%)")
     filters["min_confirmed_by_tf"] = mc
 
     # ── 5. 저볼륨 손실 패턴 → min_vol_ratio 자동 조정 ─────────────────────────
@@ -425,7 +433,7 @@ def build_loss_pattern_summary(losses: list[dict]) -> str:
     if old_sig >= 1:
         patterns.append(f"오래된 신호 {old_sig}/{n}회")
     if low_conf >= 1:
-        patterns.append(f"4/5 이하 확인 {low_conf}/{n}회")
+        patterns.append(f"4/7 이하 확인 {low_conf}/{n}회")
 
     return "  |  ".join(patterns) if patterns else "패턴 불명확"
 
@@ -456,7 +464,7 @@ def build_learning_report(recent_losses: list[dict]) -> str:
     mc = filters["min_confirmed_by_tf"]
     for tf, v in mc.items():
         if v > 4:
-            lines.append(f"   📈 {tf}봉 confirmed {v}/5 요구")
+            lines.append(f"   📈 {tf}봉 confirmed {v}/7 요구")
 
     sf = filters.get("swing_freshness", {})
     from config import SWING_FRESHNESS as CFG_FRESH
@@ -470,6 +478,11 @@ def build_learning_report(recent_losses: list[dict]) -> str:
 
     # 승리 패턴 통계
     s = _load()
+    dd = float(s.get("drawdown_pct", 0) or 0)
+    if dd > 0:
+        status = s.get("drawdown_status", "normal")
+        lines.append(f"   계좌 DD <b>{dd:.1f}%</b>  |  상태: {status}")
+
     all_t   = s.get("trade_history", [])
     recent  = [t for t in all_t if t["status"] in ("win", "loss")][-ANALYSIS_LOOKBACK:]
     if recent:
@@ -505,6 +518,25 @@ def build_learning_report(recent_losses: list[dict]) -> str:
 # ─── 필터 유효성 체크 ─────────────────────────────────────────────────────────
 
 def is_tradeable(symbol: str, tf_key: str) -> tuple[bool, str]:
+    return is_tradeable_with_strategy(symbol, tf_key, strategy="")
+
+
+def _closed_trades(hours: float | None = None) -> list[dict]:
+    cutoff = time.time() - hours * 3600 if hours else 0
+    return [
+        t for t in _load().get("trade_history", [])
+        if t.get("status") in ("win", "loss", "breakeven")
+        and t.get("timestamp", 0) >= cutoff
+    ]
+
+
+def _tail_loss_streak(trades: list[dict], limit: int) -> bool:
+    tail = trades[-limit:]
+    return len(tail) >= limit and all(t.get("status") == "loss" for t in tail)
+
+
+def is_tradeable_with_strategy(symbol: str, tf_key: str,
+                               strategy: str = "") -> tuple[bool, str]:
     filters = get_adaptive_filters()
     now     = time.time()
 
@@ -518,7 +550,94 @@ def is_tradeable(symbol: str, tf_key: str) -> tuple[bool, str]:
         until = datetime.fromtimestamp(skip_sym[symbol], KST).strftime("%H:%M")
         return False, f"{symbol.split('/')[0]} 학습 제외 중 ({until} KST까지)"
 
+    # 최근 TF 연패 차단. 특히 5m는 수수료/노이즈가 커서 연패 후 쉬는 시간이 필요하다.
+    tf_rule = TF_LOSS_COOLDOWN.get(tf_key)
+    if tf_rule:
+        cooldown_h = max(float(tf_rule.get("hours", 0)), 1.0)
+        lookback_h = max(float(tf_rule.get("lookback_hours", cooldown_h)), cooldown_h)
+        tf_recent = [t for t in _closed_trades(lookback_h) if t.get("tf") == tf_key]
+        losses = int(tf_rule.get("losses", 2))
+        if _tail_loss_streak(tf_recent, losses):
+            last_ts = tf_recent[-1].get("timestamp", now)
+            until_ts = last_ts + cooldown_h * 3600
+            if until_ts > now:
+                until = datetime.fromtimestamp(until_ts, KST).strftime("%H:%M")
+                return False, f"{tf_key}봉 {losses}연패 쿨다운 ({until} KST까지)"
+
+    # 전략별 연패 차단. 같은 전략이 같은 TF에서 연속 손실이면 임시 중단한다.
+    if strategy:
+        rule = STRATEGY_LOSS_COOLDOWN
+        lookback_h = max(float(rule.get("hours", 0)), 1.0)
+        losses = int(rule.get("losses", 2))
+        strat_recent = [
+            t for t in _closed_trades(lookback_h)
+            if t.get("tf") == tf_key and t.get("strategy") == strategy
+        ]
+        if _tail_loss_streak(strat_recent, losses):
+            last_ts = strat_recent[-1].get("timestamp", now)
+            until_ts = last_ts + lookback_h * 3600
+            if until_ts > now:
+                until = datetime.fromtimestamp(until_ts, KST).strftime("%H:%M")
+                return False, f"{strategy} {tf_key} {losses}연패 쿨다운 ({until} KST까지)"
+
     return True, "ok"
+
+
+def get_risk_multiplier(tf_key: str, strategy: str = "",
+                        symbol: str = "") -> tuple[float, list[str]]:
+    """
+    최근 손실/검증 부족을 포지션 크기에 반영한다.
+    반환: (risk_multiplier, notes)
+    """
+    s = _load()
+    mult = 1.0
+    notes = []
+
+    consec = int(s.get("consec_loss", 0) or 0)
+    if consec:
+        max_key = max(LOSS_STREAK_RISK_MULT)
+        m = LOSS_STREAK_RISK_MULT.get(consec, LOSS_STREAK_RISK_MULT[max_key])
+        mult *= m
+        notes.append(f"계좌 {consec}연패 리스크×{m:.2f}")
+
+    drawdown_pct = float(s.get("drawdown_pct", 0) or 0)
+    if drawdown_pct >= DRAWDOWN_RISK_OFF_PCT * 100:
+        mult *= DRAWDOWN_RISK_MULT
+        notes.append(f"계좌 DD {drawdown_pct:.1f}% 리스크×{DRAWDOWN_RISK_MULT:.2f}")
+    elif drawdown_pct >= DRAWDOWN_WARN_PCT * 100:
+        mult *= 0.50
+        notes.append(f"계좌 DD {drawdown_pct:.1f}% 경고 리스크×0.50")
+
+    closed = _closed_trades()
+
+    if tf_key:
+        tf_closed = [t for t in closed if t.get("tf") == tf_key]
+        if tf_closed and tf_closed[-1].get("status") == "loss":
+            mult *= 0.75
+            notes.append(f"{tf_key} 최근 손실 리스크×0.75")
+
+    if strategy:
+        strat_closed = [t for t in closed if t.get("strategy") == strategy]
+        if len(strat_closed) < PROBATION_MIN_TRADES:
+            mult *= PROBATION_RISK_MULT
+            notes.append(
+                f"{strategy} 검증 {len(strat_closed)}/{PROBATION_MIN_TRADES}회 리스크×{PROBATION_RISK_MULT:.2f}"
+            )
+        else:
+            wins = sum(1 for t in strat_closed[-10:] if t.get("status") == "win")
+            total = len(strat_closed[-10:])
+            wr = wins / max(total, 1)
+            if wr < 0.40:
+                mult *= 0.50
+                notes.append(f"{strategy} 최근 승률 {wr*100:.0f}% 리스크×0.50")
+
+    if symbol:
+        sym_closed = [t for t in closed if t.get("symbol") == symbol]
+        if len(sym_closed) >= 2 and _tail_loss_streak(sym_closed, 2):
+            mult *= 0.70
+            notes.append(f"{symbol.split('/')[0]} 2연패 리스크×0.70")
+
+    return round(max(mult, MIN_DYNAMIC_RISK_MULT), 3), notes
 
 
 def get_adaptive_min_rr() -> float:

@@ -5,6 +5,14 @@ SYMBOLS = [
     "DOGE/USDT", "ADA/USDT", "DOT/USDT", "SUI/USDT",
 ]
 
+# ─── 동적 거래대금 레이더 ───────────────────────────────────────────────────
+# Top10 절대 거래대금 + 직전 스캔 대비 거래대금 급증 종목을 함께 감시한다.
+RADAR_TOP_N = 10
+VOLUME_SURGE_TOP_N = 5
+VOLUME_SURGE_MIN_24H_USD = 3_000_000
+VOLUME_SURGE_MIN_DELTA_USD = 500_000
+VOLUME_SURGE_MIN_DELTA_PCT = 3.0
+
 # ─── 수수료 ───────────────────────────────────────────────────────────────────
 BYBIT_TAKER_FEE = 0.00055   # 0.055%
 ROUND_TRIP_FEE  = BYBIT_TAKER_FEE * 2
@@ -18,7 +26,7 @@ MIN_GROSS_PCT = {
     "1d":  3.0,
 }
 
-# 5m/15m는 5지표 중 4개 이상 확인돼야 발송 (노이즈 필터)
+# 5m/15m는 다이버전스 3개 이상 + 전체 확인 4개 이상이어야 발송 (노이즈 필터)
 STRICT_TF = {"5m", "15m"}
 
 # 스캘핑 자동매매 신호 신선도 — 피봇 형성 후 최대 허용 봉 수
@@ -73,25 +81,25 @@ SL_ATR_MULT = 1.5
 # ─── 레버리지 추천표 (신호강도 × 타임프레임) ────────────────────────────────
 # 100억 프로젝트: 고신뢰도 자리엔 최대 레버리지 투입, 복리로 스케일업
 LEVERAGE_MAP = {
-    # ── ELITE (6/6): 최고 확신도 — 최대 레버리지 ──
+    # ── ELITE: 최고 확신도 — 최대 레버리지 ──
     ("ELITE",       "1d"):  20,
     ("ELITE",       "4h"):  20,   # 18 → 20
     ("ELITE",       "1h"):  20,   # 15 → 20
     ("ELITE",       "15m"): 12,   #  8 → 12
     ("ELITE",       "5m"):  8,    #  5 → 8
-    # ── VERY STRONG (5/6): 강한 신호 — 공격적 레버 ──
+    # ── VERY STRONG: 강한 신호 — 공격적 레버 ──
     ("VERY STRONG", "1d"):  15,   # 12 → 15
     ("VERY STRONG", "4h"):  15,   # 10 → 15
     ("VERY STRONG", "1h"):  12,   #  7 → 12
     ("VERY STRONG", "15m"): 8,    #  5 → 8
     ("VERY STRONG", "5m"):  5,    #  3 → 5
-    # ── STRONG (4/6): 조건부 허용 ──
+    # ── STRONG: 조건부 허용 ──
     ("STRONG",      "1d"):  10,   #  7 → 10
     ("STRONG",      "4h"):  8,    #  5 → 8
     ("STRONG",      "1h"):  6,    #  4 → 6
     ("STRONG",      "15m"): 5,    #  3 → 5
     ("STRONG",      "5m"):  3,
-    # ── MODERATE (3/6): 구조레벨+EMA 조건 시 소액 ──
+    # ── MODERATE: 구조레벨+EMA 조건 시 소액 ──
     ("MODERATE",    "1d"):  6,
     ("MODERATE",    "4h"):  5,
     ("MODERATE",    "1h"):  4,
@@ -129,9 +137,32 @@ RISK_PCT_BY_STRENGTH = {
 SCALP_RISK_MULT         = 0.55
 GOLDEN_ENTRY_RISK_PCT   = 0.0400
 MAX_ACCOUNT_RISK_PCT    = 0.0450
-MAX_DAILY_LOSS_PCT      = 0.0600
+MAX_DAILY_LOSS_PCT      = 0.0300
 AUTO_TRADE_DIAGNOSTICS  = True
 CANDIDATE_LOG_FILE      = "trade_candidates.jsonl"
+EXECUTION_JOURNAL_FILE  = "trade_execution_journal.jsonl"
+
+# ─── 계좌 드로우다운 방어 ───────────────────────────────────────────────────
+# 손실 구간에서는 "학습"보다 생존이 우선이다.
+# ACCOUNT_START_BALANCE(.env)가 있으면 그 값을 기준으로, 없으면 관측된 최고 equity를 기준으로 방어한다.
+DRAWDOWN_WARN_PCT       = 0.08
+DRAWDOWN_RISK_OFF_PCT   = 0.12
+DRAWDOWN_HARD_STOP_PCT  = 0.18
+DRAWDOWN_PAUSE_HOURS    = 24
+DRAWDOWN_RISK_MULT      = 0.25
+
+# ─── 방어형 리스크 거버너 ───────────────────────────────────────────────────
+# 최근 성과가 나쁜 TF/전략은 자동으로 줄이거나 쉬게 한다.
+# 목적: 신호를 더 많이 잡는 것보다, 음의 기댓값 구간에서 계좌 노출을 줄이는 것.
+TF_LOSS_COOLDOWN = {
+    "5m":  {"losses": 2, "hours": 12, "lookback_hours": 24},
+    "15m": {"losses": 2, "hours": 8,  "lookback_hours": 16},
+}
+STRATEGY_LOSS_COOLDOWN = {"losses": 2, "hours": 12}
+LOSS_STREAK_RISK_MULT = {1: 0.75, 2: 0.50, 3: 0.35}
+PROBATION_MIN_TRADES = 5
+PROBATION_RISK_MULT = 0.50
+MIN_DYNAMIC_RISK_MULT = 0.35
 
 # STRONG 실거래는 "늦게 뜬 다이버전스"가 아니라 현재봉 기반 전략만 허용한다.
 ACTIVE_STRONG_STRATEGIES = {"RSI반전", "EMA눌림목", "BB스퀴즈", "마이크로돌파"}
@@ -151,7 +182,7 @@ TIMEFRAMES = {
 MTF_POSITION_BOOST  = 1.30   # 전 TF 정렬 → 30% 증가
 MTF_POSITION_CAP    = 0.40   # 부스트 후 최대 포지션 비율 상한 (0.30 → 0.40)
 
-# MODERATE(3/6) 신호는 알림만 — 자동매매 제외
+# MODERATE 신호는 알림만 — 자동매매 제외
 MODERATE_AUTO_TRADE = False
 
 # ─── 지표 파라미터 ────────────────────────────────────────────────────────────
@@ -161,6 +192,7 @@ RSI_OVERBOUGHT = 70   # 65 → 70: 과매수 기준 강화
 
 STOCH_RSI_PERIOD = 14   # StochRSI 룩백
 STOCH_K_SMOOTH   = 3    # %K 스무딩
+CCI_PERIOD       = 20   # CCI 다이버전스 룩백
 
 VOL_SPIKE_THRESHOLD = 1.5   # 1.2→1.5: 진짜 거래량 급증만 인정 (1.2x는 일상 노이즈)
 

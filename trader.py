@@ -7,12 +7,16 @@ import os
 import json
 import time
 import math
+from html import escape
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
 import ccxt
 from dotenv import load_dotenv
-from config import (CANDIDATE_LOG_FILE, MAX_DAILY_LOSS_PCT,
+from config import (CANDIDATE_LOG_FILE, EXECUTION_JOURNAL_FILE,
+                    DRAWDOWN_HARD_STOP_PCT, DRAWDOWN_PAUSE_HOURS,
+                    DRAWDOWN_RISK_OFF_PCT, DRAWDOWN_WARN_PCT,
+                    MAX_DAILY_LOSS_PCT, ROUND_TRIP_FEE,
                     MIN_QTY_MAP, QTY_STEP_MAP)
 
 load_dotenv(Path(__file__).parent / ".env")
@@ -20,6 +24,7 @@ load_dotenv(Path(__file__).parent / ".env")
 KST        = timezone(timedelta(hours=9))
 STATE_FILE = Path(__file__).parent / "trade_state.json"
 CANDIDATE_FILE = Path(__file__).parent / CANDIDATE_LOG_FILE
+EXECUTION_JOURNAL = Path(__file__).parent / EXECUTION_JOURNAL_FILE
 
 # ─── 리스크 파라미터 (100억 프로젝트 — 공격적 복리 성장) ─────────────────────
 TRADE_MARGIN_PCT      = 0.25   # 스윙 기본 비율 (강도별 override 됨)
@@ -29,7 +34,7 @@ MAX_SCALP_MARGIN_USD  = 60.0   # 25 → 60
 MIN_BALANCE_USD  = 15.0   # 20 → 15: 잔고가 줄어도 기회 있으면 진입
 MAX_DAILY_LOSS   = 30.0   # 20 → 30: 하루 최대 손실 (~33% of $90)
 MAX_CONSEC_LOSS  = 3      # 3연패 후 일시중단 유지
-PAUSE_HOURS      = 4      # 중단 시간 유지
+PAUSE_HOURS      = 12     # 4 → 12: 손실 구간에서는 재진입보다 냉각이 우선
 MAX_LEVERAGE     = 30     # 25 → 30: 황금 진입 시 고레버리지 허용
 MAX_CONCURRENT   = 4      # 최대 동시 오픈 포지션 수 (자본 집중 원칙)
 MAX_MARGIN_PCT_CAP       = 0.55
@@ -91,8 +96,8 @@ def _refresh_daily(s: dict) -> dict:
 def get_daily_loss_limit(balance: float = 0.0) -> float:
     """
     복리 운용용 일손실 한도.
-    소액 구간은 계좌 6%를 우선해 생존성을 확보하고,
-    계좌가 커지면 고정 $30 한도에 묶이지 않게 6% 기준으로 확장한다.
+    소액 구간은 계좌 기준 일손실 한도를 우선해 생존성을 확보하고,
+    계좌가 커지면 고정 $30 한도에 묶이지 않게 비율 기준으로 확장한다.
     """
     if balance <= 0:
         return MAX_DAILY_LOSS
@@ -100,6 +105,67 @@ def get_daily_loss_limit(balance: float = 0.0) -> float:
     if balance < 500:
         return round(min(MAX_DAILY_LOSS, pct_limit), 2)
     return round(max(MAX_DAILY_LOSS, pct_limit), 2)
+
+
+def _env_float(name: str) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw or "여기에" in raw:
+        return 0.0
+    try:
+        return float(raw)
+    except Exception:
+        return 0.0
+
+
+def _last_closed_loss_ts(s: dict) -> float:
+    for trade in reversed(s.get("trade_history", [])):
+        if trade.get("status") == "loss":
+            return float(trade.get("timestamp", 0) or 0)
+    return float(s.get("last_loss_ts", 0) or 0)
+
+
+def _apply_drawdown_guard(s: dict, equity: float) -> tuple[bool, str]:
+    """
+    계좌 전체 드로우다운 방어.
+    .env ACCOUNT_START_BALANCE가 있으면 기존 손실률까지 반영하고,
+    없으면 봇이 관측한 최고 equity 기준으로 이후 손실을 막는다.
+    """
+    if equity <= 0:
+        return True, "ok"
+
+    configured_start = _env_float("ACCOUNT_START_BALANCE")
+    stored_start = float(s.get("equity_start", 0) or 0)
+    start = configured_start or stored_start or equity
+    s["equity_start"] = round(start, 4)
+
+    peak = max(float(s.get("equity_peak", 0) or 0), start, equity)
+    s["equity_peak"] = round(peak, 4)
+    s["last_equity"] = round(equity, 4)
+
+    drawdown = max(0.0, (peak - equity) / peak) if peak > 0 else 0.0
+    s["drawdown_pct"] = round(drawdown * 100, 2)
+    s["max_drawdown_pct"] = max(
+        float(s.get("max_drawdown_pct", 0) or 0),
+        s["drawdown_pct"],
+    )
+
+    if drawdown >= DRAWDOWN_HARD_STOP_PCT:
+        until_ts = time.time() + DRAWDOWN_PAUSE_HOURS * 3600
+        s["pause_until"] = max(float(s.get("pause_until", 0) or 0), until_ts)
+        s["drawdown_status"] = "hard_stop"
+        until = datetime.fromtimestamp(s["pause_until"], KST).strftime("%m/%d %H:%M")
+        return False, (
+            f"계좌 드로우다운 {drawdown*100:.1f}% >= {DRAWDOWN_HARD_STOP_PCT*100:.0f}% "
+            f"— {until} KST까지 신규매매 중단"
+        )
+
+    if drawdown >= DRAWDOWN_RISK_OFF_PCT:
+        s["drawdown_status"] = "risk_off"
+    elif drawdown >= DRAWDOWN_WARN_PCT:
+        s["drawdown_status"] = "warning"
+    else:
+        s["drawdown_status"] = "normal"
+    return True, "ok"
 
 
 def get_margin_cap(balance: float, scalp: bool = False) -> float:
@@ -124,11 +190,28 @@ def position_pct_for_risk(balance: float, leverage: int, entry_price: float,
         return 0.0, 0.0
 
     target_loss = balance * risk_pct
-    raw_margin  = target_loss / (leverage * sl_pct)
+    loss_pct_with_fees = sl_pct + ROUND_TRIP_FEE
+    raw_margin  = target_loss / (leverage * loss_pct_with_fees)
     pct         = min(raw_margin / balance, max_position_pct)
     pct         = max(pct, 0.0)
-    est_loss    = balance * pct * leverage * sl_pct
+    est_loss    = balance * pct * leverage * loss_pct_with_fees
     return round(pct, 4), round(est_loss, 4)
+
+
+def _json_safe(value):
+    """numpy/pandas 값이 섞여도 상태/저널 JSON 저장이 실패하지 않게 변환한다."""
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if hasattr(value, "item"):
+        try:
+            return _json_safe(value.item())
+        except Exception:
+            pass
+    return str(value)
 
 
 def log_trade_candidate(symbol: str, tf_key: str, strategy: str,
@@ -152,8 +235,21 @@ def log_trade_candidate(symbol: str, tf_key: str, strategy: str,
         "status":    status,
         "reason":    reason,
     }
-    row.update(extra)
+    row.update(_json_safe(extra))
     with CANDIDATE_FILE.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def log_execution_journal(trade_num: int | None, event: str = "opened", **payload):
+    """실제 체결/청산 이벤트를 JSONL로 저장해 매매 복기와 전략 개선에 사용한다."""
+    row = {
+        "trade_num": trade_num,
+        "event":     event,
+        "time":      datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST"),
+        "timestamp": time.time(),
+    }
+    row.update(_json_safe(payload))
+    with EXECUTION_JOURNAL.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
@@ -310,16 +406,31 @@ def notify_trade_block(symbol: str, tf_key: str, direction: str,
 def check_circuit_breaker(balance: float = 0.0) -> tuple[bool, str]:
     """(거래 가능 여부, 이유 메시지) 반환."""
     s = _refresh_daily(_load_state())
-    _save_state(s)
+    equity = get_usdt_equity() or balance
+    guard_ok, guard_reason = _apply_drawdown_guard(s, equity)
     daily_limit = get_daily_loss_limit(balance)
 
-    if s["pause_until"] > time.time():
-        resume = datetime.fromtimestamp(s["pause_until"], KST).strftime("%H:%M")
+    if not guard_ok:
+        _save_state(s)
+        return False, guard_reason
+
+    if s.get("consec_loss", 0) >= MAX_CONSEC_LOSS:
+        last_loss_ts = _last_closed_loss_ts(s)
+        if last_loss_ts > 0:
+            recovery_until = last_loss_ts + PAUSE_HOURS * 3600
+            if recovery_until > time.time():
+                s["pause_until"] = max(float(s.get("pause_until", 0) or 0), recovery_until)
+
+    if float(s.get("pause_until", 0) or 0) > time.time():
+        resume = datetime.fromtimestamp(float(s.get("pause_until", 0) or 0), KST).strftime("%H:%M")
+        _save_state(s)
         return False, f"3연패 중단 중 — {resume} KST 이후 재개"
 
-    if s["daily_loss"] >= daily_limit:
-        return False, f"일일 손실 한도 도달 — 오늘 손실 ${s['daily_loss']:.2f} / 한도 ${daily_limit:.2f}"
+    if float(s.get("daily_loss", 0) or 0) >= daily_limit:
+        _save_state(s)
+        return False, f"일일 손실 한도 도달 — 오늘 손실 ${float(s.get('daily_loss', 0) or 0):.2f} / 한도 ${daily_limit:.2f}"
 
+    _save_state(s)
     return True, "ok"
 
 
@@ -329,6 +440,7 @@ def record_result(pnl_usd: float):
     if pnl_usd < 0:
         s["daily_loss"] = round(s.get("daily_loss", 0) + abs(pnl_usd), 4)
         s["consec_loss"] = s.get("consec_loss", 0) + 1
+        s["last_loss_ts"] = time.time()
         if s["consec_loss"] >= MAX_CONSEC_LOSS:
             s["pause_until"] = time.time() + PAUSE_HOURS * 3600
             print(f"[CB] {MAX_CONSEC_LOSS}연패 → {PAUSE_HOURS}시간 거래 중단")
@@ -346,6 +458,19 @@ def get_usdt_balance() -> float:
         return float(bal.get("USDT", {}).get("free", 0))
     except Exception as e:
         print(f"[잔고] 조회 실패: {e}")
+        return 0.0
+
+
+def get_usdt_equity() -> float:
+    try:
+        bal = _ex().fetch_balance({"type": "unified", "accountType": "UNIFIED"})
+        usdt = bal.get("USDT", {}) or {}
+        total = usdt.get("total")
+        if total is None:
+            total = usdt.get("free", 0)
+        return float(total or 0)
+    except Exception as e:
+        print(f"[에쿼티] 조회 실패: {e}")
         return 0.0
 
 
@@ -874,13 +999,13 @@ def monitor_positions():
 
 def _append_trade(symbol: str, direction: str, tf_key: str, strength: str,
                   leverage: int, qty: float, entry_price: float,
-                  sl: float, margin: float) -> int:
+                  sl: float, margin: float, **extra) -> int:
     """신규 진입 거래를 이력에 추가. 전체 누적 번호 반환."""
     s = _load_state()
     history = s.setdefault("trade_history", [])
     num = s.get("trade_counter", 0) + 1
     s["trade_counter"] = num
-    history.append({
+    record = {
         "num":           num,
         "time":          datetime.now(KST).strftime("%m/%d %H:%M KST"),
         "timestamp":     time.time(),
@@ -898,7 +1023,9 @@ def _append_trade(symbol: str, direction: str, tf_key: str, strength: str,
         "closed_at":     None,
         "pyramid_count": 0,       # 불타기 추가 횟수 (최대 2회)
         "pyramid_adds":  [],      # 각 불타기 진입 기록 [{price, margin, time}]
-    })
+    }
+    record.update(_json_safe(extra))
+    history.append(record)
     _save_state(s)
     return num
 
@@ -906,13 +1033,29 @@ def _append_trade(symbol: str, direction: str, tf_key: str, strength: str,
 def _update_trade_result(symbol: str, pnl_usd: float):
     """해당 심볼의 가장 최근 open 거래에 청산 결과 기록."""
     s = _load_state()
+    closed_record = None
     for record in reversed(s.get("trade_history", [])):
         if record["symbol"] == symbol and record["status"] == "open":
             record["status"]    = "win" if pnl_usd > 0 else ("loss" if pnl_usd < 0 else "breakeven")
             record["pnl_usd"]   = round(pnl_usd, 4)
             record["closed_at"] = datetime.now(KST).strftime("%m/%d %H:%M KST")
+            closed_record = record
             break
     _save_state(s)
+    if closed_record:
+        log_execution_journal(
+            closed_record.get("num"), "closed",
+            symbol=closed_record.get("symbol"),
+            tf=closed_record.get("tf"),
+            strategy=closed_record.get("strategy", ""),
+            direction=closed_record.get("direction"),
+            status=closed_record.get("status"),
+            pnl_usd=closed_record.get("pnl_usd"),
+            entry_price=closed_record.get("entry_price"),
+            sl=closed_record.get("sl"),
+            tps=closed_record.get("tps", []),
+            entry_reasons=closed_record.get("entry_reasons", []),
+        )
 
 
 def get_recent_trades(hours: int = 6) -> list:
@@ -1007,37 +1150,118 @@ def add_trade_context(trade_num: int, **ctx):
     s = _load_state()
     for record in s.get("trade_history", []):
         if record["num"] == trade_num:
-            record.update(ctx)
+            record.update(_json_safe(ctx))
             break
     _save_state(s)
 
 
 def build_trade_notification(symbol: str, direction: str, leverage: int,
                               qty: float, entry_price: float,
-                              sl: float, tps: list, balance: float) -> str:
-    """텔레그램 자동매매 실행 알림 메시지."""
-    coin   = symbol.split("/")[0]
-    now    = datetime.now(KST).strftime("%m/%d %H:%M KST")
-    margin = round(qty * entry_price / leverage, 2)
-    emoji  = "🟢" if direction == "LONG" else "🔴"
+                              sl: float, tps: list, balance: float,
+                              tf_key: str = "", strength: str = "",
+                              strategy: str = "", trade_num: int | None = None,
+                              reasons: list[str] | None = None,
+                              timing_note: str = "", rr: float = 0.0,
+                              risk_pct: float = 0.0,
+                              est_sl_loss: float = 0.0,
+                              sl_pct: float = 0.0,
+                              signal_type: str = "",
+                              confirmed_count: int = 0,
+                              divergence_count: int = 0) -> str:
+    """텔레그램 자동매매 체결 알림 메시지."""
+    coin      = symbol.split("/")[0]
+    now       = datetime.now(KST).strftime("%m/%d %H:%M KST")
+    margin    = round(qty * entry_price / leverage, 2)
+    emoji     = "🟢" if direction == "LONG" else "🔴"
+    dir_label = "롱 LONG" if direction == "LONG" else "숏 SHORT"
+    title_num = f" #{trade_num}" if trade_num else ""
 
-    icons = ["🥇", "🥈", "🥉"]
-    tp_lines = "\n".join(
-        f"   {icons[i]} TP{i+1} [{tp['pct']}%]  ${tp['price']:,.2f}"
-        for i, tp in enumerate(tps[:3])
-    )
+    icons = ["🥇", "🥈", "🥉", "🎯"]
+    tp_lines = []
+    for i, tp in enumerate(tps[:4]):
+        icon = icons[i] if i < len(icons) else "🎯"
+        pct = tp.get("pct", 0)
+        rr_txt = f"  R:R 1:{tp['rr']}" if tp.get("rr") else ""
+        tp_lines.append(
+            f"   {icon} TP{i+1} [{pct}%]  <b>{_fmt_price(tp['price'])}</b>{rr_txt}"
+        )
+    if not tp_lines:
+        tp_lines.append("   TP 미설정")
 
-    return (
-        f"🤖 <b>[자동매매 실행] {coin} {direction}</b>  {now}\n"
-        f"\n"
-        f"{emoji} {direction}  레버리지: <b>{leverage}x</b>  수량: {qty}\n"
-        f"💵 진입가:  ≈${entry_price:,.2f}\n"
-        f"🛑 손절가:  ${sl:,.2f}\n"
-        f"\n"
-        f"{tp_lines}\n"
-        f"\n"
-        f"💼 증거금: ~${margin}  |  잔고: ${balance:.2f}"
+    reason_lines = []
+    for reason in (reasons or [])[:6]:
+        if reason:
+            reason_lines.append(f"   • {escape(str(reason))}")
+    if not reason_lines:
+        reason_lines.append("   • 자동매매 조건 충족")
+
+    meta_bits = [bit for bit in [tf_key, strategy, strength] if bit]
+    quality_bits = []
+    if divergence_count:
+        quality_bits.append(f"다이버전스 {divergence_count}")
+    if confirmed_count:
+        quality_bits.append(f"확인 {confirmed_count}")
+    if signal_type:
+        quality_bits.append(signal_type)
+
+    risk_line = (
+        f"예상 SL손실 ~${est_sl_loss:.2f}"
+        if est_sl_loss > 0 else "예상 SL손실 계산값 없음"
     )
+    if risk_pct > 0:
+        risk_line += f"  |  계좌위험 {risk_pct * 100:.2f}%"
+    if rr > 0:
+        risk_line += f"  |  최대 R:R 1:{rr}"
+
+    lines = [
+        f"✅ <b>[매매 체결되었습니다{title_num}] {coin} {dir_label}</b>",
+        f"{emoji} 방향: <b>{dir_label}</b>  |  시간: {now}",
+    ]
+    if meta_bits:
+        lines.append(f"전략: {' / '.join(escape(str(bit)) for bit in meta_bits)}")
+    if quality_bits:
+        lines.append(f"신뢰도: {' | '.join(escape(str(bit)) for bit in quality_bits)}")
+
+    lines += [
+        "",
+        "🧠 <b>진입 근거</b>",
+        *reason_lines,
+    ]
+    if timing_note:
+        lines.append(f"   • 하위봉 타점: {escape(timing_note)}")
+
+    lines += [
+        "",
+        "📌 <b>가격 계획</b>",
+        f"   💵 진입가: <b>{_fmt_price(entry_price)}</b>",
+        f"   🛑 손절가: <b>{_fmt_price(sl)}</b>"
+        + (f"  (-{sl_pct:.2f}%)" if sl_pct > 0 else ""),
+        *tp_lines,
+        "",
+        "💼 <b>포지션</b>",
+        f"   레버리지 <b>{leverage}x</b>  |  수량 {qty}",
+        f"   증거금 ~${margin:.2f}  |  잔고 ${balance:.2f}",
+        f"   {escape(risk_line)}",
+        "",
+        "🧾 이 체결 근거는 trade_history + execution_journal에 저장됨",
+    ]
+    return "\n".join(lines)
+
+
+def _fmt_price(price: float) -> str:
+    """가격대에 맞춰 알림용 소수점을 조정한다."""
+    p = abs(float(price))
+    if p >= 1000:
+        digits = 2
+    elif p >= 100:
+        digits = 3
+    elif p >= 1:
+        digits = 4
+    elif p >= 0.01:
+        digits = 6
+    else:
+        digits = 8
+    return f"${float(price):,.{digits}f}"
 
 
 # ─── 불타기(Pyramid) 지원 ────────────────────────────────────────────────────

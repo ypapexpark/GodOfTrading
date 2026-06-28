@@ -1,12 +1,12 @@
 """
-다이버전스 감지 엔진 — RSI / MACD / OBV / StochRSI / Volume 5중 확인
+다이버전스 감지 엔진 — RSI / CCI / MACD / OBV / StochRSI / CVD + Volume 확인
 """
 from __future__ import annotations
 import numpy as np
 import pandas as pd
 from config import (RSI_PERIOD, PIVOT_LEFT, PIVOT_RIGHT, LOOKBACK,
                     RSI_OVERSOLD, RSI_OVERBOUGHT,
-                    STOCH_RSI_PERIOD, STOCH_K_SMOOTH,
+                    STOCH_RSI_PERIOD, STOCH_K_SMOOTH, CCI_PERIOD,
                     VOL_SPIKE_THRESHOLD, EMA_FAST, EMA_SLOW)
 
 
@@ -29,6 +29,16 @@ def calc_macd(close: pd.Series, fast=12, slow=26, signal=9) -> pd.Series:
     macd_line = ema_fast - ema_slow
     signal_line = macd_line.ewm(span=signal, adjust=False).mean()
     return (macd_line - signal_line).round(6)
+
+
+def calc_cci(df: pd.DataFrame, period: int = CCI_PERIOD) -> pd.Series:
+    """CCI(Commodity Channel Index). 가격이 평균에서 얼마나 벗어났는지 측정."""
+    typical = (df["high"] + df["low"] + df["close"]) / 3
+    sma = typical.rolling(period).mean()
+    mean_dev = typical.rolling(period).apply(
+        lambda x: float(np.mean(np.abs(x - np.mean(x)))), raw=True
+    )
+    return ((typical - sma) / (0.015 * mean_dev.replace(0, np.nan))).round(4)
 
 
 def calc_obv(close: pd.Series, volume: pd.Series) -> pd.Series:
@@ -87,6 +97,43 @@ def _volume_spike(volume: pd.Series, idx: int, window=20) -> tuple[bool, float]:
     return ratio >= VOL_SPIKE_THRESHOLD, ratio
 
 
+DIVERGENCE_KEYS = ("rsi", "cci", "macd", "obv", "srsi", "cvd")
+CONFIRM_KEYS = DIVERGENCE_KEYS + ("vol",)
+
+
+def _quality(sig: dict) -> dict:
+    """
+    다이버전스 신뢰도 기준.
+    핵심: Volume은 참여도 확인이지 다이버전스 자체가 아니므로,
+    실제 다이버전스 지표 3개 이상이 먼저 충족돼야 한다.
+    """
+    div_count = sum(1 for k in DIVERGENCE_KEYS if sig.get(k, {}).get("ok"))
+    total_count = div_count + (1 if sig.get("vol", {}).get("ok") else 0)
+    momentum = sum(1 for k in ("rsi", "cci", "macd", "srsi") if sig.get(k, {}).get("ok"))
+    flow = sum(1 for k in ("obv", "cvd") if sig.get(k, {}).get("ok"))
+    valid = div_count >= 3 and momentum >= 1 and flow >= 1
+    note = (
+        f"다이버전스 {div_count}/6 + 거래량{'OK' if sig.get('vol', {}).get('ok') else 'NO'}"
+        f" | 모멘텀 {momentum}/4 | 수급 {flow}/2"
+    )
+    if div_count < 3:
+        note += " — 다이버전스 3개 미만"
+    elif flow < 1:
+        note += " — 수급 확인 부족"
+    elif momentum < 1:
+        note += " — 모멘텀 확인 부족"
+    return {
+        "valid": valid,
+        "divergence_count": div_count,
+        "confirmed_count": total_count,
+        "max_divergence": len(DIVERGENCE_KEYS),
+        "max_confirmed": len(CONFIRM_KEYS),
+        "momentum_count": momentum,
+        "flow_count": flow,
+        "note": note,
+    }
+
+
 def _ema_trend(close: pd.Series) -> int:
     """EMA 추세 방향 (+1=상승, -1=하락, 0=중립). 0.3% 허용 범위."""
     ema_fast = close.ewm(span=EMA_FAST, adjust=False).mean()
@@ -121,10 +168,10 @@ def _pivot_highs(series: pd.Series, left: int, right: int) -> list[int]:
     return result
 
 
-# ─── 신호 확인 (5지표) ───────────────────────────────────────────────────────
+# ─── 신호 확인 (다이버전스 지표 + 거래량) ───────────────────────────────────
 
-def _check_bullish(df, rsi, macd_hist, obv, cvd, stoch_k, volume, prev_i, cur_i) -> dict:
-    """가격 저점↓ + 6지표 불리시 다이버전스 확인. CVD 추가(선행지표)."""
+def _check_bullish(df, rsi, cci, macd_hist, obv, cvd, stoch_k, volume, prev_i, cur_i) -> dict:
+    """가격 저점↓ + 지표 저점↑ 불리시 다이버전스 확인."""
     price_prev, price_cur = df["low"].iloc[prev_i], df["low"].iloc[cur_i]
     if price_cur >= price_prev:
         return {}
@@ -132,6 +179,7 @@ def _check_bullish(df, rsi, macd_hist, obv, cvd, stoch_k, volume, prev_i, cur_i)
     # RSI_OVERSOLD=30 → 현재 피봇 RSI < 42 (과매도 권역에서만 허용)
     # 구버전 < 50은 중립구간까지 허용 → 노이즈 신호 과다
     rsi_ok   = bool(rsi.iloc[cur_i] > rsi.iloc[prev_i] and rsi.iloc[cur_i] < RSI_OVERSOLD + 12)
+    cci_ok   = bool(cci.iloc[cur_i] > cci.iloc[prev_i] and cci.iloc[cur_i] < -25)
     macd_ok  = bool(macd_hist.iloc[cur_i] > macd_hist.iloc[prev_i])
     obv_ok   = bool(obv.iloc[cur_i] > obv.iloc[prev_i])
     srsi_ok  = bool(stoch_k.iloc[cur_i] > stoch_k.iloc[prev_i] and stoch_k.iloc[cur_i] < 40)
@@ -142,6 +190,7 @@ def _check_bullish(df, rsi, macd_hist, obv, cvd, stoch_k, volume, prev_i, cur_i)
     return {
         "signal_type": "bullish",
         "rsi":  {"ok": rsi_ok,  "value": round(float(rsi.iloc[cur_i]), 1)},
+        "cci":  {"ok": cci_ok,  "value": round(float(cci.iloc[cur_i]), 1)},
         "macd": {"ok": macd_ok, "value": round(float(macd_hist.iloc[cur_i]), 6)},
         "obv":  {"ok": obv_ok,  "value": round(float(obv.iloc[cur_i]), 2)},
         "srsi": {"ok": srsi_ok, "value": round(float(stoch_k.iloc[cur_i]), 1)},
@@ -152,14 +201,15 @@ def _check_bullish(df, rsi, macd_hist, obv, cvd, stoch_k, volume, prev_i, cur_i)
     }
 
 
-def _check_bearish(df, rsi, macd_hist, obv, cvd, stoch_k, volume, prev_i, cur_i) -> dict:
-    """가격 고점↑ + 6지표 베어리시 다이버전스 확인. CVD 추가(선행지표)."""
+def _check_bearish(df, rsi, cci, macd_hist, obv, cvd, stoch_k, volume, prev_i, cur_i) -> dict:
+    """가격 고점↑ + 지표 고점↓ 베어리시 다이버전스 확인."""
     price_prev, price_cur = df["high"].iloc[prev_i], df["high"].iloc[cur_i]
     if price_cur <= price_prev:
         return {}
 
     # RSI_OVERBOUGHT=70 → 현재 피봇 RSI > 58 (과매수 권역에서만 허용)
     rsi_ok   = bool(rsi.iloc[cur_i] < rsi.iloc[prev_i] and rsi.iloc[cur_i] > RSI_OVERBOUGHT - 12)
+    cci_ok   = bool(cci.iloc[cur_i] < cci.iloc[prev_i] and cci.iloc[cur_i] > 25)
     macd_ok  = bool(macd_hist.iloc[cur_i] < macd_hist.iloc[prev_i])
     obv_ok   = bool(obv.iloc[cur_i] < obv.iloc[prev_i])
     srsi_ok  = bool(stoch_k.iloc[cur_i] < stoch_k.iloc[prev_i] and stoch_k.iloc[cur_i] > 60)
@@ -170,6 +220,7 @@ def _check_bearish(df, rsi, macd_hist, obv, cvd, stoch_k, volume, prev_i, cur_i)
     return {
         "signal_type": "bearish",
         "rsi":  {"ok": rsi_ok,  "value": round(float(rsi.iloc[cur_i]), 1)},
+        "cci":  {"ok": cci_ok,  "value": round(float(cci.iloc[cur_i]), 1)},
         "macd": {"ok": macd_ok, "value": round(float(macd_hist.iloc[cur_i]), 6)},
         "obv":  {"ok": obv_ok,  "value": round(float(obv.iloc[cur_i]), 2)},
         "srsi": {"ok": srsi_ok, "value": round(float(stoch_k.iloc[cur_i]), 1)},
@@ -180,13 +231,14 @@ def _check_bearish(df, rsi, macd_hist, obv, cvd, stoch_k, volume, prev_i, cur_i)
     }
 
 
-def _check_hidden_bullish(df, rsi, macd_hist, obv, cvd, stoch_k, volume, prev_i, cur_i) -> dict:
+def _check_hidden_bullish(df, rsi, cci, macd_hist, obv, cvd, stoch_k, volume, prev_i, cur_i) -> dict:
     """가격 저점↑ + 지표 저점↓ — 상승 추세 지속 (히든 불리시). CVD 추가."""
     price_prev, price_cur = df["low"].iloc[prev_i], df["low"].iloc[cur_i]
     if price_cur <= price_prev:
         return {}
 
     rsi_ok   = bool(rsi.iloc[cur_i] < rsi.iloc[prev_i] and rsi.iloc[cur_i] < 55)
+    cci_ok   = bool(cci.iloc[cur_i] < cci.iloc[prev_i] and cci.iloc[cur_i] < 100)
     macd_ok  = bool(macd_hist.iloc[cur_i] < macd_hist.iloc[prev_i])
     obv_ok   = bool(obv.iloc[cur_i] > obv.iloc[prev_i])
     srsi_ok  = bool(stoch_k.iloc[cur_i] < stoch_k.iloc[prev_i] and stoch_k.iloc[cur_i] < 55)
@@ -197,6 +249,7 @@ def _check_hidden_bullish(df, rsi, macd_hist, obv, cvd, stoch_k, volume, prev_i,
     return {
         "signal_type": "hidden_bullish",
         "rsi":  {"ok": rsi_ok,  "value": round(float(rsi.iloc[cur_i]), 1)},
+        "cci":  {"ok": cci_ok,  "value": round(float(cci.iloc[cur_i]), 1)},
         "macd": {"ok": macd_ok, "value": round(float(macd_hist.iloc[cur_i]), 6)},
         "obv":  {"ok": obv_ok,  "value": round(float(obv.iloc[cur_i]), 2)},
         "srsi": {"ok": srsi_ok, "value": round(float(stoch_k.iloc[cur_i]), 1)},
@@ -207,7 +260,7 @@ def _check_hidden_bullish(df, rsi, macd_hist, obv, cvd, stoch_k, volume, prev_i,
     }
 
 
-def _check_hidden_bearish(df, rsi, macd_hist, obv, cvd, stoch_k, volume, prev_i, cur_i) -> dict:
+def _check_hidden_bearish(df, rsi, cci, macd_hist, obv, cvd, stoch_k, volume, prev_i, cur_i) -> dict:
     """
     가격 고점↓ + 지표 고점↑ — 하락 추세 지속 (히든 베어리시).
 
@@ -223,6 +276,7 @@ def _check_hidden_bearish(df, rsi, macd_hist, obv, cvd, stoch_k, volume, prev_i,
 
     # 지표는 반등으로 올라가지만 가격은 전 고점 못 넘음 = 힘의 쇠진
     rsi_ok   = bool(rsi.iloc[cur_i] > rsi.iloc[prev_i] and rsi.iloc[cur_i] > 45)
+    cci_ok   = bool(cci.iloc[cur_i] > cci.iloc[prev_i] and cci.iloc[cur_i] > -100)
     macd_ok  = bool(macd_hist.iloc[cur_i] > macd_hist.iloc[prev_i])
     # OBV 감소 = 반등 시 매수세 약함, 스마트머니 분산 중
     obv_ok   = bool(obv.iloc[cur_i] < obv.iloc[prev_i])
@@ -234,6 +288,7 @@ def _check_hidden_bearish(df, rsi, macd_hist, obv, cvd, stoch_k, volume, prev_i,
     return {
         "signal_type": "hidden_bearish",
         "rsi":  {"ok": rsi_ok,  "value": round(float(rsi.iloc[cur_i]), 1)},
+        "cci":  {"ok": cci_ok,  "value": round(float(cci.iloc[cur_i]), 1)},
         "macd": {"ok": macd_ok, "value": round(float(macd_hist.iloc[cur_i]), 6)},
         "obv":  {"ok": obv_ok,  "value": round(float(obv.iloc[cur_i]), 2)},
         "srsi": {"ok": srsi_ok, "value": round(float(stoch_k.iloc[cur_i]), 1)},
@@ -311,8 +366,9 @@ def check_key_level(pivot_price: float, direction: str,
 def detect(df: pd.DataFrame) -> list[dict]:
     """
     OHLCV DataFrame → 다이버전스 신호 목록 반환.
-    6지표(RSI/MACD/OBV/StochRSI/Volume/CVD) 중 3개 이상 확인 시 포함.
-    EMA 역추세 신호는 5/6 미만이면 자동 제외.
+    6개 실제 다이버전스 지표(RSI/CCI/MACD/OBV/StochRSI/CVD) 중 3개 이상 확인 시 포함.
+    Volume은 다이버전스 카운트가 아니라 참여도 보너스로만 반영한다.
+    EMA 역추세 신호는 5/7 미만이면 자동 제외.
     각 신호에 구조 레벨(at_key_level) 포함 — main.py에서 포지션 크기 조정에 활용.
     """
     if len(df) < 60:
@@ -321,6 +377,7 @@ def detect(df: pd.DataFrame) -> list[dict]:
     close     = df["close"]
     volume    = df["volume"]
     rsi       = calc_rsi(close)
+    cci       = calc_cci(df)
     macd_hist = calc_macd(close)
     obv       = calc_obv(close, volume)
     cvd       = calc_cvd(df)
@@ -335,7 +392,8 @@ def detect(df: pd.DataFrame) -> list[dict]:
     start = max(PIVOT_LEFT, n - LOOKBACK)
     results = []
 
-    STRENGTH_MAP = {6: "ELITE 💎", 5: "VERY STRONG 🔥", 4: "STRONG ⚡", 3: "MODERATE ⚡"}
+    STRENGTH_MAP = {7: "ELITE 💎", 6: "VERY STRONG 🔥", 5: "VERY STRONG 🔥",
+                    4: "STRONG ⚡", 3: "MODERATE ⚡"}
 
     # 저점 기반 (bullish / hidden_bullish)
     low_pivots = _pivot_lows(df["low"], PIVOT_LEFT, PIVOT_RIGHT)
@@ -345,16 +403,18 @@ def detect(df: pd.DataFrame) -> list[dict]:
         prev_i, cur_i = low_pivots[idx - 1], low_pivots[idx]
 
         for checker in (_check_bullish, _check_hidden_bullish):
-            sig = checker(df, rsi, macd_hist, obv, cvd, stoch_k, volume, prev_i, cur_i)
+            sig = checker(df, rsi, cci, macd_hist, obv, cvd, stoch_k, volume, prev_i, cur_i)
             if not sig:
                 continue
-            confirmed = sum([sig["rsi"]["ok"], sig["macd"]["ok"], sig["obv"]["ok"],
-                             sig["srsi"]["ok"], sig["vol"]["ok"], sig["cvd"]["ok"]])
-            if confirmed < 3:
+            quality = _quality(sig)
+            if not quality["valid"]:
                 continue
+            confirmed = quality["confirmed_count"]
             if ema_trend == -1 and confirmed < 5:
                 continue
             sig["confirmed_count"] = confirmed
+            sig["divergence_count"] = quality["divergence_count"]
+            sig["divergence_quality"] = quality
             sig["strength"]        = STRENGTH_MAP.get(confirmed, "WEAK")
             sig["atr"]             = round(atr, 8)
             sig["ema_trend"]       = ema_trend
@@ -369,16 +429,18 @@ def detect(df: pd.DataFrame) -> list[dict]:
         prev_i, cur_i = high_pivots[idx - 1], high_pivots[idx]
 
         for checker in (_check_bearish, _check_hidden_bearish):
-            sig = checker(df, rsi, macd_hist, obv, cvd, stoch_k, volume, prev_i, cur_i)
+            sig = checker(df, rsi, cci, macd_hist, obv, cvd, stoch_k, volume, prev_i, cur_i)
             if not sig:
                 continue
-            confirmed = sum([sig["rsi"]["ok"], sig["macd"]["ok"], sig["obv"]["ok"],
-                             sig["srsi"]["ok"], sig["vol"]["ok"], sig["cvd"]["ok"]])
-            if confirmed < 3:
+            quality = _quality(sig)
+            if not quality["valid"]:
                 continue
+            confirmed = quality["confirmed_count"]
             if ema_trend == 1 and confirmed < 5:
                 continue
             sig["confirmed_count"] = confirmed
+            sig["divergence_count"] = quality["divergence_count"]
+            sig["divergence_quality"] = quality
             sig["strength"]        = STRENGTH_MAP.get(confirmed, "WEAK")
             sig["atr"]             = round(atr, 8)
             sig["ema_trend"]       = ema_trend
