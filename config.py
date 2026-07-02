@@ -456,9 +456,10 @@ AUTO_TRADE_STRATEGY_WHITELIST: set = {
     "hidden_bullish",
     "hidden_bearish",
 }
-# SHORT 방향 실거래 임시 차단. SHORT 22건 36% 승률, 손실의 84% 차지.
-# LONG EMA 전략 집중으로 복리 성장 시작. 충분한 데이터 후 재개.
-BLOCK_SHORT_AUTO_TRADE = True
+# SHORT 방향 전체 차단은 하지 않는다.
+# EMA눌림목(하락), hidden_bearish 등 EMA 계열 숏 신호는 정상 실거래.
+# 나쁜 숏 전략(BTC Macro Short, 돌파 숏 등)은 이미 화이트리스트로 차단됨.
+BLOCK_SHORT_AUTO_TRADE = False
 
 REALIZED_TRADE_LEARNING_ENABLED = True
 REALIZED_BLOCK_EXACT_MIN_TRADES = 2
