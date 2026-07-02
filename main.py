@@ -97,6 +97,7 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     ACTIVE_STRONG_STRATEGIES, STRONG_LIVE_MAX_BARS_AGO, STRONG_LIVE_MIN_VOL,
                     ASYMMETRIC_SYMBOL_DAILY_LOSS_LIMIT, SYMBOL_STRATEGY_DAILY_LOSS_LIMIT,
                     SYMBOL_DAILY_TOTAL_LOSS_LIMIT,
+                    AUTO_TRADE_STRATEGY_WHITELIST, BLOCK_SHORT_AUTO_TRADE,
                     ROUND_TRIP_FEE)
 from leading import get_market_context
 from mtf import check_mtf, mtf_summary, get_macro_bias, get_daily_bias
@@ -1538,6 +1539,19 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     # 고정 동시 포지션 개수 제한은 쓰지 않는다.
     # 신규 포지션의 실제 허용 여부는 사이징 후 포트폴리오 증거금/SL위험으로 판단한다.
 
+    # 전략 화이트리스트: EMA 계열 외 전략은 후보 기록만, 실거래 없음
+    if AUTO_TRADE_STRATEGY_WHITELIST and strategy not in AUTO_TRADE_STRATEGY_WHITELIST:
+        _block(
+            f"{strategy} — 화이트리스트 미포함, EMA 계열만 실거래 허용",
+            paper_only=True,
+        )
+        return
+
+    # SHORT 임시 차단: SHORT 22건 36% 승률·손실 84% → EMA LONG 집중
+    if BLOCK_SHORT_AUTO_TRADE and direction == "SHORT":
+        _block("SHORT 실거래 임시 차단 — EMA LONG 전략 집중", paper_only=True)
+        return
+
     # MODERATE는 후보만 기록한다.
     # STRONG은 현재봉 기반 전략 + 거래량 + 방향성까지 맞을 때만 실거래로 승격한다.
     if raw in PAPER_ONLY_STRENGTHS:
@@ -2288,6 +2302,25 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
         and not BTC_MACRO_TREND_REFERENCE_ONLY
     )
     trade_strategy = "BTC Macro Short" if btc_macro_short else "돌파"
+
+    # 돌파 경로: 전략 화이트리스트 + SHORT 차단 (순수 "돌파" 0% 승률, BTC Macro Short 0% 승률)
+    if AUTO_TRADE_STRATEGY_WHITELIST and trade_strategy not in AUTO_TRADE_STRATEGY_WHITELIST:
+        notify_trade_block(
+            symbol, tf_key, direction, strength,
+            f"{trade_strategy} — 화이트리스트 미포함, EMA 계열만 실거래 허용",
+            strategy=trade_strategy,
+            send_telegram=False,
+        )
+        return
+    if BLOCK_SHORT_AUTO_TRADE and direction == "SHORT":
+        notify_trade_block(
+            symbol, tf_key, direction, strength,
+            "SHORT 실거래 임시 차단 — EMA LONG 전략 집중",
+            strategy=trade_strategy,
+            send_telegram=False,
+        )
+        return
+
     if (
         symbol == BTC_MACRO_SHORT_SYMBOL
         and BTC_MACRO_SHORT_BLOCK_LONG
@@ -4308,6 +4341,8 @@ def scan():
 
                 msg = build_alert(symbol, tf_label, tf_key, signals, current_price,
                                   mtf_info=mtf_info)
+                if FAST_RADAR:
+                    msg = "📡 [FastRadar — 정보알림, 실거래 없음]\n" + msg
                 total_signals += len(signals)
 
                 if DRY_RUN:

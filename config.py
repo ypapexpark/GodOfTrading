@@ -443,6 +443,23 @@ SYMBOL_DAILY_TOTAL_LOSS_LIMIT = 2
 # 연패 심볼 쿨다운 시간 (시간 단위)
 SYMBOL_COOLDOWN_HOURS = 8
 ASYMMETRIC_SYMBOL_DAILY_LOSS_LIMIT = 1
+
+# ─── 전략 화이트리스트 & 방향 차단 ──────────────────────────────────────────
+# 실거래 허용 전략 집합. 빈 set = 모든 전략 허용. 승률 기반 선별.
+# 성과 있는 전략: EMA눌림목+거래량급등 (67%, +$5.79), EMA눌림목+돌파 (75%, +$1.06)
+# 배제된 전략: BTC Sync Momentum (38%, -$10.27), 돌파 (0%), 거래량급등추세 (0%)
+AUTO_TRADE_STRATEGY_WHITELIST: set = {
+    "EMA눌림목",
+    "EMA눌림목+거래량급등",
+    "EMA눌림목+돌파",
+    "EMA눌림목+거래량급등+돌파",
+    "hidden_bullish",
+    "hidden_bearish",
+}
+# SHORT 방향 실거래 임시 차단. SHORT 22건 36% 승률, 손실의 84% 차지.
+# LONG EMA 전략 집중으로 복리 성장 시작. 충분한 데이터 후 재개.
+BLOCK_SHORT_AUTO_TRADE = True
+
 REALIZED_TRADE_LEARNING_ENABLED = True
 REALIZED_BLOCK_EXACT_MIN_TRADES = 2
 REALIZED_BLOCK_SYMBOL_MODE_MIN_TRADES = 2
