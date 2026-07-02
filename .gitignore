@@ -8,6 +8,8 @@ trade_state.json
 trade_candidates.jsonl
 trade_execution_journal.jsonl
 market_radar_state.json
+bithumb_screener_state.json
+hyperliquid_radar_state.json
 state.json
 
 # ── Python 캐시 ───────────────────────────────────────────────

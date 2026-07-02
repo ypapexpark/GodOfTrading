@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.godoftrading.keepawake</string>
+
+    <!--
+      Prevent idle sleep while the Mac is being used as the trading server.
+      This does not keep the bot alive after shutdown, reboot-before-login,
+      battery drain, network loss, or forced lid-close sleep.
+    -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-dimsu</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/godoftrading_keepawake.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/godoftrading_keepawake_err.log</string>
+</dict>
+</plist>

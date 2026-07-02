@@ -1,0 +1,16 @@
+{
+  "krx_ma200_failure_count": 0,
+  "last_krx_ma200_health": {
+    "checked_at": "2026-07-01T08:18:35.840991+09:00",
+    "total_stocks": 2645,
+    "scanned": 2612,
+    "errors": 0,
+    "scan_ratio": 0.9875,
+    "error_rate": 0.0
+  },
+  "last_krx_ma200_sent_date": "2026-07-02",
+  "last_krx_ma200_sent_at": "2026-07-02T07:09:03.792400+09:00",
+  "last_krx_ma200_count": 259,
+  "last_krx_ma200_sent_slot": "06:30",
+  "last_krx_ma200_sent_slot_key": "2026-07-02 06:30"
+}

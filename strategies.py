@@ -2,6 +2,7 @@
 추가 진입 전략 — 다이버전스 외 고빈도 자리 포착
 1. RSI 과매도/과매수 반전 (스캘핑 주력)
 2. EMA 눌림목 진입 (추세 순응 단타)
+3. BB 스퀴즈/구조 돌파/거래량 급등 추세
 
 프로 트레이더 원칙:
   다이버전스 = 반전 예고 (드물지만 강력)
@@ -9,7 +10,13 @@
   EMA 눌림목 = 추세 지속 매매 (승률 최고) → 단타 스윙 핵심
 """
 from __future__ import annotations
+import time
 import pandas as pd
+from config import (BB_MID_3D_LOOKBACK, BB_MID_3D_MIN_ABOVE,
+                    BB_MID_PULLBACK_TF, BB_MID_WEEK_LOOKBACK,
+                    BB_MID_WEEK_MIN_ABOVE, VOLUME_MOMENTUM_BODY_ATR,
+                    VOLUME_MOMENTUM_LOOKBACK, VOLUME_MOMENTUM_MIN_VOL,
+                    VOLUME_MOMENTUM_TF)
 from divergence import calc_rsi, _ema_trend
 
 
@@ -39,6 +46,7 @@ def _base_signal(signal_type: str, direction: str, strength: str,
         "bars_ago":        0,        # 현재봉 신호 = 항상 신선
         "pivot_price":     round(pivot, 4),
         "strategy":        strategy,
+        "is_divergence":    False,
         # 기존 formatter 호환용 (ok/value 형식)
         "rsi":  {"ok": rsi_val > 0,  "value": round(rsi_val, 1)},
         "cci":  {"ok": False,         "value": 0.0},
@@ -48,6 +56,122 @@ def _base_signal(signal_type: str, direction: str, strength: str,
         "vol":  {"ok": vol_r >= 1.1, "value": round(vol_r, 2)},
         "cvd":  {"ok": False},
     }
+
+
+_bb_mid_cache: dict = {}
+_BB_MID_CACHE_TTL = 1800
+
+
+def _resample_3d(df: pd.DataFrame) -> pd.DataFrame:
+    """1일봉을 3일봉으로 합성한다. 거래소 3d 지원 여부와 무관하게 안정적으로 사용."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = df.resample("3D").agg({
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+        "volume": "sum",
+    })
+    return out.dropna()
+
+
+def _bb_mid_profile(df: pd.DataFrame, lookback: int,
+                    min_above: int, label: str) -> dict:
+    if df is None or len(df) < 20 + lookback:
+        return {
+            "ok": False, "label": label, "above": 0, "lookback": lookback,
+            "distance_atr": 0.0, "slope_pct": 0.0, "reason": "데이터 부족",
+        }
+
+    close = df["close"].astype(float)
+    mid = close.rolling(20).mean()
+    mid_valid = mid.dropna()
+    if len(mid_valid) < lookback:
+        return {
+            "ok": False, "label": label, "above": 0, "lookback": lookback,
+            "distance_atr": 0.0, "slope_pct": 0.0, "reason": "BB 중단 부족",
+        }
+
+    recent_close = close.iloc[-lookback:]
+    recent_mid = mid.iloc[-lookback:]
+    valid = recent_mid.notna()
+    above = recent_close[valid] >= recent_mid[valid]
+    above_count = int(above.sum())
+
+    latest_close = float(close.iloc[-1])
+    latest_mid = float(mid.iloc[-1])
+    atr_val = _atr(df)
+    distance_atr = (latest_close - latest_mid) / atr_val if atr_val > 0 else 0.0
+
+    slope_ref = float(mid_valid.iloc[-5]) if len(mid_valid) >= 5 else float(mid_valid.iloc[0])
+    slope_pct = (latest_mid - slope_ref) / slope_ref * 100 if slope_ref > 0 else 0.0
+    latest_above = latest_close >= latest_mid
+    ok = above_count >= min_above and latest_above and slope_pct >= -0.20
+
+    return {
+        "ok": ok,
+        "label": label,
+        "above": above_count,
+        "lookback": lookback,
+        "min_above": min_above,
+        "latest_above": latest_above,
+        "distance_atr": round(distance_atr, 2),
+        "slope_pct": round(slope_pct, 2),
+        "reason": (
+            f"{label} {above_count}/{lookback}개 BB중단 위, "
+            f"거리 {distance_atr:.1f}ATR, 중단기울기 {slope_pct:+.1f}%"
+        ),
+    }
+
+
+def get_bb_midline_long_bias(symbol: str) -> dict:
+    """
+    주봉 + 3일봉 BB 중단 상방 유지 종목을 선별한다.
+    조건이 맞으면 하위봉에서는 숏보다 내림롱만 우선 검토한다.
+    """
+    now = time.time()
+    cached = _bb_mid_cache.get(symbol)
+    if cached and now - cached["ts"] < _BB_MID_CACHE_TTL:
+        return cached["v"]
+
+    try:
+        from fetcher import fetch_ohlcv
+
+        weekly = fetch_ohlcv(symbol, "1w", 90)
+        daily = fetch_ohlcv(symbol, "1d", 180)
+        d3 = _resample_3d(daily)
+
+        week = _bb_mid_profile(
+            weekly, BB_MID_WEEK_LOOKBACK, BB_MID_WEEK_MIN_ABOVE, "주봉"
+        )
+        day3 = _bb_mid_profile(
+            d3, BB_MID_3D_LOOKBACK, BB_MID_3D_MIN_ABOVE, "3일봉"
+        )
+
+        score = 0
+        for p in (week, day3):
+            score += 1 if p["above"] >= p.get("min_above", 999) else 0
+            score += 1 if p.get("latest_above") else 0
+            score += 1 if p["slope_pct"] >= 0 else 0
+
+        ok = week["ok"] and day3["ok"]
+        result = {
+            "ok": ok,
+            "direction": "LONG" if ok else "NEUTRAL",
+            "score": score,
+            "week": week,
+            "day3": day3,
+            "note": f"{week['reason']} | {day3['reason']}",
+        }
+    except Exception as e:
+        result = {
+            "ok": False, "direction": "NEUTRAL", "score": 0,
+            "week": {}, "day3": {}, "note": f"BB중단 조회실패: {e}",
+        }
+
+    _bb_mid_cache[symbol] = {"v": result, "ts": now}
+    return result
 
 
 # ─── 전략 1: RSI 극단 반전 ────────────────────────────────────────────────────
@@ -285,11 +409,185 @@ def detect_bb_squeeze(df: pd.DataFrame, tf_key: str) -> dict | None:
     return None
 
 
+# ─── 전략 3.5: 뉴스/수급성 거래량 급등 추세 ─────────────────────────────────
+
+def detect_volume_momentum(df: pd.DataFrame, tf_key: str) -> dict | None:
+    """
+    거래량이 먼저 터지고 가격이 구조를 밀어붙이는 구간을 포착한다.
+    뉴스 API 없이도 거래량 급등을 뉴스/수급 이벤트의 선행 대리변수로 사용한다.
+    """
+    if tf_key not in VOLUME_MOMENTUM_TF:
+        return None
+    if len(df) < max(80, VOLUME_MOMENTUM_LOOKBACK + 30):
+        return None
+
+    close = df["close"].astype(float)
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    open_ = df["open"].astype(float)
+
+    atr_val = _atr(df)
+    if atr_val <= 0:
+        return None
+    vol_r = _vol_ratio(df)
+    if vol_r < VOLUME_MOMENTUM_MIN_VOL:
+        return None
+
+    ema_t = _ema_trend(close)
+    cur_o = float(open_.iloc[-1])
+    cur_c = float(close.iloc[-1])
+    cur_h = float(high.iloc[-1])
+    cur_l = float(low.iloc[-1])
+    rng = max(cur_h - cur_l, 1e-12)
+    body = abs(cur_c - cur_o)
+    if body < atr_val * VOLUME_MOMENTUM_BODY_ATR:
+        return None
+
+    lookback = int(VOLUME_MOMENTUM_LOOKBACK)
+    prev_high = float(high.iloc[-(lookback + 1):-1].max())
+    prev_low = float(low.iloc[-(lookback + 1):-1].min())
+    close_pos = (cur_c - cur_l) / rng
+    last3 = df.iloc[-4:-1]
+    bull_cnt = int(sum(1 for _, r in last3.iterrows() if r["close"] > r["open"]))
+    bear_cnt = int(sum(1 for _, r in last3.iterrows() if r["close"] < r["open"]))
+
+    confirmed = 5
+    if vol_r >= VOLUME_MOMENTUM_MIN_VOL * 1.6:
+        confirmed += 1
+    if body >= atr_val * 0.80:
+        confirmed += 1
+    confirmed = min(confirmed, 6)
+    strength = "VERY STRONG 🔥" if confirmed >= 5 else "STRONG ⚡"
+
+    if (
+        cur_c > cur_o
+        and cur_c >= prev_high
+        and close_pos >= 0.70
+        and bull_cnt >= 2
+        and ema_t >= 0
+    ):
+        sig = _base_signal(
+            "volume_momentum_long", "LONG", strength, confirmed,
+            atr_val, max(ema_t, 1), float(low.iloc[-4:].min()),
+            vol_r, float(calc_rsi(close).iloc[-1]), "거래량급등추세",
+        )
+        sig["volume_momentum"] = {
+            "break_level": round(prev_high, 8),
+            "body_atr": round(body / atr_val, 2),
+            "close_pos": round(close_pos, 2),
+            "note": f"거래량 {vol_r:.1f}x + {lookback}봉 고점 돌파",
+        }
+        return sig
+
+    if (
+        cur_c < cur_o
+        and cur_c <= prev_low
+        and close_pos <= 0.30
+        and bear_cnt >= 2
+        and ema_t <= 0
+    ):
+        sig = _base_signal(
+            "volume_momentum_short", "SHORT", strength, confirmed,
+            atr_val, min(ema_t, -1), float(high.iloc[-4:].max()),
+            vol_r, float(calc_rsi(close).iloc[-1]), "거래량급등추세",
+        )
+        sig["volume_momentum"] = {
+            "break_level": round(prev_low, 8),
+            "body_atr": round(body / atr_val, 2),
+            "close_pos": round(close_pos, 2),
+            "note": f"거래량 {vol_r:.1f}x + {lookback}봉 저점 이탈",
+        }
+        return sig
+
+    return None
+
+
+# ─── 전략 4: 주봉+3일봉 BB 중단 상방 유지 → 내림롱 ─────────────────────────
+
+def detect_bb_mid_pullback_long(df: pd.DataFrame, tf_key: str,
+                                higher_bias: dict | None = None) -> dict | None:
+    """
+    상위봉(주봉+3일봉)이 BB 중단 위에서 계속 형성되는 종목만 대상으로,
+    하위봉 눌림 후 반등이 확인될 때 LONG 진입한다.
+    """
+    if tf_key not in BB_MID_PULLBACK_TF:
+        return None
+    if not higher_bias or not higher_bias.get("ok"):
+        return None
+    if len(df) < 80:
+        return None
+
+    close = df["close"].astype(float)
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    ema20 = close.ewm(span=20, adjust=False).mean()
+    ema50 = close.ewm(span=50, adjust=False).mean()
+    bb_mid = close.rolling(20).mean()
+
+    if pd.isna(bb_mid.iloc[-1]):
+        return None
+
+    atr_val = _atr(df)
+    vol_r = _vol_ratio(df)
+    rsi_val = float(calc_rsi(close).iloc[-1])
+    ema_t = _ema_trend(close)
+
+    last = df.iloc[-1]
+    last_o = float(last["open"])
+    last_c = float(last["close"])
+    prev_h = float(high.iloc[-2])
+    support = max(float(ema20.iloc[-1]), float(bb_mid.iloc[-1]))
+
+    recent_low = low.iloc[-6:]
+    recent_ema20 = ema20.iloc[-6:]
+    recent_mid = bb_mid.iloc[-6:]
+    touch_zone = atr_val * (0.75 if tf_key == "15m" else 0.90)
+
+    pullback_seen = bool(
+        ((recent_low <= recent_ema20 + touch_zone)
+         | (recent_low <= recent_mid + touch_zone)).any()
+    )
+    candle_reclaim = last_c > last_o and last_c >= support * 0.998
+    structure_ok = last_c > prev_h or last_c >= support + atr_val * 0.12
+    not_chasing = (last_c - support) <= atr_val * 1.35
+    local_trend_ok = last_c >= float(ema50.iloc[-1]) * 0.995 and float(ema20.iloc[-1]) >= float(ema50.iloc[-1]) * 0.995
+    rsi_ok = 38 <= rsi_val <= 72
+
+    if not (pullback_seen and candle_reclaim and structure_ok and not_chasing and local_trend_ok and rsi_ok):
+        return None
+    if vol_r < 0.85:
+        return None
+
+    confirmed = 4
+    if higher_bias.get("score", 0) >= 5:
+        confirmed += 1
+    if vol_r >= 1.10:
+        confirmed += 1
+    confirmed = min(confirmed, 6)
+    strength = "VERY STRONG 🔥" if confirmed >= 5 else "STRONG ⚡"
+
+    sig = _base_signal(
+        "bb_mid_pullback_long", "LONG", strength, confirmed,
+        atr_val, max(ema_t, 1), float(low.iloc[-6:].min()),
+        vol_r, rsi_val, "BB중단내림롱",
+    )
+    sig["bb_mid_bias"] = higher_bias
+    sig["divergence_count"] = confirmed
+    sig["divergence_quality"] = {
+        "max_divergence": 6,
+        "max_confirmed": 6,
+        "note": f"상위봉 BB중단 상방 유지: {higher_bias.get('note', '')}",
+    }
+    return sig
+
+
 # ─── 통합 스캔 ────────────────────────────────────────────────────────────────
 
-def scan_additional(df: pd.DataFrame, tf_key: str) -> list:
+def scan_additional(df: pd.DataFrame, tf_key: str,
+                    higher_bias: dict | None = None) -> list:
     """
-    다이버전스 외 추가 신호 스캔 (RSI반전 / EMA눌림목 / BB스퀴즈).
+    다이버전스 외 추가 신호 스캔
+    (RSI반전 / EMA눌림목 / BB스퀴즈 / 거래량급등추세 / BB중단내림롱).
     반환: detect()와 동일 포맷의 신호 리스트 (0~3개)
     """
     results = []
@@ -321,6 +619,31 @@ def scan_additional(df: pd.DataFrame, tf_key: str) -> list:
             existing["strategy"] = existing["strategy"] + "+BB"
         else:
             results.append(bb_sig)
+
+    volume_sig = detect_volume_momentum(df, tf_key)
+    if volume_sig:
+        existing = next((s for s in results if s.get("signal_type", "").endswith(
+            "long" if volume_sig["signal_type"] == "volume_momentum_long" else "short"
+        )), None)
+        if existing:
+            existing["confirmed_count"] = min(existing["confirmed_count"] + 2, 6)
+            existing["strength"] = "VERY STRONG 🔥" if existing["confirmed_count"] >= 5 else existing["strength"]
+            existing["strategy"] = existing["strategy"] + "+거래량급등"
+            existing["volume_momentum"] = volume_sig.get("volume_momentum", {})
+        else:
+            results.append(volume_sig)
+
+    bb_mid_sig = detect_bb_mid_pullback_long(df, tf_key, higher_bias)
+    if bb_mid_sig:
+        existing = next((s for s in results if s.get("signal_type", "").endswith("long")), None)
+        if existing:
+            existing["confirmed_count"] = min(existing["confirmed_count"] + 2, 6)
+            existing["strength"] = "VERY STRONG 🔥" if existing["confirmed_count"] >= 5 else existing["strength"]
+            existing["strategy"] = existing["strategy"] + "+BB중단"
+            existing["bb_mid_bias"] = higher_bias
+            existing["divergence_quality"] = bb_mid_sig["divergence_quality"]
+        else:
+            results.append(bb_mid_sig)
 
     micro_sig = detect_micro_breakout(df, tf_key)
     if micro_sig:

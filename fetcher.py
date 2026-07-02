@@ -1,17 +1,42 @@
 """Bybit 선물 OHLCV 수집 + 실시간 Market Radar."""
 import json
 import time
+import warnings
 from pathlib import Path
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"urllib3 v2 only supports OpenSSL.*",
+    category=Warning,
+)
+
+import math
+
 import ccxt
 import pandas as pd
-from config import (VOLUME_SURGE_MIN_24H_USD, VOLUME_SURGE_MIN_DELTA_PCT,
+import requests
+from config import (BTC_SYNC_BETA_LOOKBACK, BTC_SYNC_LOOKBACK,
+                    BTC_SYNC_MAX_SPREAD_PCT, BTC_SYNC_MIN_24H_USD,
+                    BTC_SYNC_MIN_ABS_GAP_PCT, BTC_SYNC_MIN_VOL_RATIO,
+                    BTC_SYNC_MIN_BTC_MOVE_PCT, BTC_SYNC_MIN_CORRELATION,
+                    BTC_SYNC_REVERSION_ZSCORE, BTC_SYNC_TIMEFRAME, BTC_SYNC_TOP_N,
+                    HYPERLIQUID_API_URL, HYPERLIQUID_CANDLE_TOP_N,
+                    HYPERLIQUID_LOOKBACK_BARS, HYPERLIQUID_MAX_FUNDING_ABS,
+                    HYPERLIQUID_MIN_15M_MOVE_PCT, HYPERLIQUID_MIN_1H_MOVE_PCT,
+                    HYPERLIQUID_MIN_24H_USD, HYPERLIQUID_MIN_OI_USD,
+                    HYPERLIQUID_MIN_VOL_RATIO, HYPERLIQUID_TIMEFRAME,
+                    HYPERLIQUID_TOP_N,
+                    VOLUME_SURGE_MIN_24H_USD, VOLUME_SURGE_MIN_DELTA_PCT,
                     VOLUME_SURGE_MIN_DELTA_USD)
 
 _exchange   = None
 _radar_cache: dict = {"data": [], "ts": 0}
 _ticker_cache: dict = {"rows": [], "ts": 0}
+_btc_sync_cache: dict = {"data": [], "ts": 0}
+_hyperliquid_cache: dict = {"data": [], "ts": 0}
 _RADAR_TTL  = 900   # 15분 캐시 (스캔 5분마다 재사용)
 _RADAR_STATE_FILE = Path(__file__).parent / "market_radar_state.json"
+_HYPERLIQUID_STATE_FILE = Path(__file__).parent / "hyperliquid_radar_state.json"
 
 # 레버드/인덱스 토큰 제외 키워드
 _EXCLUDE = {"BULL", "BEAR", "UP", "DOWN", "3L", "3S", "HALF", "SOXL", "TQQQ"}
@@ -94,12 +119,19 @@ def _fetch_futures_ticker_rows() -> list[dict]:
         # quoteVolume = USD 거래대금
         qvol = t.get("quoteVolume") or (t.get("baseVolume", 0) * last)
         chg  = t.get("percentage") or 0.0
+        bid = float(t.get("bid") or 0)
+        ask = float(t.get("ask") or 0)
+        mid = (bid + ask) / 2 if bid > 0 and ask > 0 else 0
+        spread_pct = ((ask - bid) / mid * 100) if mid > 0 and ask >= bid else 0.0
         rows.append({
             "symbol":     sym,
             "coin":       coin,
             "last":       float(last),
             "change_pct": float(chg or 0.0),
             "volume_usd": float(qvol or 0.0),
+            "bid":        bid,
+            "ask":        ask,
+            "spread_pct": float(spread_pct or 0.0),
         })
 
     rows.sort(key=lambda x: x["volume_usd"], reverse=True)
@@ -236,3 +268,481 @@ def fetch_volume_surge_radar(n: int = 5) -> list[dict]:
     except Exception as e:
         print(f"[SurgeRadar] 조회 실패: {e}")
         return []
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        out = float(value)
+        return out if math.isfinite(out) else default
+    except Exception:
+        return default
+
+
+def _load_hyperliquid_state() -> dict:
+    if _HYPERLIQUID_STATE_FILE.exists():
+        try:
+            return json.loads(_HYPERLIQUID_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def _save_hyperliquid_state(state: dict) -> None:
+    _HYPERLIQUID_STATE_FILE.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _hyperliquid_post(body: dict, timeout: float = 8.0):
+    """Hyperliquid public info endpoint 호출 래퍼. 주문/서명은 전혀 사용하지 않는다."""
+    res = requests.post(
+        HYPERLIQUID_API_URL,
+        json=body,
+        timeout=timeout,
+        headers={"Content-Type": "application/json"},
+    )
+    res.raise_for_status()
+    return res.json()
+
+
+def _hyperliquid_to_bybit_symbol(coin: str, bybit_by_coin: dict) -> str:
+    """Hyperliquid 코인명을 우리 Bybit 심볼 형식으로 보수적으로 매핑한다."""
+    raw = str(coin or "").strip()
+    if not raw or ":" in raw:
+        return ""
+
+    # Hyperliquid UI/HyperCore의 일부 spot remap/특수명은 선물 레이더에서 제외한다.
+    if raw.startswith("@") or raw.upper() in {"UBTC", "UETH"}:
+        return ""
+
+    candidates = [raw, raw.upper()]
+    if raw.startswith("k") and len(raw) > 1:
+        # Hyperliquid의 k-prefixed micro contracts 일부는 CEX의 1000* 심볼과 대응될 수 있다.
+        candidates.append(f"1000{raw[1:].upper()}")
+    if raw.upper().startswith("K") and len(raw) > 1:
+        candidates.append(f"1000{raw.upper()[1:]}")
+
+    seen = set()
+    for c in candidates:
+        if c in seen:
+            continue
+        seen.add(c)
+        sym = bybit_by_coin.get(c)
+        if sym:
+            return sym
+    return ""
+
+
+def _hyperliquid_candles(coin: str, interval: str, bars: int) -> list[dict]:
+    now_ms = int(time.time() * 1000)
+    minutes = {
+        "1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30,
+        "1h": 60, "2h": 120, "4h": 240, "8h": 480,
+        "12h": 720, "1d": 1440, "3d": 4320, "1w": 10080,
+    }.get(interval, 15)
+    start_ms = now_ms - int((bars + 4) * minutes * 60 * 1000)
+    data = _hyperliquid_post({
+        "type": "candleSnapshot",
+        "req": {
+            "coin": coin,
+            "interval": interval,
+            "startTime": start_ms,
+            "endTime": now_ms,
+        },
+    })
+    return data if isinstance(data, list) else []
+
+
+def _hyperliquid_candle_metrics(candles: list[dict]) -> dict:
+    if not candles or len(candles) < 6:
+        return {}
+
+    closes = [_safe_float(c.get("c")) for c in candles]
+    opens = [_safe_float(c.get("o")) for c in candles]
+    vols = [_safe_float(c.get("v")) for c in candles]
+    if closes[-1] <= 0 or closes[-2] <= 0:
+        return {}
+
+    ret_15m = (closes[-1] / closes[-2] - 1) * 100
+    ret_1h = 0.0
+    if len(closes) >= 5 and closes[-5] > 0:
+        ret_1h = (closes[-1] / closes[-5] - 1) * 100
+
+    recent_vol = sum(vols[-3:]) / min(len(vols), 3)
+    base_slice = vols[-23:-3] if len(vols) >= 23 else vols[:-3]
+    base_vol = sum(base_slice) / len(base_slice) if base_slice else 0.0
+    vol_ratio = recent_vol / base_vol if base_vol > 0 else 0.0
+
+    last_body_pct = 0.0
+    if opens[-1] > 0:
+        last_body_pct = (closes[-1] / opens[-1] - 1) * 100
+
+    last_ts = candles[-1].get("t") or candles[-1].get("T") or ""
+    return {
+        "ret_15m_pct": ret_15m,
+        "ret_1h_pct": ret_1h,
+        "vol_ratio": vol_ratio,
+        "last_body_pct": last_body_pct,
+        "last_ts": last_ts,
+    }
+
+
+def fetch_hyperliquid_lead_radar(n: int = 8) -> list[dict]:
+    """
+    매매전략 5: Hyperliquid Lead Radar.
+
+    Hyperliquid의 거래량/OI/단기 캔들 모멘텀을 읽기 전용으로 수집한 뒤,
+    Bybit에도 상장된 종목만 후보로 돌려준다. 이 레이더는 Hyperliquid에서
+    주문하지 않고, Bybit 기존 전략의 스캔 대상/진입 근거/가산점으로만 쓰인다.
+    """
+    global _hyperliquid_cache
+    now = time.time()
+    if now - _hyperliquid_cache["ts"] < _RADAR_TTL and _hyperliquid_cache["data"]:
+        return _hyperliquid_cache["data"]
+
+    try:
+        bybit_rows = _fetch_futures_ticker_rows()
+        bybit_by_coin = {row["coin"]: row["symbol"] for row in bybit_rows}
+        bybit_by_symbol = {row["symbol"]: row for row in bybit_rows}
+
+        raw = _hyperliquid_post({"type": "metaAndAssetCtxs"})
+        if not isinstance(raw, list) or len(raw) < 2:
+            return _hyperliquid_cache.get("data", [])
+
+        meta = raw[0] or {}
+        contexts = raw[1] or []
+        universe = meta.get("universe", []) if isinstance(meta, dict) else []
+
+        state = _load_hyperliquid_state()
+        prev_assets = state.get("assets", {}) or {}
+        snapshot = {}
+        base_rows = []
+        for asset, ctx in zip(universe, contexts):
+            if not isinstance(asset, dict) or not isinstance(ctx, dict):
+                continue
+            if asset.get("isDelisted"):
+                continue
+            coin = str(asset.get("name") or "").strip()
+            if not coin or any(kw in coin.upper() for kw in _EXCLUDE):
+                continue
+
+            symbol = _hyperliquid_to_bybit_symbol(coin, bybit_by_coin)
+            if not symbol:
+                continue
+
+            mark = _safe_float(ctx.get("markPx") or ctx.get("midPx") or ctx.get("oraclePx"))
+            prev_day = _safe_float(ctx.get("prevDayPx"))
+            volume_usd = _safe_float(ctx.get("dayNtlVlm"))
+            oi_base = _safe_float(ctx.get("openInterest"))
+            oi_usd = oi_base * mark if mark > 0 else 0.0
+            funding = _safe_float(ctx.get("funding"))
+            if mark <= 0 or volume_usd < HYPERLIQUID_MIN_24H_USD:
+                continue
+
+            day_change = (mark / prev_day - 1) * 100 if prev_day > 0 else 0.0
+            prev = prev_assets.get(symbol, {})
+            prev_oi_usd = _safe_float(prev.get("oi_usd"))
+            oi_growth_pct = (
+                (oi_usd / prev_oi_usd - 1) * 100 if prev_oi_usd > 0 else 0.0
+            )
+            bybit_row = bybit_by_symbol.get(symbol, {})
+            bybit_change = _safe_float(bybit_row.get("change_pct"))
+            lead_gap = day_change - bybit_change
+
+            snapshot[symbol] = {
+                "coin": coin,
+                "volume_usd": volume_usd,
+                "oi_usd": oi_usd,
+                "mark": mark,
+                "day_change_pct": day_change,
+            }
+            base_rows.append({
+                "symbol": symbol,
+                "coin": symbol.split("/")[0],
+                "hyperliquid_coin": coin,
+                "mark": mark,
+                "day_change_pct": day_change,
+                "bybit_change_pct": bybit_change,
+                "lead_gap_pct": lead_gap,
+                "volume_usd": volume_usd,
+                "volume_label": _vol_label(volume_usd),
+                "open_interest_usd": oi_usd,
+                "open_interest_label": _vol_label(oi_usd),
+                "oi_growth_pct": oi_growth_pct,
+                "funding": funding,
+                "max_leverage": asset.get("maxLeverage"),
+            })
+
+        base_rows.sort(
+            key=lambda r: (
+                r["volume_usd"] * 0.65
+                + r["open_interest_usd"] * 0.35
+                + abs(r["day_change_pct"]) * 1_000_000
+            ),
+            reverse=True,
+        )
+        base_rows = base_rows[:int(HYPERLIQUID_TOP_N)]
+
+        candidates = []
+        for row in base_rows[:HYPERLIQUID_CANDLE_TOP_N]:
+            try:
+                candles = _hyperliquid_candles(
+                    row["hyperliquid_coin"],
+                    HYPERLIQUID_TIMEFRAME,
+                    HYPERLIQUID_LOOKBACK_BARS,
+                )
+                metrics = _hyperliquid_candle_metrics(candles)
+            except Exception:
+                metrics = {}
+            time.sleep(0.03)
+            if not metrics:
+                continue
+
+            ret_15m = float(metrics.get("ret_15m_pct", 0) or 0)
+            ret_1h = float(metrics.get("ret_1h_pct", 0) or 0)
+            vol_ratio = float(metrics.get("vol_ratio", 0) or 0)
+            lead_ret = ret_1h if abs(ret_1h) >= abs(ret_15m) else ret_15m
+            direction = "LONG" if lead_ret > 0 else "SHORT"
+            strong_move = (
+                abs(ret_1h) >= HYPERLIQUID_MIN_1H_MOVE_PCT
+                or abs(ret_15m) >= HYPERLIQUID_MIN_15M_MOVE_PCT
+            )
+            if not strong_move:
+                continue
+            if vol_ratio < HYPERLIQUID_MIN_VOL_RATIO:
+                continue
+            if row["open_interest_usd"] < HYPERLIQUID_MIN_OI_USD:
+                continue
+
+            funding_abs = abs(float(row.get("funding", 0) or 0))
+            funding_penalty = 0.70 if funding_abs >= HYPERLIQUID_MAX_FUNDING_ABS else 1.0
+            oi_bonus = 1.0 + min(max(float(row.get("oi_growth_pct", 0) or 0), 0.0), 150.0) / 200.0
+            liq_bonus = 1.0 + min(row["volume_usd"] / 250_000_000, 1.0) * 0.40
+            score = abs(lead_ret) * max(1.0, vol_ratio) * oi_bonus * liq_bonus * funding_penalty
+
+            out = dict(row)
+            out.update({
+                "direction": direction,
+                "lead_ret_pct": round(lead_ret, 2),
+                "ret_15m_pct": round(ret_15m, 2),
+                "ret_1h_pct": round(ret_1h, 2),
+                "vol_ratio": round(vol_ratio, 2),
+                "last_body_pct": round(float(metrics.get("last_body_pct", 0) or 0), 3),
+                "last_ts": metrics.get("last_ts", ""),
+                "score": round(score, 2),
+                "funding_overheated": funding_abs >= HYPERLIQUID_MAX_FUNDING_ABS,
+            })
+            candidates.append(out)
+
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        for i, row in enumerate(candidates[:n]):
+            row["rank"] = i + 1
+
+        _save_hyperliquid_state({
+            "snapshot_ts": now,
+            "assets": snapshot,
+        })
+        _hyperliquid_cache = {"data": candidates[:n], "ts": now}
+        return candidates[:n]
+    except Exception as e:
+        print(f"[HyperliquidRadar] 조회 실패: {e}")
+        return _hyperliquid_cache.get("data", [])
+
+
+def _window_return_pct(df: pd.DataFrame, lookback: int) -> float:
+    """최근 lookback봉 기준 종가 수익률(%)."""
+    if df is None or len(df) <= lookback:
+        return 0.0
+    start = float(df["close"].iloc[-lookback - 1])
+    end = float(df["close"].iloc[-1])
+    if start <= 0:
+        return 0.0
+    return (end / start - 1) * 100
+
+
+def _volume_ratio(df: pd.DataFrame, lookback: int) -> float:
+    """최근 3봉 거래량이 이전 lookback봉 평균 대비 얼마나 커졌는지."""
+    if df is None or len(df) < lookback + 4:
+        return 0.0
+    recent = float(df["volume"].iloc[-3:].mean())
+    base = float(df["volume"].iloc[-lookback - 3:-3].mean())
+    if base <= 0:
+        return 0.0
+    return recent / base
+
+
+def _aligned_btc_sync_metrics(sym_df: pd.DataFrame, btc_df: pd.DataFrame,
+                              lookback: int, beta_lookback: int) -> dict:
+    """BTC와 종목 캔들을 같은 타임스탬프로 맞춰 베타 보정 괴리를 계산한다."""
+    if sym_df is None or btc_df is None:
+        return {}
+    joined = pd.concat(
+        {
+            "sym_close": sym_df["close"],
+            "btc_close": btc_df["close"],
+            "sym_volume": sym_df["volume"],
+            "sym_open": sym_df["open"],
+        },
+        axis=1,
+        join="inner",
+    ).dropna()
+    min_len = max(int(lookback) + 4, int(beta_lookback) + 4)
+    if len(joined) < min_len:
+        return {}
+
+    sym_start = float(joined["sym_close"].iloc[-lookback - 1])
+    sym_end = float(joined["sym_close"].iloc[-1])
+    btc_start = float(joined["btc_close"].iloc[-lookback - 1])
+    btc_end = float(joined["btc_close"].iloc[-1])
+    if min(sym_start, sym_end, btc_start, btc_end) <= 0:
+        return {}
+
+    sym_ret = (sym_end / sym_start - 1) * 100
+    btc_ret = (btc_end / btc_start - 1) * 100
+
+    rets = joined[["sym_close", "btc_close"]].pct_change().dropna().tail(beta_lookback)
+    if len(rets) < max(12, beta_lookback // 3):
+        return {}
+    btc_var = float(rets["btc_close"].var() or 0.0)
+    if btc_var <= 0:
+        beta = 1.0
+    else:
+        beta = float(rets["sym_close"].cov(rets["btc_close"]) / btc_var)
+    if not math.isfinite(beta):
+        beta = 1.0
+    beta = max(0.15, min(beta, 4.0))
+
+    corr = float(rets["sym_close"].corr(rets["btc_close"]) or 0.0)
+    if not math.isfinite(corr):
+        corr = 0.0
+    expected_ret = btc_ret * beta
+    raw_gap = sym_ret - btc_ret
+    beta_gap = sym_ret - expected_ret
+
+    residual = (rets["sym_close"] - beta * rets["btc_close"]) * 100
+    resid_std = float(residual.std() or 0.0) * (lookback ** 0.5)
+    zscore = beta_gap / resid_std if resid_std > 0 else 0.0
+    if not math.isfinite(zscore):
+        zscore = 0.0
+
+    vol_ratio = _volume_ratio(joined.rename(columns={"sym_volume": "volume"}), lookback)
+    last_open = float(joined["sym_open"].iloc[-1])
+    last_close = float(joined["sym_close"].iloc[-1])
+    last_body_pct = ((last_close - last_open) / last_open * 100) if last_open > 0 else 0.0
+
+    gap_sign = 1 if beta_gap > 0 else -1
+    last_reverting = (
+        (gap_sign > 0 and last_body_pct < 0)
+        or (gap_sign < 0 and last_body_pct > 0)
+    )
+    mode = "momentum"
+    direction = "LONG" if beta_gap > 0 else "SHORT"
+    if abs(zscore) >= BTC_SYNC_REVERSION_ZSCORE and last_reverting:
+        mode = "reversion"
+        direction = "SHORT" if beta_gap > 0 else "LONG"
+
+    return {
+        "symbol_ret_pct": sym_ret,
+        "btc_ret_pct": btc_ret,
+        "expected_ret_pct": expected_ret,
+        "raw_gap_pct": raw_gap,
+        "beta_gap_pct": beta_gap,
+        "gap_pct": beta_gap,
+        "beta": beta,
+        "correlation": corr,
+        "gap_zscore": zscore,
+        "vol_ratio": vol_ratio,
+        "last_body_pct": last_body_pct,
+        "last_ts": joined.index[-1].isoformat(),
+        "sync_mode": mode,
+        "direction": direction,
+    }
+
+
+def fetch_btc_sync_dislocations(n: int = BTC_SYNC_TOP_N) -> list[dict]:
+    """
+    BTC 기준 동조/괴리 레이더.
+
+    최근 1시간(기본 5m×12) 동안 BTC와 각 종목의 공통 타임스탬프 캔들을 맞춘 뒤,
+    최근 6시간 베타를 적용해 "실제 종목수익률 - BTC베타×BTC수익률" 괴리를 계산한다.
+    이 값이 크고 거래량도 함께 증가하면, 해당 종목은 "BTC와 동기화되지 않은 가격 이벤트"
+    후보로 보고 기존 전략 스캔 대상과 전략 3 직접매매 엔진에 전달한다.
+
+    이 함수는 차익거래 체결 엔진이 아니다. 레이턴시/수수료/호가공백을 고려하지 않은
+    탐지 레이어이며, 실거래 여부는 main.py의 전략별 R:R/ROI/리스크 게이트가 결정한다.
+    """
+    global _btc_sync_cache
+    now = time.time()
+    if now - _btc_sync_cache["ts"] < _RADAR_TTL:
+        return _btc_sync_cache["data"]
+
+    try:
+        rows = [
+            row for row in _fetch_futures_ticker_rows()[:n]
+            if row["symbol"] != "BTC/USDT" and row["volume_usd"] >= BTC_SYNC_MIN_24H_USD
+        ]
+        lookback = int(BTC_SYNC_LOOKBACK)
+        beta_lookback = int(BTC_SYNC_BETA_LOOKBACK)
+        limit = max(lookback + beta_lookback + 8, 120)
+        btc_df = fetch_ohlcv("BTC/USDT", BTC_SYNC_TIMEFRAME, limit)
+
+        candidates = []
+        for row in rows:
+            sym = row["symbol"]
+            if row.get("spread_pct", 0) > BTC_SYNC_MAX_SPREAD_PCT:
+                continue
+            try:
+                df = fetch_ohlcv(sym, BTC_SYNC_TIMEFRAME, limit)
+            except Exception:
+                continue
+            metrics = _aligned_btc_sync_metrics(df, btc_df, lookback, beta_lookback)
+            if not metrics:
+                continue
+            btc_ret = float(metrics["btc_ret_pct"])
+            sym_ret = float(metrics["symbol_ret_pct"])
+            gap = float(metrics["gap_pct"])
+            vol_ratio = float(metrics["vol_ratio"])
+            corr = abs(float(metrics["correlation"]))
+            if abs(btc_ret) < BTC_SYNC_MIN_BTC_MOVE_PCT:
+                continue
+            if corr < BTC_SYNC_MIN_CORRELATION:
+                continue
+            if abs(gap) < BTC_SYNC_MIN_ABS_GAP_PCT or vol_ratio < BTC_SYNC_MIN_VOL_RATIO:
+                continue
+
+            direction = metrics["direction"]
+            z_bonus = 1.0 + min(abs(float(metrics["gap_zscore"])), 4.0) * 0.15
+            score = abs(gap) * max(1.0, vol_ratio) * z_bonus
+            candidates.append({
+                "symbol": sym,
+                "coin": row["coin"],
+                "direction": direction,
+                "btc_ret_pct": round(btc_ret, 2),
+                "symbol_ret_pct": round(sym_ret, 2),
+                "gap_pct": round(gap, 2),
+                "raw_gap_pct": round(float(metrics["raw_gap_pct"]), 2),
+                "expected_ret_pct": round(float(metrics["expected_ret_pct"]), 2),
+                "beta": round(float(metrics["beta"]), 3),
+                "correlation": round(float(metrics["correlation"]), 3),
+                "gap_zscore": round(float(metrics["gap_zscore"]), 2),
+                "sync_mode": metrics["sync_mode"],
+                "last_body_pct": round(float(metrics["last_body_pct"]), 3),
+                "last_ts": metrics["last_ts"],
+                "vol_ratio": round(vol_ratio, 2),
+                "spread_pct": round(float(row.get("spread_pct", 0) or 0), 3),
+                "volume_usd": row["volume_usd"],
+                "volume_label": _vol_label(row["volume_usd"]),
+                "score": round(score, 2),
+            })
+
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        for i, row in enumerate(candidates):
+            row["rank"] = i + 1
+        _btc_sync_cache = {"data": candidates, "ts": now}
+        return candidates
+    except Exception as e:
+        print(f"[BTCSyncRadar] 조회 실패: {e}")
+        return _btc_sync_cache.get("data", [])

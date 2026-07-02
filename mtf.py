@@ -6,7 +6,8 @@ MTF (다중 타임프레임) 확인 모듈
   1h 불리시 신호 → 4h EMA 상승 + 1d EMA 상승 = FULL ALIGN 💯
   1h 불리시 신호 → 4h EMA 하락 = 역추세 반등 시도 → 차단
 
-상위봉 추세가 반대면 아무리 좋은 신호도 소음에 불과
+단, 7/7 ELITE 반전/히든 다이버전스는 추세 전환 또는 재개 신호일 수 있어
+main.py에서 소액 허용 예외를 둔다. MTF는 하드 차단이 아니라 리스크 조절축이다.
 """
 import time
 from fetcher import fetch_ohlcv
@@ -236,7 +237,9 @@ def mtf_summary(mtf: dict) -> str:
     if mtf.get("details") == ["최상위봉 — MTF 불필요"]:
         return "🔭 MTF: 최상위봉"
     label = (
-        "✅✅ 전 TF 정렬 — 최고 진입 기회" if mtf["strong"]  else
+        "✅✅ 전 TF 정렬 — 상위봉 우호 / 포지션 부스트" if mtf["strong"]  else
+        "⚠️ 전 TF 역방향 — ELITE 다이버전스 소액 허용"
+        if mtf.get("elite_mtf_override") or mtf.get("elite_reversal_override") else
         "⛔ 전 TF 역방향 — 진입 차단"      if mtf["block"]   else
         f"⚡ 부분 정렬 ({score}/{n})"
     )
