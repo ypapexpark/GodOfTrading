@@ -57,6 +57,12 @@ TRAIL_ATR_MULT    = 1.5   # 현재가에서 SL까지 ATR 거리
 TRAIL_ADVANCE_MIN = 0.5   # SL 갱신 최소 이동량 (ATR 단위), 너무 자주 갱신 방지
 PRE_TP_BE_TRIGGER_R = 0.8 # TP1 전이라도 0.8R 수익이면 손실 방지 SL로 이동
 BE_FEE_CUSHION_MULT = 1.2 # 수수료까지 감안한 소폭 이익 보호
+# 2026-07-03 리뷰: 0.8R 도달 시 SL을 수수료만 겨우 넘는 손익분기로 당기면,
+# TP1에 못 미치고 되돌리는 다수 거래가 거의 $0짜리 "승리"로 기록된다
+# (실측 16건 평균 승리 +0.34R — 트리거인 0.8R보다도 낮음).
+# 트리거 조건(승률에 영향)은 그대로 두고, 잠그는 SL 위치만 이미 번 R의
+# 절반을 보호하도록 올려서 "얕은 승리"의 실현 금액을 키운다.
+PRE_TP_BE_LOCK_FRACTION = 0.5
 PROFIT_LOCK_TRIGGER_MARGIN_ROI_PCT = 10.0 # 레버리지 포함 +10% 수익권 진입 시
 PROFIT_LOCK_SL_MARGIN_ROI_PCT = 10.0      # SL도 증거금 ROI +10% 부근으로 이동
 
@@ -1351,9 +1357,10 @@ def monitor_positions():
                 close_side = "sell" if direction == "LONG" else "buy"
                 tg_dir = 2 if direction == "LONG" else 1
                 fee_buffer = entry_price * ROUND_TRIP_FEE * BE_FEE_CUSHION_MULT
+                lock_distance = max(fee_buffer, risk * PRE_TP_BE_LOCK_FRACTION)
                 protect_sl = (
-                    entry_price + fee_buffer if direction == "LONG"
-                    else entry_price - fee_buffer
+                    entry_price + lock_distance if direction == "LONG"
+                    else entry_price - lock_distance
                 )
                 valid_trigger = (
                     (direction == "LONG" and current_price > protect_sl) or
