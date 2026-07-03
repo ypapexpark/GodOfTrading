@@ -3033,6 +3033,11 @@ def _do_pyramid(symbol: str, tf_key: str, direction: str,
         position_pct = position_pct,
         atr          = atr,
         is_elite     = False,
+        # 불타기는 이미 +1.5~3.0 ATR 수익 중이고 EMA 추세도 재확인된 자리에서만
+        # 호출된다 (호출부 조건 참고) — 당일 손실액으로 이 확인된 추세지속
+        # 자리까지 막지 않는다. 계좌생존(DD/하드스톱)만 상위에서 계속 방어.
+        allow_pause_override = True,
+        pause_override_reason = f"불타기{pyramid_level}회 추세지속 확인",
     )
 
     if result["ok"]:
