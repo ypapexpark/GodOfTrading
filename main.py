@@ -62,7 +62,6 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     CONVICTION_MARGIN_PCT_BY_TIER, CONVICTION_MARGIN_USD_BY_TIER,
                     CONVICTION_SIZING_ENABLED,
                     FAST_TP1_MIN_RR,
-                    HIGH_OPPORTUNITY_DAILY_LOSS_DISABLE_AT,
                     HIGH_OPPORTUNITY_DD_DISABLE_PCT,
                     HIGH_OPPORTUNITY_MAX_ACCOUNT_RISK_PCT,
                     HIGH_OPPORTUNITY_MIN_MARGIN_ROI_PCT,
@@ -566,16 +565,17 @@ def _opportunity_risk_cap(balance: float) -> float:
     return max(0.0, balance * HIGH_OPPORTUNITY_MAX_ACCOUNT_RISK_PCT)
 
 
-def _risk_off_high_opportunity_reason(balance: float, daily_loss: float,
-                                      daily_limit: float, state: dict) -> str:
-    """계좌가 이미 훼손된 날에는 고기대수익 예외가 일손실/DD 방어선을 뚫지 못하게 한다."""
+def _risk_off_high_opportunity_reason(state: dict) -> str:
+    """계좌 전체가 훼손된 상태(DD/하드스톱)에서만 고기대수익 예외를 막는다.
+
+    2026-07-03 재검토: 당일 손실액 자체로는 더 이상 예외를 막지 않는다.
+    손실은 손실이고, TP1 R:R 하한(HIGH_OPPORTUNITY_MIN_TP1_RR)을 통과한
+    진짜 좋은 자리는 그날 손실과 무관하게 시도해서 멘징/수익전환 기회를
+    준다 — 단건 리스크는 opportunity_risk_cap으로 계속 캡핑된다.
+    DD%나 하드스톱처럼 계좌 자체가 위험한 상태만 전면 차단한다.
+    """
     dd_pct = float(state.get("drawdown_pct", 0) or 0)
     dd_status = str(state.get("drawdown_status", "") or "")
-    if daily_limit > 0 and daily_loss >= daily_limit * HIGH_OPPORTUNITY_DAILY_LOSS_DISABLE_AT:
-        return (
-            f"고기대수익 예외 해제: 오늘 손실 ${daily_loss:.2f}/${daily_limit:.2f} "
-            f"({HIGH_OPPORTUNITY_DAILY_LOSS_DISABLE_AT*100:.0f}% 이상)"
-        )
     if dd_pct >= HIGH_OPPORTUNITY_DD_DISABLE_PCT * 100:
         return (
             f"고기대수익 예외 해제: 계좌 DD {dd_pct:.1f}% "
@@ -1959,7 +1959,7 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     daily_limit = get_daily_loss_limit(balance_now)
     daily_loss = float(state_now.get("daily_loss", 0) or 0)
     high_opportunity_block = (
-        _risk_off_high_opportunity_reason(balance_now, daily_loss, daily_limit, state_now)
+        _risk_off_high_opportunity_reason(state_now)
         if high_opportunity else ""
     )
     if high_opportunity_block:
@@ -2678,7 +2678,7 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
         raw_strength, conviction_tier, roi_metrics, quality_leverage_notes, tp1_rr
     )
     high_opportunity_block = (
-        _risk_off_high_opportunity_reason(balance_now, daily_loss, daily_limit, state_now)
+        _risk_off_high_opportunity_reason(state_now)
         if high_opportunity else ""
     )
     if high_opportunity_block:
@@ -3685,7 +3685,7 @@ def _try_btc_sync_direct_trade(candidate: dict) -> bool:
         "VERY STRONG", "VERY STRONG", roi_metrics, leverage_notes, tp1_rr
     )
     high_opportunity_block = (
-        _risk_off_high_opportunity_reason(balance_now, daily_loss, daily_limit, state)
+        _risk_off_high_opportunity_reason(state)
         if high_opportunity else ""
     )
     if high_opportunity_block:
