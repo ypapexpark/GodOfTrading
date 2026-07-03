@@ -67,6 +67,7 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     HIGH_OPPORTUNITY_MAX_ACCOUNT_RISK_PCT,
                     HIGH_OPPORTUNITY_MIN_MARGIN_ROI_PCT,
                     HIGH_OPPORTUNITY_MIN_TP1_MARGIN_ROI_PCT,
+                    HIGH_OPPORTUNITY_MIN_TP1_RR,
                     MIN_FALLBACK_TRADE_MARGIN_USD,
                     MIN_EXPECTED_MARGIN_ROI_PCT, MIN_TP1_MARGIN_ROI_PCT,
                     MIN_TRADE_MARGIN_MAX_BALANCE_PCT, MIN_TRADE_MARGIN_USD,
@@ -535,8 +536,14 @@ def _sizing_boost_allowed(conviction_tier: str, best_rr: float,
 
 def _is_high_profit_opportunity(raw_strength: str, conviction_tier: str,
                                 roi_metrics: dict,
-                                leverage_notes: list[str] | None = None) -> bool:
-    """손실 소프트캡보다 기회 포착을 우선할 고기대수익 자리인지 판단한다."""
+                                leverage_notes: list[str] | None = None,
+                                tp1_rr: float = 0.0) -> bool:
+    """손실 소프트캡보다 기회 포착을 우선할 고기대수익 자리인지 판단한다.
+
+    레버리지 ROI%만으로는 SHIB1000처럼 TP1 R:R 1:1.0인 동전던지기 자리도
+    "고기대수익"으로 잡힌다 (2026-07-03 SHIB1000 -$1.09 사례). ROI% 조건에
+    더해 TP1 R:R 하한을 요구해 실제 손익비가 뒷받침되는 자리만 통과시킨다.
+    """
     raw = _raw_strength(raw_strength)
     weighted_roi = float(roi_metrics.get("weighted_margin_roi_pct", 0) or 0)
     tp1_roi = float(roi_metrics.get("tp1_margin_roi_pct", 0) or 0)
@@ -551,7 +558,8 @@ def _is_high_profit_opportunity(raw_strength: str, conviction_tier: str,
         or raw in {"VERY STRONG", "ELITE"}
         or bool(leverage_notes)
     )
-    return high_quality and (high_roi or very_high_runner)
+    good_rr = float(tp1_rr or 0) >= HIGH_OPPORTUNITY_MIN_TP1_RR
+    return good_rr and high_quality and (high_roi or very_high_runner)
 
 
 def _opportunity_risk_cap(balance: float) -> float:
@@ -1945,7 +1953,7 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
             f"{boost_block_reason} — 현재 리스크 산출 증거금 ${current_margin_before_boost:.2f}만 사용"
         ]
     high_opportunity = _is_high_profit_opportunity(
-        raw, conviction_tier, roi_metrics, quality_leverage_notes
+        raw, conviction_tier, roi_metrics, quality_leverage_notes, tp1_rr
     )
     state_now = _load_state()
     daily_limit = get_daily_loss_limit(balance_now)
@@ -1986,7 +1994,7 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
                 return
             current_margin_before_boost = min(balance_now * position_pct, max_m_final)
             high_opportunity = _is_high_profit_opportunity(
-                raw, conviction_tier, roi_metrics, quality_leverage_notes
+                raw, conviction_tier, roi_metrics, quality_leverage_notes, tp1_rr
             )
             best["profit_surge_leverage"] = leverage
             for note in surge_notes:
@@ -2667,7 +2675,7 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
             f"{boost_block_reason} — 현재 리스크 산출 증거금 ${current_margin_before_boost:.2f}만 사용"
         ]
     high_opportunity = _is_high_profit_opportunity(
-        raw_strength, conviction_tier, roi_metrics, quality_leverage_notes
+        raw_strength, conviction_tier, roi_metrics, quality_leverage_notes, tp1_rr
     )
     high_opportunity_block = (
         _risk_off_high_opportunity_reason(balance_now, daily_loss, daily_limit, state_now)
@@ -3674,7 +3682,7 @@ def _try_btc_sync_direct_trade(candidate: dict) -> bool:
     daily_loss = float(state.get("daily_loss", 0) or 0)
     remaining_daily_risk = max(daily_limit - daily_loss, 0)
     high_opportunity = _is_high_profit_opportunity(
-        "VERY STRONG", "VERY STRONG", roi_metrics, leverage_notes
+        "VERY STRONG", "VERY STRONG", roi_metrics, leverage_notes, tp1_rr
     )
     high_opportunity_block = (
         _risk_off_high_opportunity_reason(balance_now, daily_loss, daily_limit, state)
