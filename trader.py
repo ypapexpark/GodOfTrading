@@ -28,13 +28,15 @@ from config import (CANDIDATE_LOG_FILE, EXECUTION_JOURNAL_FILE,
                     MIN_TRADE_MARGIN_USD, ROUND_TRIP_FEE,
                     MIN_QTY_MAP, QTY_STEP_MAP)
 from strategy_catalog import classify_strategy, format_profile
+from venue_runtime import namespaced_data_path, runtime_venue, venue_label
 
 load_dotenv(Path(__file__).parent / ".env")
 
 KST        = timezone(timedelta(hours=9))
-STATE_FILE = Path(__file__).parent / "trade_state.json"
-CANDIDATE_FILE = Path(__file__).parent / CANDIDATE_LOG_FILE
-EXECUTION_JOURNAL = Path(__file__).parent / EXECUTION_JOURNAL_FILE
+VENUE      = runtime_venue()
+STATE_FILE = namespaced_data_path("trade_state.json")
+CANDIDATE_FILE = namespaced_data_path(CANDIDATE_LOG_FILE)
+EXECUTION_JOURNAL = namespaced_data_path(EXECUTION_JOURNAL_FILE)
 
 # ─── 리스크 파라미터 (100억 프로젝트 — 공격적 복리 성장) ─────────────────────
 TRADE_MARGIN_PCT      = 0.25   # 스윙 기본 비율 (강도별 override 됨)
@@ -93,10 +95,17 @@ def _load_state() -> dict:
             return json.loads(STATE_FILE.read_text())
         except Exception:
             pass
-    return {"daily_loss": 0.0, "consec_loss": 0, "pause_until": 0, "last_reset": ""}
+    return {
+        "venue": VENUE,
+        "daily_loss": 0.0,
+        "consec_loss": 0,
+        "pause_until": 0,
+        "last_reset": "",
+    }
 
 
 def _save_state(s: dict):
+    s.setdefault("venue", VENUE)
     STATE_FILE.write_text(json.dumps(s, indent=2, ensure_ascii=False))
 
 
@@ -260,6 +269,7 @@ def log_trade_candidate(symbol: str, tf_key: str, strategy: str,
         candidate_id = f"{ts_ms}-{safe_symbol}-{tf_key}-{status}"
     row = {
         "candidate_id": candidate_id,
+        "venue":     VENUE,
         "time":      datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST"),
         "timestamp": time.time(),
         "symbol":    symbol,
@@ -280,6 +290,7 @@ def log_execution_journal(trade_num: int | None, event: str = "opened", **payloa
     row = {
         "trade_num": trade_num,
         "event":     event,
+        "venue":     VENUE,
         "time":      datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST"),
         "timestamp": time.time(),
     }
@@ -1026,6 +1037,7 @@ def _save_position(symbol: str, direction: str, entry_price: float,
     """진입 정보 저장. ELITE는 TP1 이후 트레일링 스톱 활성화."""
     s = _load_state()
     s.setdefault("positions", {})[symbol] = {
+        "venue":       VENUE,
         "direction":   direction,
         "entry_price": entry_price,
         "initial_qty": qty,
@@ -1469,6 +1481,7 @@ def _append_trade(symbol: str, direction: str, tf_key: str, strength: str,
     s["trade_counter"] = num
     record = {
         "num":           num,
+        "venue":         VENUE,
         "time":          datetime.now(KST).strftime("%m/%d %H:%M KST"),
         "timestamp":     time.time(),
         "symbol":        symbol,
@@ -1870,9 +1883,10 @@ def build_trade_close_notification(record: dict) -> str:
     exit_move = _directional_move_pct(entry_price, exit_price, direction) if exit_price else 0.0
     pnl_label = "이익" if status == "win" else "손실" if status == "loss" else "본전"
     header_icon = "✅" if status == "win" else "❌" if status == "loss" else "〰"
+    venue = venue_label(record.get("venue", VENUE))
 
     lines = [
-        f"{header_icon} <b>[매매 종료 #{record.get('num')}] {coin} {direction} {pnl_label}</b>",
+        f"{header_icon} <b>[{venue} 매매 종료 #{record.get('num')}] {coin} {direction} {pnl_label}</b>",
         f"결과: <b>{_fmt_signed_usd(pnl)}</b>  |  사유: {escape(record.get('exit_reason', '청산'))}",
         f"보유시간: {_holding_time(record)}  |  전략: {escape(str(record.get('strategy', '')))} / {record.get('tf','')}",
         f"전략군: <b>{escape(format_profile(profile))}</b>",
@@ -1944,8 +1958,9 @@ def build_trade_close_summary(record: dict, analysis_sent: bool = False) -> str:
         ctx,
         bool(record.get("asymmetric_mode", False)),
     )
+    venue = venue_label(record.get("venue", VENUE))
     lines = [
-        f"{icon} <b>[매매 종료 #{record.get('num')}] {coin} {record.get('direction','')} {label}</b>",
+        f"{icon} <b>[{venue} 매매 종료 #{record.get('num')}] {coin} {record.get('direction','')} {label}</b>",
         f"결과: <b>{_fmt_signed_usd(pnl)}</b>  |  사유: {escape(record.get('exit_reason', '청산'))}",
         f"전략: {escape(str(record.get('strategy', '')))} / {record.get('tf','')}  |  "
         f"전략군: <b>{escape(format_profile(profile))}</b>",
@@ -2035,7 +2050,7 @@ def build_trade_notification(symbol: str, direction: str, leverage: int,
         risk_line += f"  |  최대 R:R 1:{rr}"
 
     lines = [
-        f"✅ <b>[매매 체결되었습니다{title_num}] {coin} {dir_label}</b>",
+        f"✅ <b>[{venue_label()} 매매 체결되었습니다{title_num}] {coin} {dir_label}</b>",
         f"{emoji} 방향: <b>{dir_label}</b>  |  시간: {now}",
     ]
     if meta_bits:

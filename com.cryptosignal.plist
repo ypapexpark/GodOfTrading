@@ -26,6 +26,12 @@
         <string>/Users/ghp</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
+        <key>AUTO_TRADE_EXCHANGE</key>
+        <string>bybit</string>
+        <key>GOT_MARKET_DATA_EXCHANGE</key>
+        <string>bybit</string>
+        <key>GOT_STATE_NAMESPACE</key>
+        <string>bybit</string>
     </dict>
 
     <key>StandardOutPath</key>

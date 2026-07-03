@@ -43,6 +43,7 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     BTC_SYNC_DIRECT_TIMEFRAME, BTC_SYNC_DIRECT_TOP_N,
                     BTC_SYNC_DIRECT_TP_PCT, BTC_SYNC_DIRECT_TP_RR,
                     BTC_SYNC_DIRECT_TRADE_ENABLED,
+                    INITIAL_SL_MARGIN_ROI_CAP_PCT,
                     BTC_SYNC_RADAR_ENABLED, BTC_SYNC_SCAN_TOP_N,
                     HYPERLIQUID_LEAD_RISK_MULT, HYPERLIQUID_RADAR_ENABLED,
                     HYPERLIQUID_SCAN_TOP_N,
@@ -57,7 +58,7 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     EMA_NEUTRAL_MTF_RISK_MULT,
                     MTF_SOFT_HIDDEN_RISK_MULT, MTF_SOFT_MIN_CONFIRMED,
                     MTF_SOFT_MIN_DIVERGENCE, MTF_SOFT_MIN_VOL,
-                    MTF_SOFT_REVERSAL_RISK_MULT,
+                    MTF_SOFT_REVERSAL_RISK_MULT, MTF_SOFT_OVERRIDE_LONG_ONLY,
                     CONVICTION_MARGIN_PCT_BY_TIER, CONVICTION_MARGIN_USD_BY_TIER,
                     CONVICTION_SIZING_ENABLED,
                     FAST_TP1_MIN_RR,
@@ -122,6 +123,7 @@ from analyzer import (is_tradeable, get_adaptive_min_rr, get_adaptive_min_vol,
                       get_quality_leverage_adjustment, get_signal_quality_adjustment,
                       is_tradeable_with_strategy, get_cooldown_symbols)
 from strategy_catalog import classify_strategy, format_profile
+from venue_runtime import runtime_context, venue_label
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -379,6 +381,28 @@ def _planned_roi_metrics(entry_price: float, direction: str,
         "tp1_margin_roi_pct": round(tp1_margin_roi, 2),
         "max_margin_roi_pct": round(max_margin_roi, 2),
     }
+
+
+def _cap_leverage_for_initial_sl(leverage: int, sl_pct: float) -> tuple[int, list[str]]:
+    """Compress leverage when the initial SL would consume too much margin."""
+    lev = max(1, int(leverage or 1))
+    sl_pct_f = float(sl_pct or 0.0)
+    if sl_pct_f <= 0:
+        return lev, []
+    margin_loss_pct = sl_pct_f * lev
+    cap = float(INITIAL_SL_MARGIN_ROI_CAP_PCT)
+    if margin_loss_pct <= cap:
+        return lev, []
+    capped = max(1, int(math.floor(cap / sl_pct_f)))
+    capped = min(capped, lev)
+    if capped >= lev:
+        return lev, []
+    return capped, [
+        (
+            f"초기SL 증거금손실 상한: SL {sl_pct_f:.2f}% × {lev}x = "
+            f"{margin_loss_pct:.1f}% > {cap:.0f}% → 레버리지 {lev}x→{capped}x"
+        )
+    ]
 
 
 def _roi_gate_reason(entry_price: float, direction: str,
@@ -883,7 +907,7 @@ def _apply_portfolio_capacity_gate(balance: float, position_pct: float,
     )
 
     try:
-        from trader import get_portfolio_risk_snapshot
+        from trade_router import get_portfolio_risk_snapshot
         snapshot = get_portfolio_risk_snapshot(PORTFOLIO_POSITION_QUERY_RETRIES)
     except Exception as e:
         snapshot = {
@@ -1243,6 +1267,11 @@ def _mtf_soft_override(signal: dict, mtf_info: dict, tf_key: str,
     if not mtf_info.get("block"):
         return denied
 
+    # 2026-07-03 리뷰: MTF 완전역방향 소프트 통과는 LONG 전용.
+    # 통과 SHORT 실측 5건 2승 3패 -$3.39 (PYTH -2.95, TAIKO -1.96) → 하드 차단.
+    if MTF_SOFT_OVERRIDE_LONG_ONLY and direction == "SHORT":
+        return denied
+
     elite = _elite_mtf_override(signal, mtf_info)
     if elite["allow"]:
         note = (
@@ -1358,7 +1387,7 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     복리형 베팅: 신호 강도별 계좌 위험률을 먼저 정하고,
     SL폭/레버리지로 증거금 비율을 역산한다.
     """
-    from trader import (execute, get_usdt_balance, build_trade_notification,
+    from trade_router import (execute, get_usdt_balance, build_trade_notification,
                         _append_trade, add_trade_context, MAX_MARGIN_USD, MAX_SCALP_MARGIN_USD,
                         MAX_DAILY_LOSS,
                         get_daily_loss_limit, get_margin_cap, log_trade_candidate,
@@ -1509,6 +1538,13 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
             and vol_r >= ACTIVE_HIGH_VOL
             and (ema_aligned or mtf_boost >= 1.0 or vol_r >= ACTIVE_ULTRA_VOL)
         )
+        vwap_chasing = "VWAP추격" in timing["note"] or "VWAP NO" in timing["note"]
+        if high_quality_additional and vwap_chasing and vol_r < ACTIVE_ULTRA_VOL:
+            _block(
+                f"{timing['tf']} 보조봉 VWAP 추격 — 고거래량이라도 타점 과열 차단 | "
+                f"{timing['note']}"
+            )
+            return
         high_conviction_timing = (
             raw in {"VERY STRONG", "ELITE"}
             and (premium_mtf_entry or btc_macro_short or ema_aligned or mtf_boost >= 1.2 or vol_r >= ACTIVE_HIGH_VOL)
@@ -1658,6 +1694,14 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         cap_note = f"BTC 월봉 숏 전략 레버리지 상한 {BTC_MACRO_SHORT_MAX_LEVERAGE}x 적용"
         leverage_notes.append(cap_note)
         print(f"  [BTC월봉숏] {cap_note}")
+
+    leverage, sl_leverage_notes = _cap_leverage_for_initial_sl(leverage, t.get("sl_pct", 0))
+    if sl_leverage_notes:
+        roi_metrics = _planned_roi_metrics(t["entry"], direction, t["tps"], leverage)
+        leverage_notes.extend(sl_leverage_notes)
+        quality_leverage_notes.extend(sl_leverage_notes)
+        for note in sl_leverage_notes:
+            print(f"  [SL레버리지] {note}")
 
     roi_reason, roi_metrics = _roi_gate_reason(t["entry"], direction, t["tps"], leverage)
     if roi_reason:
@@ -2222,7 +2266,7 @@ def _log_gate_block(symbol: str, tf_key: str, signal: dict,
     if not AUTO_TRADE:
         return
     try:
-        from trader import log_trade_candidate
+        from trade_router import log_trade_candidate
         strategy_name = signal.get("strategy", strategy)
         profile = classify_strategy(
             strategy_name,
@@ -2257,7 +2301,7 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
     SL: 돌파 레벨 바로 아래/위 (다이버전스 SL보다 타이트: 1.0 ATR)
     TP: VERY STRONG 기준 적용 (45%@2ATR + 35%@3.5ATR + 20%@5ATR)
     """
-    from trader import (execute, get_usdt_balance, build_trade_notification,
+    from trade_router import (execute, get_usdt_balance, build_trade_notification,
                         _append_trade, add_trade_context, MAX_MARGIN_USD,
                         MAX_DAILY_LOSS,
                         has_open_position, get_daily_loss_limit, get_margin_cap,
@@ -2944,7 +2988,7 @@ def _do_pyramid(symbol: str, tf_key: str, direction: str,
     포지션 크기: 감소형 (1회=원래의 60% / 2회=원래의 30%)
     SL: 기존 SL 유지 (추세가 반전되면 전체 청산)
     """
-    from trader import (execute, get_usdt_balance, add_pyramid_entry,
+    from trade_router import (execute, get_usdt_balance, add_pyramid_entry,
                         build_pyramid_notification, MAX_MARGIN_USD)
     from config import MARGIN_BY_STRENGTH, LEVERAGE_MAP, TP_BY_STRENGTH
 
@@ -3160,7 +3204,7 @@ def _build_trade_report(today_trades: list, cs: dict,
                         daily_loss: float, balance: float,
                         learning_notes: list) -> str:
     """4시간 결산 텔레그램 메시지 — 누적 성과 + 오늘 매매내역 2섹션."""
-    from trader import MAX_DAILY_LOSS
+    from trade_router import MAX_DAILY_LOSS
     from datetime import datetime, timezone, timedelta
 
     KST_tz  = timezone(timedelta(hours=9))
@@ -3203,7 +3247,7 @@ def _build_trade_report(today_trades: list, cs: dict,
 
 def _maybe_send_periodic_report():
     """4시간마다 거래 결산 + 학습 분석 텔레그램 발송."""
-    from trader import (_load_state, _save_state,
+    from trade_router import (_load_state, _save_state,
                         get_today_trades, get_cumulative_stats, get_usdt_balance)
 
     s = _load_state()
@@ -3336,6 +3380,7 @@ def _attach_hyperliquid_lead(signal: dict, lead: dict | None) -> dict:
         "vol_ratio": lead.get("vol_ratio"),
         "day_change_pct": lead.get("day_change_pct"),
         "bybit_change_pct": lead.get("bybit_change_pct"),
+        "venue_change_pct": lead.get("venue_change_pct"),
         "lead_gap_pct": lead.get("lead_gap_pct"),
         "volume_usd": lead.get("volume_usd"),
         "volume_label": lead.get("volume_label"),
@@ -3355,7 +3400,7 @@ def _open_position_symbols_for_fast_radar() -> list[str]:
     if not AUTO_TRADE:
         return []
     try:
-        from trader import get_portfolio_risk_snapshot
+        from trade_router import get_portfolio_risk_snapshot
         snapshot = get_portfolio_risk_snapshot(1)
         return [
             str(p.get("symbol", ""))
@@ -3426,7 +3471,7 @@ def _try_btc_sync_direct_trade(candidate: dict) -> bool:
     괴리와 거래량 확장을 별도 알파로 본다. 다만 실거래 공통 안전장치인 기대ROI,
     R:R, 포트폴리오 증거금 용량, 일손실/DD 방어는 그대로 적용한다.
     """
-    from trader import (execute, get_usdt_balance, build_trade_notification,
+    from trade_router import (execute, get_usdt_balance, build_trade_notification,
                         _append_trade, add_trade_context,
                         has_open_position, get_daily_loss_limit,
                         get_margin_cap, log_trade_candidate, log_execution_journal,
@@ -4015,7 +4060,7 @@ def _reconcile_orphan_positions():
       - PnL <= -30% 손실: 긴급 SL 자동 설정 (현재가 기준 3ATR 위 / 아래)
     퀀트 원칙: SL 없는 포지션은 즉시 관리 대상.
     """
-    from trader import fetch_all_positions_raw, place_emergency_sl, _load_state, _save_state
+    from trade_router import fetch_all_positions_raw, place_emergency_sl, _load_state, _save_state
 
     all_positions = fetch_all_positions_raw()
     if not all_positions:
@@ -4040,7 +4085,8 @@ def _reconcile_orphan_positions():
     if not fresh_orphans:
         return
 
-    lines = [f"⚠️ <b>[미추적 포지션 발견 — SL 없음]</b>\n봇이 열지 않은 포지션 {len(fresh_orphans)}개\n"]
+    venue = venue_label(runtime_context()["execution_venue"])
+    lines = [f"⚠️ <b>[{venue} 미추적 포지션 발견 — SL 없음]</b>\n봇이 열지 않은 포지션 {len(fresh_orphans)}개\n"]
     for alert_key, o in fresh_orphans:
         sym       = o["symbol"]
         direction = o["direction"]
@@ -4079,13 +4125,13 @@ def _reconcile_orphan_positions():
             if ok:
                 lines.append(f"  🛑 긴급 SL 자동 설정: ${sl_price:,.2f}  (현재가 ±1.5%)")
             else:
-                lines.append(f"  ❌ 긴급 SL 설정 실패 — Bybit에서 직접 설정 필요")
+                lines.append(f"  ❌ 긴급 SL 설정 실패 — {venue}에서 직접 설정 필요")
         else:
-            lines.append(f"  📌 SL 미설정 — Bybit에서 직접 설정 권장")
+            lines.append(f"  📌 SL 미설정 — {venue}에서 직접 설정 권장")
         lines.append("")
         alerts[alert_key] = now
 
-    lines.append("💡 관리 방법: Bybit에서 해당 포지션에 SL을 설정하거나 청산하세요.")
+    lines.append(f"💡 관리 방법: {venue}에서 해당 포지션에 SL을 설정하거나 청산하세요.")
     send("\n".join(lines))
     _save_state(s)
     print(f"[조정] 미추적 포지션 {len(fresh_orphans)}개 처리 완료")
@@ -4094,7 +4140,7 @@ def _reconcile_orphan_positions():
 def scan():
     # ── Step 0: 포지션 모니터링 먼저 ───────────────────────────────────────────
     if AUTO_TRADE:
-        from trader import monitor_positions, evaluate_trade_candidates
+        from trade_router import monitor_positions, evaluate_trade_candidates
         monitor_positions()
         _reconcile_orphan_positions()
         if not FAST_RADAR:
@@ -4138,7 +4184,11 @@ def scan():
     else:
         mode_tag = "[FAST RADAR]" if fast_mode else ""
     print(f"\n{'='*60}")
-    print(f"  📡 CryptoSignal 스캔  {mode_tag}")
+    ctx = runtime_context()
+    venue = venue_label(ctx["execution_venue"])
+    data_venue = venue_label(ctx["market_data_venue"])
+    data_note = "" if venue == data_venue else f" / Data:{data_venue}"
+    print(f"  📡 CryptoSignal 스캔  [{venue}{data_note}] {mode_tag}")
     print(f"{'='*60}")
 
     # ── Step 2: Market Radar 출력 ──────────────────────────────────────────────
@@ -4700,7 +4750,7 @@ def scan():
                         continue
 
                     # 이미 오픈 포지션 있으면 스킵 (중복 방지)
-                    from trader import has_open_position
+                    from trade_router import has_open_position
                     if has_open_position(symbol):
                         print(f"  [{strategy_tag}] {symbol} 포지션 이미 있음 → 스킵")
                         _log_gate_block(symbol, tf_key, asig, adirection,
@@ -4765,7 +4815,7 @@ def scan():
             # 다이버전스/추가전략과 무관하게 항상 체크
             # ══════════════════════════════════════════════════════════════
             if AUTO_TRADE and not DRY_RUN:
-                from trader import (has_open_position, can_pyramid,
+                from trade_router import (has_open_position, can_pyramid,
                                     get_open_positions_detail)
 
                 # ── 1. 돌파 신호 체크 ────────────────────────────────────
@@ -4848,7 +4898,11 @@ def scan():
         print(f"  🤖 자동매매 모드 활성")
     print(f"{'='*55}")
 
-    if not DRY_RUN and not fast_mode:
+    if (
+        not DRY_RUN
+        and not fast_mode
+        and runtime_context()["state_namespace"] == "bybit"
+    ):
         maybe_send_bithumb_ma200_alert(send_market_screening)
         maybe_send_krx_ma200_alert(send_market_screening)
         maybe_send_kis_api_review_reminder(send)

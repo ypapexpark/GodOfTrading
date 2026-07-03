@@ -1,8 +1,7 @@
-"""Bybit 선물 OHLCV 수집 + 실시간 Market Radar."""
+"""USDT perpetual OHLCV collection + real-time market radar."""
 import json
 import time
 import warnings
-from pathlib import Path
 
 warnings.filterwarnings(
     "ignore",
@@ -28,6 +27,7 @@ from config import (BTC_SYNC_BETA_LOOKBACK, BTC_SYNC_LOOKBACK,
                     HYPERLIQUID_TOP_N,
                     VOLUME_SURGE_MIN_24H_USD, VOLUME_SURGE_MIN_DELTA_PCT,
                     VOLUME_SURGE_MIN_DELTA_USD)
+from venue_runtime import market_data_venue, namespaced_data_path, venue_label
 
 _exchange   = None
 _radar_cache: dict = {"data": [], "ts": 0}
@@ -35,8 +35,8 @@ _ticker_cache: dict = {"rows": [], "ts": 0}
 _btc_sync_cache: dict = {"data": [], "ts": 0}
 _hyperliquid_cache: dict = {"data": [], "ts": 0}
 _RADAR_TTL  = 900   # 15분 캐시 (스캔 5분마다 재사용)
-_RADAR_STATE_FILE = Path(__file__).parent / "market_radar_state.json"
-_HYPERLIQUID_STATE_FILE = Path(__file__).parent / "hyperliquid_radar_state.json"
+_RADAR_STATE_FILE = namespaced_data_path("market_radar_state.json", market_data_venue())
+_HYPERLIQUID_STATE_FILE = namespaced_data_path("hyperliquid_radar_state.json", market_data_venue())
 
 # 레버드/인덱스 토큰 제외 키워드
 _EXCLUDE = {"BULL", "BEAR", "UP", "DOWN", "3L", "3S", "HALF", "SOXL", "TQQQ"}
@@ -52,14 +52,37 @@ STOCK_SYMBOLS = ["NVDA/USDT", "TSLA/USDT"]
 def _get_exchange():
     global _exchange
     if _exchange is None:
-        # defaultType=future → BTC/USDT 요청 시 자동으로 선물 매핑
-        _exchange = ccxt.bybit({"options": {"defaultType": "future"}})
+        venue = market_data_venue()
+        if venue == "binance":
+            _exchange = ccxt.binanceusdm({"enableRateLimit": True})
+        else:
+            _exchange = ccxt.bybit({
+                "options": {"defaultType": "future"},
+                "enableRateLimit": True,
+            })
     return _exchange
+
+
+def _market_symbol(exchange, symbol: str) -> str:
+    try:
+        exchange.load_markets()
+        if symbol in exchange.markets:
+            return symbol
+        futures_symbol = f"{symbol}:USDT" if ":" not in symbol else symbol
+        if futures_symbol in exchange.markets:
+            return futures_symbol
+        compact = symbol.replace("/", "")
+        for market_symbol, market in exchange.markets.items():
+            if market.get("id") == compact or market_symbol.split(":")[0] == symbol:
+                return market_symbol
+    except Exception:
+        pass
+    return symbol
 
 
 def fetch_ohlcv(symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
     ex  = _get_exchange()
-    raw = ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+    raw = ex.fetch_ohlcv(_market_symbol(ex, symbol), timeframe=timeframe, limit=limit)
     df  = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     df.set_index("timestamp", inplace=True)
@@ -89,7 +112,7 @@ def _save_radar_state(state: dict) -> None:
 
 
 def _fetch_futures_ticker_rows() -> list[dict]:
-    """Bybit USDT 선물 티커를 표준 row로 수집하고 15분 캐시한다."""
+    """Collect active venue USDT perpetual tickers as standard rows."""
     global _ticker_cache
     now = time.time()
     if now - _ticker_cache["ts"] < _RADAR_TTL and _ticker_cache["rows"]:
@@ -100,7 +123,7 @@ def _fetch_futures_ticker_rows() -> list[dict]:
 
     rows = []
     for raw_sym, t in tickers.items():
-        # 바이빗 선물 형식: 'BTC/USDT:USDT'
+        # USDT perpetual format: 'BTC/USDT:USDT'
         if not raw_sym.endswith(":USDT"):
             continue
 
@@ -141,7 +164,7 @@ def _fetch_futures_ticker_rows() -> list[dict]:
 
 def fetch_market_radar(n: int = 10) -> list[dict]:
     """
-    바이빗 선물 24h 거래대금 상위 n종목 실시간 조회.
+    활성 거래소 선물 24h 거래대금 상위 n종목 실시간 조회.
     15분 캐시 — 스캔(5분)마다 API 재호출 방지.
 
     반환:
@@ -157,7 +180,7 @@ def fetch_market_radar(n: int = 10) -> list[dict]:
       ...
     ]
 
-    Bybit 선물 티커는 'BTC/USDT:USDT' 형식 → 'BTC/USDT'로 변환해서 반환.
+    선물 티커는 'BTC/USDT:USDT' 형식 → 'BTC/USDT'로 변환해서 반환.
     """
     global _radar_cache
     now = time.time()
@@ -185,7 +208,7 @@ def fetch_market_radar(n: int = 10) -> list[dict]:
         return radar
 
     except Exception as e:
-        print(f"[Radar] 조회 실패: {e} — 이전 캐시 사용")
+        print(f"[Radar:{venue_label(market_data_venue())}] 조회 실패: {e} — 이전 캐시 사용")
         return _radar_cache.get("data", [])
 
 
@@ -308,8 +331,8 @@ def _hyperliquid_post(body: dict, timeout: float = 8.0):
     return res.json()
 
 
-def _hyperliquid_to_bybit_symbol(coin: str, bybit_by_coin: dict) -> str:
-    """Hyperliquid 코인명을 우리 Bybit 심볼 형식으로 보수적으로 매핑한다."""
+def _hyperliquid_to_venue_symbol(coin: str, venue_by_coin: dict) -> str:
+    """Hyperliquid coin names are conservatively mapped to the active CEX symbol."""
     raw = str(coin or "").strip()
     if not raw or ":" in raw:
         return ""
@@ -330,7 +353,7 @@ def _hyperliquid_to_bybit_symbol(coin: str, bybit_by_coin: dict) -> str:
         if c in seen:
             continue
         seen.add(c)
-        sym = bybit_by_coin.get(c)
+        sym = venue_by_coin.get(c)
         if sym:
             return sym
     return ""
@@ -395,8 +418,8 @@ def fetch_hyperliquid_lead_radar(n: int = 8) -> list[dict]:
     매매전략 5: Hyperliquid Lead Radar.
 
     Hyperliquid의 거래량/OI/단기 캔들 모멘텀을 읽기 전용으로 수집한 뒤,
-    Bybit에도 상장된 종목만 후보로 돌려준다. 이 레이더는 Hyperliquid에서
-    주문하지 않고, Bybit 기존 전략의 스캔 대상/진입 근거/가산점으로만 쓰인다.
+    활성 CEX 거래소에도 상장된 종목만 후보로 돌려준다. 이 레이더는
+    Hyperliquid에서 주문하지 않고, 기존 전략의 스캔 대상/진입 근거/가산점으로만 쓰인다.
     """
     global _hyperliquid_cache
     now = time.time()
@@ -404,9 +427,9 @@ def fetch_hyperliquid_lead_radar(n: int = 8) -> list[dict]:
         return _hyperliquid_cache["data"]
 
     try:
-        bybit_rows = _fetch_futures_ticker_rows()
-        bybit_by_coin = {row["coin"]: row["symbol"] for row in bybit_rows}
-        bybit_by_symbol = {row["symbol"]: row for row in bybit_rows}
+        venue_rows = _fetch_futures_ticker_rows()
+        venue_by_coin = {row["coin"]: row["symbol"] for row in venue_rows}
+        venue_by_symbol = {row["symbol"]: row for row in venue_rows}
 
         raw = _hyperliquid_post({"type": "metaAndAssetCtxs"})
         if not isinstance(raw, list) or len(raw) < 2:
@@ -429,7 +452,7 @@ def fetch_hyperliquid_lead_radar(n: int = 8) -> list[dict]:
             if not coin or any(kw in coin.upper() for kw in _EXCLUDE):
                 continue
 
-            symbol = _hyperliquid_to_bybit_symbol(coin, bybit_by_coin)
+            symbol = _hyperliquid_to_venue_symbol(coin, venue_by_coin)
             if not symbol:
                 continue
 
@@ -448,9 +471,9 @@ def fetch_hyperliquid_lead_radar(n: int = 8) -> list[dict]:
             oi_growth_pct = (
                 (oi_usd / prev_oi_usd - 1) * 100 if prev_oi_usd > 0 else 0.0
             )
-            bybit_row = bybit_by_symbol.get(symbol, {})
-            bybit_change = _safe_float(bybit_row.get("change_pct"))
-            lead_gap = day_change - bybit_change
+            venue_row = venue_by_symbol.get(symbol, {})
+            venue_change = _safe_float(venue_row.get("change_pct"))
+            lead_gap = day_change - venue_change
 
             snapshot[symbol] = {
                 "coin": coin,
@@ -465,7 +488,8 @@ def fetch_hyperliquid_lead_radar(n: int = 8) -> list[dict]:
                 "hyperliquid_coin": coin,
                 "mark": mark,
                 "day_change_pct": day_change,
-                "bybit_change_pct": bybit_change,
+                "bybit_change_pct": venue_change,
+                "venue_change_pct": venue_change,
                 "lead_gap_pct": lead_gap,
                 "volume_usd": volume_usd,
                 "volume_label": _vol_label(volume_usd),

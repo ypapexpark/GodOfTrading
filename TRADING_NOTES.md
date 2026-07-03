@@ -1,5 +1,72 @@
 # GodOfTrading Trading Notes
 
+## 2026-07-03 Polymarket Paper Bot
+
+- Initial mode: read-only paper trading only. No wallet signing, no live Polymarket orders.
+- Runner:
+  - `polymarket_paper_bot.py`
+  - optional LaunchAgent: `com.polymarket.paper.plist` every 60 seconds
+- Report route:
+  - Uses existing `publisher.send_review()`, so Polymarket paper reports go to the same trade/review Telegram route as the 4-hour CryptoSignal report.
+- Files:
+  - state: `polymarket_paper_state.json`
+  - paper trade journal: `polymarket_paper_journal.jsonl`
+  - observed candidates: `polymarket_paper_candidates.jsonl`
+- Default paper logic:
+  - Target market: BTC Up/Down 5m.
+  - Data: public Polymarket Gamma/CLOB + public Bybit BTC 1m candles.
+  - Model: estimates fair Up probability from current BTC price, `priceToBeat`, 1m volatility, and time remaining.
+  - Entry: simulates a FOK taker buy only when model probability exceeds average fill price plus Polymarket crypto taker fee and a safety edge buffer.
+  - Settlement: waits for Polymarket resolution metadata/outcome prices, then records paper PnL.
+- Environment overrides:
+  - `POLYMARKET_PAPER_ORDER_USD` default `100`
+  - `POLYMARKET_PAPER_MIN_EDGE` default `0.025`
+  - `POLYMARKET_PAPER_REPORT_INTERVAL` default `14400`
+  - `POLYMARKET_PAPER_RECURRENCE` default `5m`
+  - `POLYMARKET_PAPER_MILESTONE_REPORT_AT` installed as `2026-07-10 06:00`
+- Scheduled milestone:
+  - The running LaunchAgent should send a one-time 1-week paper result report at 2026-07-10 06:00 KST.
+- Decision rule before live consideration:
+  - Require at least 500 settled paper trades or 2 full weeks of data.
+  - Judge by net PnL after simulated taker fee/slippage, not raw win rate.
+  - Do not enable live betting unless jurisdiction, KYC/access rules, and API custody risk are explicitly reviewed.
+
+## 2026-07-03 Binance Venue Review
+
+- Binance should be considered as a second execution venue because user capital is larger there.
+- Do not replace Bybit first. Run Binance as a separate venue process with isolated state, then cut over later if it performs better.
+- Why Binance can help:
+  - Deep BTC/ETH/SOL/major alt liquidity.
+  - Larger existing seed reduces transfer friction.
+  - Useful venue diversification if Bybit API/order routing fails.
+  - Can compare fills against Bybit for the same GOT signals.
+- Main risks:
+  - Region/product availability and account-specific fee tier must be checked inside the account.
+  - Binance API has strict request/order limits, timestamp/recvWindow requirements, and unknown-execution handling on `503`; duplicate-order prevention is mandatory.
+  - Larger seed increases behavioral risk: venue adapter must enforce per-venue and total-portfolio caps before live orders.
+- Current implementation:
+  - `exchange_venue_compare.py` compares public Bybit/Binance USD-M books and slippage for the same symbols.
+  - `binance_trader.py` implements a Binance USD-M execution adapter with explicit live guard.
+  - `trade_router.py` keeps Bybit as the default venue and routes execution/account calls to Binance only when `AUTO_TRADE_EXCHANGE=binance`.
+  - `venue_runtime.py` isolates runtime venue, market-data venue, and local state namespace.
+  - Binance live orders require both a Binance runtime process and `BINANCE_LIVE_TRADING_ENABLED=true`.
+  - Binance state and logs use `_binance` suffix files so Bybit and Binance can run side by side.
+  - LaunchAgent templates:
+    - Bybit: `com.cryptosignal.plist`, `com.cryptosignal.fast.plist`
+    - Binance: `com.cryptosignal.binance.plist`, `com.cryptosignal.binance.fast.plist`
+- Required Binance env keys before live use:
+  - `BINANCE_API_KEY`
+  - `BINANCE_API_SECRET`
+  - `BINANCE_LIVE_TRADING_ENABLED=true`
+  - For manual single-process Binance runs only: `AUTO_TRADE_EXCHANGE=binance`, `GOT_MARKET_DATA_EXCHANGE=binance`, `GOT_STATE_NAMESPACE=binance`
+- Recommended rollout from here:
+  1. Keep Bybit LaunchAgents active and add Binance LaunchAgents with small size or live guard disabled.
+  2. Confirm Binance OHLCV, balance, position snapshot, SL, TP, and close detection.
+  3. Compare Bybit vs Binance journals by venue.
+  4. Enable tiny Binance live size only after read-only/account smoke tests pass.
+  5. Move larger Binance seed only after expectancy, slippage, and operational reliability beat or match Bybit for at least 2 weeks.
+  6. If Binance becomes the only venue, unload the Bybit LaunchAgents and keep the Binance state namespace as-is.
+
 ## 2026-07-01 Dynamic Surge Expansion
 
 - Goal: catch more TAIKO-style trades where volume surges first, volatility expands, and a strong directional setup follows.

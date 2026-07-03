@@ -249,9 +249,13 @@ SIZING_MIN_BEST_RR_BY_TIER = {
 # "손실이 무서워서 진입 자체를 막는" 대신 계좌위험 하드캡 안에서 축소/예외 진입한다.
 HIGH_OPPORTUNITY_MIN_MARGIN_ROI_PCT = 18.0
 HIGH_OPPORTUNITY_MIN_TP1_MARGIN_ROI_PCT = 7.0
-HIGH_OPPORTUNITY_MAX_ACCOUNT_RISK_PCT = 0.1000
-# 일손실 한도의 N배 도달 시 고기대수익 예외 해제 (10.0 = 1000%로 사실상 무력화 → 1.5로 수정)
-HIGH_OPPORTUNITY_DAILY_LOSS_DISABLE_AT = 1.50
+# 2026-07-03 리뷰: 0.10 → 0.05. 예외 진입 1건의 계좌위험이 하루 손실예산(5%)을
+# 넘지 못하게 정합화. PYTH 사례에서 하드캡 $10.42(≈16%)로 -$2.95 단일손실 발생.
+HIGH_OPPORTUNITY_MAX_ACCOUNT_RISK_PCT = 0.0500
+# 일손실 한도의 N배 도달 시 고기대수익 예외 해제.
+# 2026-07-03 리뷰: 1.50 → 1.00. 실현 일손실이 한도 100%를 채우면 예외 진입 금지.
+# (07/03 SHIB1000: 일손실 $5.18/$3.50(148%) 상태에서 예외 진입 → -$1.09 추가손실)
+HIGH_OPPORTUNITY_DAILY_LOSS_DISABLE_AT = 1.00
 # 계좌 DD가 이 비율 이상이면 고기대수익 예외 차단 (0.50=50%로 너무 관대 → 0.15로 수정)
 HIGH_OPPORTUNITY_DD_DISABLE_PCT = 0.15
 
@@ -259,7 +263,11 @@ HIGH_OPPORTUNITY_DD_DISABLE_PCT = 0.15
 # TAIKO/ZBT처럼 TP 수익률은 매우 크지만 SL폭도 큰 종목은 고레버리지로 들어가면
 # 손절 위험 때문에 증거금이 오히려 작아진다. 이런 자리는 레버리지를 낮춰
 # 같은 계좌위험 안에서 증거금을 크게 쓰는 방식이 더 효율적이다.
-PROFIT_SURGE_SIZING_ENABLED = True
+# 2026-07-03 리뷰: True → False. 실측 9건 승률 22% (2승 7패), 순손익 -$9.03, EV -$1.00/건.
+# 타이트SL(최소 2.5%)이 구조적 무효화 지점보다 안쪽에 놓여 조기 손절 반복
+# (NOM -2.09, BIRB -1.73, TAIKO -1.96, PYTH -2.95 등). 재활성화하려면
+# 15건 이상 표본에서 EV 양수 입증 필요.
+PROFIT_SURGE_SIZING_ENABLED = False
 PROFIT_SURGE_MIN_MARGIN_ROI_PCT = 80.0
 PROFIT_SURGE_MIN_TP1_MARGIN_ROI_PCT = 35.0
 PROFIT_SURGE_MIN_CONFIRMED = 6
@@ -270,7 +278,8 @@ PROFIT_SURGE_MAX_ACCOUNT_RISK_PCT = 0.2000
 PROFIT_SURGE_TARGET_MARGIN_PCT = 1.00
 # 초고수익률 자리는 기존 피봇 SL이 지나치게 멀면 증거금이 작아진다.
 # TP는 유지하고 SL만 ATR/타임프레임 기준으로 당겨서 "틀리면 빠르게 인정"한다.
-PROFIT_SURGE_TIGHT_STOP_ENABLED = True
+# 2026-07-03 리뷰: 시드극대화와 함께 비활성화 (동일 근거 — 22% 승률 코호트).
+PROFIT_SURGE_TIGHT_STOP_ENABLED = False
 PROFIT_SURGE_STOP_MAX_PCT_BY_TF = {
     "15m": 0.075,
     "1h":  0.090,
@@ -320,6 +329,11 @@ QTY_STEP_MAP = {
 # 크립토 ATR 기준 1.5 ATR = 정상적인 가격 진동 바깥 = 다이버전스 무효화 시만 손절
 # 0.3 ATR(구버전) = 캔들 꼬리만으로 손절 → 승률 파괴의 근본 원인
 SL_ATR_MULT = 1.5
+
+# Initial stop-loss should not be so wide that a normal SL consumes most of the
+# position margin.  If `SL price move % * leverage` exceeds this cap, main.py
+# compresses leverage before sizing the trade.
+INITIAL_SL_MARGIN_ROI_CAP_PCT = 35.0
 
 # ─── 레버리지 추천표 (신호강도 × 타임프레임) ────────────────────────────────
 # 100억 프로젝트: 고신뢰도 자리엔 최대 레버리지 투입, 복리로 스케일업
@@ -449,12 +463,14 @@ ASYMMETRIC_SYMBOL_DAILY_LOSS_LIMIT = 1
 # 성과 있는 전략: EMA눌림목+거래량급등 (67%, +$5.79), EMA눌림목+돌파 (75%, +$1.06)
 # 배제된 전략: BTC Sync Momentum (38%, -$10.27), 돌파 (0%), 거래량급등추세 (0%)
 AUTO_TRADE_STRATEGY_WHITELIST: set = {
-    "EMA눌림목",
+    # 2026-07-03 리뷰: 순수 "EMA눌림목"(거래량/돌파 확인 없음) 제거.
+    # 실측 5건 전부 SHORT, EV -$0.544/건 (BTC -3.13 포함, 순손익 -$2.72).
+    # 거래량급등/돌파 확인이 붙은 조합만 실거래 유지 (확인 조합이 승률 원천).
     "EMA눌림목+거래량급등",
     "EMA눌림목+돌파",
     "EMA눌림목+거래량급등+돌파",
     "hidden_bullish",
-    "hidden_bearish",
+    "hidden_bearish",  # 3건 -$2.67 — 표본 부족으로 유지하되 관찰 대상
 }
 # SHORT 방향 전체 차단은 하지 않는다.
 # EMA눌림목(하락), hidden_bearish 등 EMA 계열 숏 신호는 정상 실거래.
@@ -574,6 +590,10 @@ MTF_SOFT_HIDDEN_RISK_MULT   = 0.60
 MTF_SOFT_MIN_CONFIRMED     = 5
 MTF_SOFT_MIN_DIVERGENCE    = 4
 MTF_SOFT_MIN_VOL           = 1.00
+# 2026-07-03 리뷰: MTF 완전역방향 소프트 통과를 LONG 전용으로 제한.
+# 실측 — 통과 LONG 10건 +$1.83 (EV 양수) / 통과 SHORT 5건 2승 3패 -$3.39
+# (PYTH -2.95, TAIKO -1.96 포함). SHORT는 상위봉 역방향 시 무조건 차단.
+MTF_SOFT_OVERRIDE_LONG_ONLY = True
 
 # MODERATE 신호는 알림만 — 자동매매 제외
 MODERATE_AUTO_TRADE = False

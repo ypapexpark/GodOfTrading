@@ -4,18 +4,17 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.cryptosignal.fast</string>
+    <string>com.polymarket.paper</string>
 
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/python3</string>
-        <string>/Users/ghp/Projects/GodOfTrading/main.py</string>
-        <string>--fast-radar</string>
+        <string>/Users/ghp/Projects/GodOfTrading/polymarket_paper_bot.py</string>
     </array>
 
-    <!-- 3분마다 핫후보만 빠르게 재확인. 전체 5분 스캔은 com.cryptosignal이 유지한다. -->
+    <!-- 1분마다 BTC 5m Polymarket paper 후보 확인 + 정산. 실주문 없음. -->
     <key>StartInterval</key>
-    <integer>180</integer>
+    <integer>60</integer>
 
     <key>WorkingDirectory</key>
     <string>/Users/ghp/Projects/GodOfTrading</string>
@@ -26,18 +25,14 @@
         <string>/Users/ghp</string>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
-        <key>AUTO_TRADE_EXCHANGE</key>
-        <string>bybit</string>
-        <key>GOT_MARKET_DATA_EXCHANGE</key>
-        <string>bybit</string>
-        <key>GOT_STATE_NAMESPACE</key>
-        <string>bybit</string>
+        <key>POLYMARKET_PAPER_MILESTONE_REPORT_AT</key>
+        <string>2026-07-10 06:00</string>
     </dict>
 
     <key>StandardOutPath</key>
-    <string>/tmp/godoftrading_fast.log</string>
+    <string>/tmp/polymarket_paper.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/godoftrading_fast_err.log</string>
+    <string>/tmp/polymarket_paper_err.log</string>
 
     <key>RunAtLoad</key>
     <true/>

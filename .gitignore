@@ -5,11 +5,19 @@ secrets/
 
 # ── 거래 상태 / 이력 (로컬 전용) ────────────────────────────
 trade_state.json
+trade_state_*.json
 trade_candidates.jsonl
+trade_candidates_*.jsonl
 trade_execution_journal.jsonl
+trade_execution_journal_*.jsonl
 market_radar_state.json
+market_radar_state_*.json
 bithumb_screener_state.json
 hyperliquid_radar_state.json
+hyperliquid_radar_state_*.json
+polymarket_paper_state.json
+polymarket_paper_candidates.jsonl
+polymarket_paper_journal.jsonl
 state.json
 
 # ── Python 캐시 ───────────────────────────────────────────────

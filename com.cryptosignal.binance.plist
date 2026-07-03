@@ -4,18 +4,17 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.cryptosignal.fast</string>
+    <string>com.cryptosignal.binance</string>
 
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/python3</string>
         <string>/Users/ghp/Projects/GodOfTrading/main.py</string>
-        <string>--fast-radar</string>
+        <string>--auto-trade</string>
     </array>
 
-    <!-- 3분마다 핫후보만 빠르게 재확인. 전체 5분 스캔은 com.cryptosignal이 유지한다. -->
     <key>StartInterval</key>
-    <integer>180</integer>
+    <integer>300</integer>
 
     <key>WorkingDirectory</key>
     <string>/Users/ghp/Projects/GodOfTrading</string>
@@ -27,17 +26,17 @@
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
         <key>AUTO_TRADE_EXCHANGE</key>
-        <string>bybit</string>
+        <string>binance</string>
         <key>GOT_MARKET_DATA_EXCHANGE</key>
-        <string>bybit</string>
+        <string>binance</string>
         <key>GOT_STATE_NAMESPACE</key>
-        <string>bybit</string>
+        <string>binance</string>
     </dict>
 
     <key>StandardOutPath</key>
-    <string>/tmp/godoftrading_fast.log</string>
+    <string>/tmp/godoftrading_binance.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/godoftrading_fast_err.log</string>
+    <string>/tmp/godoftrading_binance_err.log</string>
 
     <key>RunAtLoad</key>
     <true/>
