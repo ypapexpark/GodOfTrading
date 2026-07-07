@@ -201,10 +201,26 @@ ROI_RESCUE_MIN_BEST_RR = 1.4
 # 실거래 1회당 최소 투입 증거금. 단, 이 하한을 맞추면 일손실 한도를 넘는 경우는 진입하지 않는다.
 # 소액 계좌에서 $20 하한이 계좌의 31%를 강제 투입해 리스크 과대가 발생하던 문제 수정.
 MIN_TRADE_MARGIN_USD = 8.0
-MIN_TRADE_MARGIN_MAX_BALANCE_PCT = 0.25  # 단일 포지션 잔고 비중 하드캡 (25%)
+MIN_TRADE_MARGIN_MAX_BALANCE_PCT = 0.12  # 2026-07-06: 0.25 → 0.12 (2026-07-07 원복). 단일 포지션 최대 계좌 12%
 # 목표 증거금/일손실 소프트캡 때문에 좋은 자리가 사라지지 않도록 쓰는 축소진입 하한.
 # 실제 거래소 최소수량은 주문 직전 calc_qty()가 다시 확인한다.
 MIN_FALLBACK_TRADE_MARGIN_USD = 1.0
+
+# ─── Binance 고정 증거금 모드 (2026-07-06 사용자 지시, 2026-07-07 원복) ─────
+# Binance 실계좌가 2일 -17.9% DD를 본 뒤, 사용자가 "절대손실 안정화"를 위해
+# Binance venue는 %기반/위험기반 사이징 결과와 무관하게 항상 고정 증거금으로
+# 진입하라고 지시. 계좌 잔고가 더 빠져도 이 값을 더 줄이지 않는다(잔고 대비 %가
+# 아니라 절대 달러 고정). Bybit은 기존 %/위험기반 사이징 그대로 유지.
+# 참고 기준점: 이 $100 유닛이 실현손익 누적으로 BINANCE_FIXED_MARGIN_DOUBLE_AT
+# ($200)에 도달하면 사용자가 유닛 사이즈를 재조정할 예정(자동 이스컬레이션은
+# 과설계 방지를 위해 지금 구현하지 않음 — 수동 재조정 트리거용 참고값).
+# 안전장치: 포트폴리오 상관캡(방향쏠림/마진사용/동시포지션/총SL위험)과
+# 레버리지 압축(INITIAL_SL_MARGIN_ROI_CAP_PCT=35)은 그대로 적용된다. 즉
+# $100 고정이라도 넓은 SL은 레버리지가 압축돼 단건 최악손실이 ~증거금의 35%
+# (=$35)로 bounded되고, 롱 알트 동시보유는 방향쏠림캡이 막는다.
+# 0 또는 None으로 두면 Binance도 기존 사이징 사용(고정모드 해제).
+BINANCE_FIXED_MARGIN_USD = 100.0
+BINANCE_FIXED_MARGIN_DOUBLE_AT = 200.0  # 참고값(자동동작 없음): 유닛 2배 도달 시 수동 재조정 신호
 
 # 확신도 높은 자리는 "맞췄는데 수익금이 너무 작음"을 막기 위해 증거금 하한을 따로 둔다.
 # 목표 증거금 = max(고정 USD, 잔고 비율). 단, 일손실/DD 하드스톱은 그대로 유지한다.
@@ -216,12 +232,15 @@ CONVICTION_MARGIN_USD_BY_TIER = {
     "ELITE": 20.0,
     "GOLDEN": 25.0,
 }
+# 2026-07-06 긴급 하향: VERY STRONG/ELITE 신호마다 계좌의 20%를 강제베팅하던 게
+# 오버사이징 근본원인(넓은 SL 20~27%와 겹쳐 단건위험 4%+로 폭증). 하한 대폭 축소.
+# 2026-07-07: 무단 되돌리기 발견 후 원복.
 CONVICTION_MARGIN_PCT_BY_TIER = {
     "BASE": 0.08,
     "STRONG": 0.12,
-    "VERY STRONG": 0.20,
-    "ELITE": 0.20,
-    "GOLDEN": 0.25,
+    "VERY STRONG": 0.08,
+    "ELITE": 0.08,
+    "GOLDEN": 0.10,
 }
 
 # $20 이상 시드 상향은 기대ROI만으로 결정하지 않는다.
@@ -256,7 +275,10 @@ HIGH_OPPORTUNITY_MIN_TP1_MARGIN_ROI_PCT = 7.0
 HIGH_OPPORTUNITY_MIN_TP1_RR = 1.30
 # 2026-07-03 리뷰: 0.10 → 0.05. 예외 진입 1건의 계좌위험이 하루 손실예산(5%)을
 # 넘지 못하게 정합화. PYTH 사례에서 하드캡 $10.42(≈16%)로 -$2.95 단일손실 발생.
-HIGH_OPPORTUNITY_MAX_ACCOUNT_RISK_PCT = 0.0500
+# 2026-07-06 긴급 하향: 5.0% → 1.8%. 고기대수익 예외조차 단건 5% 위험은 과다.
+# MAX_ACCOUNT_RISK_PCT(1.5%)보다 약간만 높게 둬 예외 자리도 실계좌 생존 범위로 제한.
+# 2026-07-07: 무단 되돌리기 발견 후 원복.
+HIGH_OPPORTUNITY_MAX_ACCOUNT_RISK_PCT = 0.0180
 # 2026-07-03 3차 수정: 당일 손실액으로 고기대수익 예외를 막는 임계값
 # (구 HIGH_OPPORTUNITY_DAILY_LOSS_DISABLE_AT)을 아예 제거했다.
 # 손실은 손실이고 좋은 자리는 그대로 — 당일 손실과 무관하게 TP1 R:R 하한을
@@ -403,8 +425,13 @@ RISK_PCT_BY_STRENGTH = {
     "ELITE":       0.0200,
 }
 SCALP_RISK_MULT         = 0.55
-GOLDEN_ENTRY_RISK_PCT   = 0.0400
-MAX_ACCOUNT_RISK_PCT    = 0.0450
+# 2026-07-06 긴급 하향: 단건 계좌위험 하드캡. 기존 4.0~4.5%는 마이크로 계좌($60)
+# 복리 기준값 — Binance $1449 실계좌에서 단건 -$60(4%) 손실을 반복 생성, 2일 -17.9% DD.
+# 자산운용 표준(0.5~1.5%)에 맞춰 축소. 이 캡이 conviction 하한/high_opportunity를
+# 포함한 모든 사이징 경로의 최종 상한이므로 단건 위험을 근본적으로 제한한다.
+# 2026-07-07: 무단 되돌리기 발견 후 원복(검증된 최종값).
+GOLDEN_ENTRY_RISK_PCT   = 0.0150
+MAX_ACCOUNT_RISK_PCT    = 0.0150
 MAX_DAILY_LOSS_PCT      = 0.0500
 AUTO_TRADE_DIAGNOSTICS  = True
 CANDIDATE_LOG_FILE      = "trade_candidates.jsonl"
@@ -435,6 +462,30 @@ ASYMMETRIC_MIN_EDGE_FLOOR = -0.15
 ASYMMETRIC_RISK_MULT = 1.08
 ASYMMETRIC_FUNDING_OVERRIDE_MULT = 0.70
 ASYMMETRIC_TIMING_OVERRIDE_MULT = 0.70
+
+# ─── 과열도(VWAP 이격) 하드 차단 ────────────────────────────────────────────
+# 2026-07-07: 실측 손실사례(US/USDT, EMA눌림목+거래량급등, vol11.44x, 비대칭러너
+# 모드) — 진입 시점 1h VWAP 대비 +26.8% 이격(정상 눌림목 허용치 0.6%의 40배+)인데도
+# asymmetric_mode/고거래량 예외가 VWAP추격 하드차단을 우회해 리스크×0.70 소프트
+# 오버라이드로 그대로 진입, -$21 손실. "눌림목"은 초입 되돌림 진입이어야지 이미
+# 다 오른 뒤(블로우오프 탑 직전)의 되돌림이면 안 된다. 이 한도(%) 이상 이격되면
+# asymmetric_mode/고확신 등급과 무관하게 무조건 차단한다 — 봇이 3~5분마다
+# 스캔하므로 건강한 초입 눌림목은 놓치지 않고 곧 다시 잡힌다.
+EXTENSION_HARD_BLOCK_PCT = 8.0
+
+# ─── 스캘핑 복리 모드 ────────────────────────────────────────────────────────
+# 2026-07-07 사용자 요청: 방향판단은 가장 신뢰도 높은 신호(EMA눌림목+거래량급등 계열,
+# 오늘 검증 승률 63.6%+)에 맡기고, 포지션은 길게 안 들고 빠르게 TP1 위주로 확정해서
+# 복리 회전을 빠르게 한다. SL은 임의 %로 조이지 않고 기존 ATR 기반 그대로 사용
+# (오늘 확인: %/레버리지 기반 타이트 SL·래칫은 캔들 노이즈에 취약해 효과 불확실했음).
+# 사이징은 기존 %기반 그대로 유지 — 잔고 성장에 따라 자동 복리 반영(별도 장치 불필요).
+SCALP_COMPOUND_ENABLED = True
+SCALP_COMPOUND_TF = {"15m"}
+SCALP_COMPOUND_STRATEGIES = {
+    "EMA눌림목+거래량급등", "EMA눌림목+돌파", "EMA눌림목+거래량급등+돌파",
+}
+SCALP_COMPOUND_TP1_PCT = 70  # 기존 TP1 가격에 물량 70%를 확정, 나머지 30%만 다음 목표가로
+
 ASYMMETRIC_TF = {"15m", "1h", "4h", "1d"}
 ASYMMETRIC_TP_BY_STRENGTH = {
     "STRONG":      [{"pct": 35, "atr_mult": 1.4}, {"pct": 30, "atr_mult": 3.0}, {"pct": 35, "atr_mult": 5.0}],
@@ -478,11 +529,35 @@ AUTO_TRADE_STRATEGY_WHITELIST: set = {
     "EMA눌림목+거래량급등+돌파",
     "hidden_bullish",
     "hidden_bearish",  # 3건 -$2.67 — 표본 부족으로 유지하되 관찰 대상
+    # 2026-07-07: 일반(non-hidden) 다이버전스 편입. 사용자가 다이버전스를 선행지표로
+    # 신뢰하나 실거래 표본이 8건(대부분 hidden)뿐이라 EV 미검증 → 표본 축적 목적으로
+    # 실거래 허용하되 아래 DIVERGENCE_GENERAL_OBSERVATION_RISK_MULT로 소액 관찰모드 진입.
+    # divergence.py _check_bullish/_check_bearish가 signal_type="bullish"/"bearish"로 생성.
+    "bullish",
+    "bearish",
 }
 # SHORT 방향 전체 차단은 하지 않는다.
 # EMA눌림목(하락), hidden_bearish 등 EMA 계열 숏 신호는 정상 실거래.
 # 나쁜 숏 전략(BTC Macro Short, 돌파 숏 등)은 이미 화이트리스트로 차단됨.
 BLOCK_SHORT_AUTO_TRADE = False
+
+# ─── 비-EMA(거래량급등) SHORT 강등 ──────────────────────────────────────────
+# 2026-07-06 진단: live SHORT을 방향+전략으로 분해하니 순수 EMA눌림목 계열 SHORT
+# (EMA눌림목/EMA눌림목+돌파, core "EMA 눌림목")은 10건 70% WR로 정상인데, "거래량급등"
+# 조합 SHORT(EMA눌림목+거래량급등[+돌파], core "거래량 급등 추세")은 SHORT일 때만
+# EV음수(승률 25~43%, 순손익 마이너스)였다. 같은 core 전략도 LONG은 최고성과(65.6%)라
+# 방향 무관 차단은 부적절 → SHORT 방향의 거래량급등 조합만 소액화한다.
+# 하드차단 아님(BLOCK_SHORT_AUTO_TRADE=False 철학 유지) + 표본<20이라 신중히 소프트 강도.
+# 장세게이트 배율에 곱해져 최종 SHORT 리스크를 추가로 낮춘다. 1.0=강등해제.
+SHORT_NON_EMA_RISK_MULT = 0.40
+
+# ─── 일반 다이버전스 관찰모드 사이징 ────────────────────────────────────────
+# 2026-07-07: 일반(non-hidden) bullish/bearish 다이버전스를 화이트리스트에 편입하되,
+# 실거래 표본이 없어 EV 미검증이므로 검증된 전략처럼 정상 사이징하지 않고 소액으로
+# "관찰모드" 진입해 표본만 축적한다(hidden 8건 코호트와 동급의 미검증 취급).
+# hidden_bullish/hidden_bearish는 대상 아님 — 기존 정상 사이징 유지.
+# 방향 무관(bullish=LONG, bearish=SHORT) 적용. 표본 20건+ 쌓이면 EV 재평가 후 배율 상향/제거 결정.
+DIVERGENCE_GENERAL_OBSERVATION_RISK_MULT = 0.35
 
 REALIZED_TRADE_LEARNING_ENABLED = True
 REALIZED_BLOCK_EXACT_MIN_TRADES = 2
@@ -507,16 +582,25 @@ STRONG_LIVE_MIN_VOL      = 1.10
 # ─── 포트폴리오 증거금 기반 진입 허용 엔진 ─────────────────────────────────
 # 고정 "동시 N개" 한도 대신, 계좌 전체 증거금 사용률과 총 손절 위험으로 신규 진입을 제어한다.
 # 좋은 신호를 개수 제한으로 놓치지 않되, 전체 계좌가 한 번에 과도하게 훼손되지 않게 한다.
-PORTFOLIO_MARGIN_USAGE_CAP = 0.80
-PORTFOLIO_MARGIN_USAGE_HIGH_OPPORTUNITY_CAP = 0.90
-# 동시 SL 위험 캡: 0.50(50%) → 0.25(25%). MAX_DAILY_LOSS_PCT=5%와 정합성 확보.
-PORTFOLIO_TOTAL_SL_RISK_CAP_PCT = 0.25
-PORTFOLIO_TOTAL_SL_RISK_HIGH_OPPORTUNITY_CAP_PCT = 0.35
-# 방향 쏠림 캡: 1.00(무제한) → 0.65. BTC 급락 시 롱 다수 동시 손절 방지.
-PORTFOLIO_DIRECTIONAL_MARGIN_CAP = 0.65
-PORTFOLIO_DIRECTIONAL_HIGH_OPPORTUNITY_CAP = 0.75
-PORTFOLIO_MAX_OPEN_POSITIONS = 12
-PORTFOLIO_MAX_OPEN_POSITIONS_HIGH_OPPORTUNITY = 16
+# 2026-07-06 긴급 하향 (Binance 2일 -17.9% DD 원인= 동시 8포지션 89% 증거금,
+# 7/8 롱 알트 상관 → 알트 동반하락에 전량 손절). 동시 노출/상관 쏠림을 근본 축소.
+# 2026-07-07: 실패한 서브에이전트 세션이 이 안전장치를 무단으로 되돌렸다가(0.80/0.90/
+# 0.25/0.35/0.65/0.75/12/16) 발견 후 즉시 원복함.
+# 2026-07-07 재조정: 그 사이 과열도 하드차단(EXTENSION_HARD_BLOCK_PCT)과 비-EMA
+# SHORT 강등이 추가돼 "동시 여러 개가 전부 나쁜 자리"일 위험 자체가 줄었고, 스캘핑
+# 복리 모드가 회전율을 필요로 해서 완화한다. 원래의 느슨한 값(0.80/12 등)까지는
+# 절대 안 돌아간다 — 방향쏠림 캡(상관손실의 핵심 원인)은 가장 보수적으로 유지.
+PORTFOLIO_MARGIN_USAGE_CAP = 0.60
+PORTFOLIO_MARGIN_USAGE_HIGH_OPPORTUNITY_CAP = 0.70
+# 동시 SL 위험 캡: 0.08 → 0.12. 최악의 날에도 전 포지션 동시손절 시 -12%로 제한.
+PORTFOLIO_TOTAL_SL_RISK_CAP_PCT = 0.12
+PORTFOLIO_TOTAL_SL_RISK_HIGH_OPPORTUNITY_CAP_PCT = 0.15
+# 방향 쏠림 캡: 이번 사고(Binance -17.9%)의 핵심 원인이었던 지표라 가장 보수적으로만
+# 완화(0.45→0.55) — 롱/숏 한쪽 쏠림 동반손절 위험은 여전히 최우선으로 억제.
+PORTFOLIO_DIRECTIONAL_MARGIN_CAP = 0.55
+PORTFOLIO_DIRECTIONAL_HIGH_OPPORTUNITY_CAP = 0.60
+PORTFOLIO_MAX_OPEN_POSITIONS = 9             # 6 → 9 (원래 12보다는 여전히 낮음)
+PORTFOLIO_MAX_OPEN_POSITIONS_HIGH_OPPORTUNITY = 11   # 8 → 11
 PORTFOLIO_POSITION_QUERY_RETRIES = 2
 
 # ─── 뉴스/수급성 거래량 급등 추세 전략 ─────────────────────────────────────

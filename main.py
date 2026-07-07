@@ -99,6 +99,10 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     ASYMMETRIC_SYMBOL_DAILY_LOSS_LIMIT, SYMBOL_STRATEGY_DAILY_LOSS_LIMIT,
                     SYMBOL_DAILY_TOTAL_LOSS_LIMIT,
                     AUTO_TRADE_STRATEGY_WHITELIST, BLOCK_SHORT_AUTO_TRADE,
+                    SHORT_NON_EMA_RISK_MULT, DIVERGENCE_GENERAL_OBSERVATION_RISK_MULT,
+                    BINANCE_FIXED_MARGIN_USD, EXTENSION_HARD_BLOCK_PCT,
+                    SCALP_COMPOUND_ENABLED, SCALP_COMPOUND_TF,
+                    SCALP_COMPOUND_STRATEGIES, SCALP_COMPOUND_TP1_PCT,
                     ROUND_TRIP_FEE)
 from leading import get_market_context
 from mtf import check_mtf, mtf_summary, get_macro_bias, get_daily_bias
@@ -169,7 +173,15 @@ MIN_RR    = 1.5   # 이 R:R 미만이면 자동매매 스킵
 SCALP_TF  = {"15m"}  # 15m = 최소 자동매매 판단봉
 TIMING_ONLY_TF = {"5m"}  # 5m는 초단타 보조 참고용 — 단독 자동매매 금지
 LOW_NOISE_TF   = {"5m", "15m"}  # 돌파/스윙 로직 제외용 하위 노이즈 TF
+# 2026-07-07: "15m": "5m" 추가. 기존엔 1h/4h/1d만 하위봉 확인(VWAP/모멘텀/EMA +
+# 과열도 하드차단)을 받고 15m은 아예 확인단계가 없었다 — 구조적 빈틈. 5m을 주
+# 진입 판단봉으로 쓰는 게 아니라(그건 여전히 금지) 15m 신호의 확인용 하위봉으로만
+# 추가하면, 실제로 이 확인이 개입하는 경우는 "1차 확인 실패 + 고거래량/비대칭모드
+# 등으로 우회 시도 + 이미 8%+ 과열"인 좁은 부분집합뿐이라(하드차단 조건 자체가
+# 좁음) 기존 15m 전략(RSI반전/마이크로돌파 등)의 정상거래는 거의 안 건드리면서,
+# US/USDT류 과열추격 손실은 15m에서도 동일하게 막는다.
 LOWER_TIMING_TF = {
+    "15m": "5m",
     "1h":  "15m",
     "4h":  "1h",
     "1d":  "4h",
@@ -184,14 +196,14 @@ def _check_lower_tf_timing(symbol: str, decision_tf: str,
     """
     lower_tf = LOWER_TIMING_TF.get(decision_tf)
     if not lower_tf:
-        return {"ok": True, "tf": "", "note": "동일 판단봉 자체 확인"}
+        return {"ok": True, "tf": "", "note": "동일 판단봉 자체 확인", "vwap_ext_pct": 0.0}
 
     try:
         lower_df = fetch_ohlcv(symbol, lower_tf, 120)
         if lower_df is None or len(lower_df) < 60:
-            return {"ok": False, "tf": lower_tf, "note": "데이터 부족"}
+            return {"ok": False, "tf": lower_tf, "note": "데이터 부족", "vwap_ext_pct": 0.0}
     except Exception as e:
-        return {"ok": False, "tf": lower_tf, "note": f"데이터 오류: {e}"}
+        return {"ok": False, "tf": lower_tf, "note": f"데이터 오류: {e}", "vwap_ext_pct": 0.0}
 
     lower_price = float(lower_df["close"].iloc[-1])
     vwap = calc_vwap(lower_df)
@@ -228,7 +240,16 @@ def _check_lower_tf_timing(symbol: str, decision_tf: str,
     )
     if failed:
         note += " — " + ", ".join(failed)
-    return {"ok": ok, "tf": lower_tf, "note": note}
+    # VWAP 대비 이미 얼마나 멀리 와있는지(과열도) — 방향 기준 %. LONG인데 VWAP보다
+    # 훨씬 위/SHORT인데 훨씬 아래면 "눌림목"이 아니라 이미 다 오른 뒤 되돌림(블로우오프
+    # 탑 직전)일 가능성이 크다 (2026-07-07 진단: 실제 US/USDT 손실거래가 VWAP 대비
+    # +26.8% 이격 상태에서 진입, EMA눌림목+거래량급등 vol11.44x/비대칭러너모드로
+    # 확인불일치를 리스크×0.70 소프트오버라이드가 그대로 통과시킴).
+    vwap_ext_pct = 0.0
+    if vwap:
+        raw_ext = (lower_price / vwap - 1) * 100
+        vwap_ext_pct = raw_ext if direction == "LONG" else -raw_ext
+    return {"ok": ok, "tf": lower_tf, "note": note, "vwap_ext_pct": vwap_ext_pct}
 
 
 def _indicator_snapshot(signal: dict) -> dict:
@@ -1553,6 +1574,21 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
                 f"{timing['note']}"
             )
             return
+        # 2026-07-07: 과열도(VWAP 이격) 하드 차단 — asymmetric_mode/고거래량 예외를
+        # 전부 우회해서라도 막는다. 실제 손실사례(US/USDT, EMA눌림목+거래량급등,
+        # vol11.44x, 비대칭러너모드): 진입 시점에 이미 1h VWAP 대비 +26.8% 이격
+        # (건강한 눌림목 허용치 0.6%의 40배+) 상태였는데, asymmetric_mode가
+        # vwap_chasing 하드차단을 우회하고 리스크×0.70 소프트오버라이드로 그대로
+        # 진입시켜 -$21 손실. "눌림목"은 초입 되돌림이어야지, 이미 다 오른 뒤의
+        # 되돌림(블로우오프 탑 직전)이면 안 된다 — 봇이 3~5분마다 스캔하므로 건강한
+        # 초입 눌림목은 어차피 곧 놓치지 않고 잡힌다. 과열 자리를 놓쳐도 손실이 아니다.
+        if vwap_chasing and abs(timing.get("vwap_ext_pct", 0.0)) >= EXTENSION_HARD_BLOCK_PCT:
+            _block(
+                f"{timing['tf']} 과열 진입 차단(VWAP 이격 {timing['vwap_ext_pct']:+.1f}% "
+                f">= 한도 {EXTENSION_HARD_BLOCK_PCT:.1f}%) — 눌림목 아닌 추격매수/매도 | "
+                f"{timing['note']}"
+            )
+            return
         high_conviction_timing = (
             raw in {"VERY STRONG", "ELITE"}
             and (premium_mtf_entry or btc_macro_short or ema_aligned or mtf_boost >= 1.2 or vol_r >= ACTIVE_HIGH_VOL)
@@ -1595,6 +1631,29 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     if BLOCK_SHORT_AUTO_TRADE and direction == "SHORT":
         _block("SHORT 실거래 임시 차단 — EMA LONG 전략 집중", paper_only=True)
         return
+
+    # 스캘핑 복리 모드: 주봉/일봉 바이어스가 진입방향과 반대면 차단.
+    # 2026-07-07: get_macro_bias/get_daily_bias는 이미 계산되고 있었지만 화면출력
+    # 용도로만 쓰이고 실제 게이트에 반영된 적이 없었다 — 사용자 지적으로 발견.
+    # 짧게 들고 빠르게 회전하는 스캘핑 모드일수록 상위 추세를 거스르면 위험이 커서
+    # (역추세 스캘핑은 반등 타이밍에 더 예민) 이 모드에 한해 하드 게이트로 승격한다.
+    # 다른 기존 전략(RSI반전/마이크로돌파 등)은 검증 안 된 채로 건드리지 않는다.
+    if (
+        SCALP_COMPOUND_ENABLED
+        and tf_key in SCALP_COMPOUND_TF
+        and strategy in SCALP_COMPOUND_STRATEGIES
+    ):
+        macro_bias = get_macro_bias(symbol)
+        daily_bias = get_daily_bias(symbol)
+        opposite = {"LONG": "SHORT", "SHORT": "LONG"}.get(direction)
+        if macro_bias["direction"] == opposite or daily_bias["direction"] == opposite:
+            _block(
+                f"스캘핑복리 — 상위추세 역행 차단 | 주봉 {macro_bias['note']} "
+                f"{macro_bias['direction']} / 일봉 {daily_bias['note']} {daily_bias['direction']}",
+                paper_only=True,
+            )
+            return
+        print(f"  [스캘핑복리] 상위추세 확인: 주봉 {macro_bias['direction']} / 일봉 {daily_bias['direction']}")
 
     # MODERATE는 후보만 기록한다.
     # STRONG은 현재봉 기반 전략 + 거래량 + 방향성까지 맞을 때만 실거래로 승격한다.
@@ -2059,6 +2118,52 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         for note in margin_notes:
             print(f"  [시드상향] {note}  |  예상 SL손실 ${est_sl_loss:.2f}")
 
+    # 비-EMA(거래량급등) SHORT 강등: 순수 EMA눌림목/EMA눌림목+돌파 SHORT(70% WR)은 유지,
+    # "거래량급등" 조합 SHORT(SHORT일 때만 EV음수)만 소액화한다(2026-07-06 진단).
+    # 하드차단 아님(BLOCK_SHORT_AUTO_TRADE=False 철학 유지) — 소프트 리스크 배율만 적용.
+    if direction == "SHORT" and "거래량급등" in str(strategy):
+        position_pct = position_pct * SHORT_NON_EMA_RISK_MULT
+        risk_notes.append(
+            f"비-EMA(거래량급등)숏 강등 리스크×{SHORT_NON_EMA_RISK_MULT:.2f}"
+        )
+        print(f"  [숏강등] 거래량급등 SHORT 소액화 리스크×{SHORT_NON_EMA_RISK_MULT:.2f}")
+
+    # 일반(non-hidden) 다이버전스 관찰모드: 사용자가 다이버전스를 선행지표로 신뢰하나
+    # 실거래 표본이 8건(대부분 hidden)뿐이라 EV 미검증 → 화이트리스트에 편입하되 소액
+    # 관찰모드로 표본만 축적한다. hidden_bullish/bearish는 정상 사이징 유지(대상 아님).
+    # 방향 무관(bullish=LONG, bearish=SHORT). 나중에 strategy='bullish'/'bearish'로 필터링해 EV 재평가.
+    if best.get("signal_type") in ("bullish", "bearish"):
+        position_pct = position_pct * DIVERGENCE_GENERAL_OBSERVATION_RISK_MULT
+        risk_notes.append(
+            f"다이버전스 관찰모드(신규 일반 {best.get('signal_type')}, 표본축적중) "
+            f"리스크×{DIVERGENCE_GENERAL_OBSERVATION_RISK_MULT:.2f}"
+        )
+        print(f"  [다이버전스관찰] 일반 {best.get('signal_type')} 소액 진입 "
+              f"리스크×{DIVERGENCE_GENERAL_OBSERVATION_RISK_MULT:.2f} → 목표비중 {position_pct*100:.2f}%")
+
+    # Binance 고정 증거금 override: 위험기반 사이징이 무엇을 산출했든 마지막에 $100
+    # 고정으로 덮어쓰되(2026-07-06 사용자 지시), 아래 포트폴리오 상관캡은 그대로 통과시킨다.
+    # 레버리지 압축(_cap_leverage_for_initial_sl)은 이 override보다 앞에서 이미 적용됨
+    # → 롱 알트 동시몰빵/넓은SL 대형손실 재발을 계속 막는다.
+    if BINANCE_FIXED_MARGIN_USD and runtime_context()["execution_venue"] == "binance" \
+            and balance_now > 0:
+        fixed_pct = min(BINANCE_FIXED_MARGIN_USD / balance_now, max_m_final / balance_now)
+        if fixed_pct > 0:
+            position_pct = round(fixed_pct, 6)
+            est_sl_loss = round(
+                balance_now * position_pct * leverage
+                * (t["sl_pct"] / 100 + ROUND_TRIP_FEE), 4
+            )
+            conviction_tier = "BINANCE-FIXED"
+            _fixed_margin_usd = round(balance_now * position_pct, 2)
+            note = (
+                f"Binance 고정증거금 ${_fixed_margin_usd:.2f} 적용 "
+                f"(위험기반 사이징 무시; 레버리지 {leverage}x, SL {t['sl_pct']:.2f}% → "
+                f"단건 최악손실 ~${est_sl_loss:.2f})"
+            )
+            risk_notes.append(note)
+            print(f"  [Binance고정] {note}")
+
     position_pct, est_sl_loss, portfolio_notes, portfolio_block = _apply_portfolio_capacity_gate(
         balance_now, position_pct, est_sl_loss, max_m_final, direction,
         high_opportunity=high_opportunity,
@@ -2083,6 +2188,26 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     if tf_key == "5m" and len(t["tps"]) > 1:
         tps = [{"price": t["tps"][0]["price"], "pct": 100}]
         print("  [스캘핑] 5분봉 → 단일 TP 강제 (빠른 확정)")
+    # 2026-07-07: 스캘핑 복리 모드 — 사용자 요청("방향만 먼저 잘 맞추고, 길게 안 들고
+    # 빠르게 복리로 굴리고 싶다"). 오늘 검증된 최고신뢰 신호(EMA눌림목+거래량급등 계열,
+    # 승률 63.6%+, 과열도 하드차단까지 통과한 자리)만 대상으로, 15m 한정, TP를 앞으로
+    # 크게 당겨(1차에서 대부분 확정) 보유시간을 최소화한다. 방향판단은 이미 검증된
+    # EMA엔진을 그대로 쓰고 여기선 "얼마나 오래 들고 있을지"만 바꾼다. SL은 기존
+    # ATR기반 그대로(임의 %로 조이지 않음 — 오늘 래칫 시뮬레이션에서 확인했듯 %기반
+    # 타이트 SL은 레버리지 노이즈에 취약). 사이징은 기존 %기반 그대로라 복리는
+    # 잔고 성장에 따라 자동 반영됨(별도 장치 불필요).
+    elif (
+        SCALP_COMPOUND_ENABLED
+        and tf_key in SCALP_COMPOUND_TF
+        and strategy in SCALP_COMPOUND_STRATEGIES
+        and len(t["tps"]) >= 2
+    ):
+        tp_prices = [tp["price"] for tp in t["tps"]]
+        tps = [
+            {"price": tp_prices[0], "pct": SCALP_COMPOUND_TP1_PCT},
+            {"price": tp_prices[1], "pct": 100 - SCALP_COMPOUND_TP1_PCT},
+        ]
+        print(f"  [스캘핑복리] {strategy} 15m → TP1 {SCALP_COMPOUND_TP1_PCT}% 앞당김 (빠른 확정/짧은 보유)")
     else:
         tps = [{"price": tp["price"], "pct": tp["pct"]} for tp in t["tps"]]
 
