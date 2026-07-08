@@ -3215,6 +3215,11 @@ def _do_pyramid(symbol: str, tf_key: str, direction: str,
         # 자리까지 막지 않는다. 계좌생존(DD/하드스톱)만 상위에서 계속 방어.
         allow_pause_override = True,
         pause_override_reason = f"불타기{pyramid_level}회 추세지속 확인",
+        # 2026-07-08: min_margin_usd 미지정 시 execute()가 엄격한 MIN_TRADE_MARGIN_USD($8)를
+        # 적용해, 이미 검증된 수익포지션 추가진입까지 사이징 수학으로 무산되는 사례 발견
+        # (신규진입 BLUR 케이스와 동일 패턴). 불타기는 신규진입보다도 확실한 자리이므로
+        # $1 폴백까지 허용한다.
+        min_margin_usd = MIN_FALLBACK_TRADE_MARGIN_USD,
     )
 
     if result["ok"]:

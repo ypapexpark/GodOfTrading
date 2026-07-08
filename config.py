@@ -603,7 +603,13 @@ DIVERGENCE_GENERAL_OBSERVATION_RISK_MULT = 0.35
 # 트레일링: 이번 관찰 시작 단계에선 전용 배선 없이 기존 전역 트레일(TRAIL_ATR_MULT)을
 # 그대로 쓴다. 파라볼릭 전용 ATR 트레일 배선은 표본 축적 후 별도 승인받아 진행.
 PARABOLIC_CYCLE_ENABLED            = True
-PARABOLIC_CYCLE_TF: set            = {"1h"}   # 사례 전부 1h에서 형성. 15m은 표본축적 후 재검토.
+# 2026-07-09: 1h → {1h, 15m} 확장. 실측 사례(OGN/USDT, 2026-07-09 04시대):
+# +30%+ 급등이 단일 1h봉 안에서 전부 발생(거래량 40~90배 압축 폭발) — 1h는 봉
+# 마감을 기다려야 평가되므로 이미 과열구간으로 넘어간 뒤에야 반응해 초입을 놓침.
+# 15m으로 실제 재현 검증: 04:15(펌프 시작 15분 만에) 이격 +3.6%에서 정확히 점화
+# 발화 확인(1h로는 05:00 봉마감까지 대기해야 했음). 5m은 여전히 실거래 제외
+# (TIMING_ONLY_TF 전역 규칙 상속 — 노이즈 검증은 오늘 다른 전략들에서 이미 확립됨).
+PARABOLIC_CYCLE_TF: set            = {"1h", "15m"}
 PARABOLIC_IGNITION_MIN_VOL         = 3.0      # 점화바 최소 거래량 배수(실측 하한 3.1x)
 PARABOLIC_IGNITION_MIN_BODY_RATIO  = 0.60     # 실체/전체범위 비율(실측 0.65~0.98)
 PARABOLIC_IGNITION_MIN_BAR_GAIN    = 2.5      # 점화바 최소 상승률 %(실측 2.5~11.8)
