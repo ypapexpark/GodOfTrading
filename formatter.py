@@ -88,6 +88,16 @@ SIGNAL_META = {
         "desc": "주봉+3일봉 BB 중단 상방 유지 + 하위봉 눌림 반등 → 추세 재개 진입",
         "direction": "LONG",
     },
+    "parabolic_ignition_long": {
+        "emoji": "🌋", "label": "파라볼릭 점화 LONG",
+        "desc": "거래량 급증 + 강한 양봉 + 저VWAP이격 → 파라볼릭 급등 초입 진입 (관찰모드)",
+        "direction": "LONG",
+    },
+    "parabolic_reversal_short": {
+        "emoji": "🌋", "label": "파라볼릭 반전 SHORT",
+        "desc": "급등 후 고VWAP이격 + RSI과매수 + 저가이탈 음봉 → 블로우오프 반전 (관찰모드)",
+        "direction": "SHORT",
+    },
 }
 
 TF_ENTRY = {
@@ -179,14 +189,21 @@ def _calc_targets(sig: dict, current_price: float,
     raw         = _raw_strength(strength)
     asymmetric = bool(sig.get("asymmetric_mode"))
     fast_exit   = (not asymmetric) and (not sig.get("is_divergence", True)) and tf_key in FAST_TP_TF
-    tp_source   = ASYMMETRIC_TP_BY_STRENGTH if asymmetric else (FAST_TP_BY_STRENGTH if fast_exit else TP_BY_STRENGTH)
-    rr_source   = (
-        ASYMMETRIC_TP_RR_FLOOR_BY_STRENGTH
-        if asymmetric else
-        (FAST_TP_RR_FLOOR_BY_STRENGTH if fast_exit else TP_RR_FLOOR_BY_STRENGTH)
-    )
-    tp_plan     = tp_source.get(raw, tp_source.get("STRONG", TP_BY_STRENGTH["STRONG"]))
-    rr_plan     = rr_source.get(raw, rr_source.get("STRONG", []))
+    tp_override = sig.get("tp_scheme_override")
+    if tp_override:
+        # 파라볼릭 등 개별 신호가 자체 TP구조(ATR배수/물량%)를 지정한 경우 강도별
+        # 테이블 대신 그대로 쓴다 — 설계 시 이미 R:R을 고려한 구조라 RR바닥 미적용.
+        tp_plan = list(tp_override)
+        rr_plan: list = []
+    else:
+        tp_source   = ASYMMETRIC_TP_BY_STRENGTH if asymmetric else (FAST_TP_BY_STRENGTH if fast_exit else TP_BY_STRENGTH)
+        rr_source   = (
+            ASYMMETRIC_TP_RR_FLOOR_BY_STRENGTH
+            if asymmetric else
+            (FAST_TP_RR_FLOOR_BY_STRENGTH if fast_exit else TP_RR_FLOOR_BY_STRENGTH)
+        )
+        tp_plan     = tp_source.get(raw, tp_source.get("STRONG", TP_BY_STRENGTH["STRONG"]))
+        rr_plan     = rr_source.get(raw, rr_source.get("STRONG", []))
     fee_total   = ROUND_TRIP_FEE
     min_gross   = MIN_GROSS_PCT.get(tf_key, 2.0) / 100
     min_step    = max(0.35 * atr, current_price * 0.0025)

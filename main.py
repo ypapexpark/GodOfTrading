@@ -100,6 +100,7 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     SYMBOL_DAILY_TOTAL_LOSS_LIMIT,
                     AUTO_TRADE_STRATEGY_WHITELIST, BLOCK_SHORT_AUTO_TRADE,
                     SHORT_NON_EMA_RISK_MULT, DIVERGENCE_GENERAL_OBSERVATION_RISK_MULT,
+                    PARABOLIC_OBSERVATION_RISK_MULT,
                     BINANCE_FIXED_MARGIN_USD, EXTENSION_HARD_BLOCK_PCT,
                     SCALP_COMPOUND_ENABLED, SCALP_COMPOUND_TF,
                     SCALP_COMPOUND_STRATEGIES, SCALP_COMPOUND_TP1_PCT,
@@ -2141,6 +2142,19 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         print(f"  [다이버전스관찰] 일반 {best.get('signal_type')} 소액 진입 "
               f"리스크×{DIVERGENCE_GENERAL_OBSERVATION_RISK_MULT:.2f} → 목표비중 {position_pct*100:.2f}%")
 
+    # 파라볼릭 점화/반전 관찰모드: 2026-07-08 신규(BLUR +71% 급등 놓친 사례 리서치).
+    # 미검증 신규 전략이라 다이버전스 관찰(0.35)보다 보수적인 0.30으로 소액 진입해
+    # 표본만 축적한다. SHORT_NON_EMA_RISK_MULT는 "거래량급등" 문자열 미포함이라
+    # 중첩 안 됨(실효 그대로 0.30) — 실측 확인됨.
+    if best.get("signal_type") in ("parabolic_ignition_long", "parabolic_reversal_short"):
+        position_pct = position_pct * PARABOLIC_OBSERVATION_RISK_MULT
+        risk_notes.append(
+            f"파라볼릭 관찰모드({best.get('signal_type')}, 표본축적중) "
+            f"리스크×{PARABOLIC_OBSERVATION_RISK_MULT:.2f}"
+        )
+        print(f"  [파라볼릭관찰] {best.get('signal_type')} 소액 진입 "
+              f"리스크×{PARABOLIC_OBSERVATION_RISK_MULT:.2f} → 목표비중 {position_pct*100:.2f}%")
+
     # Binance 고정 증거금 override: 위험기반 사이징이 무엇을 산출했든 마지막에 $100
     # 고정으로 덮어쓰되(2026-07-06 사용자 지시), 아래 포트폴리오 상관캡은 그대로 통과시킨다.
     # 레버리지 압축(_cap_leverage_for_initial_sl)은 이 override보다 앞에서 이미 적용됨
@@ -2164,11 +2178,23 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
             risk_notes.append(note)
             print(f"  [Binance고정] {note}")
 
+    # 2026-07-08: BLUR +71% 급등 구간 분석 — EMA눌림목+거래량급등 LONG 신호가 여러 번
+    # 정상적으로 떴지만, 변동성이 커서 포트폴리오 SL위험캡에 맞추려 사이즈를 줄이다
+    # $8 실행하한 밑으로 떨어져 전부 무산됐다(신호 품질 문제 아니라 사이징 수학
+    # 문제). 이미 화이트리스트/MTF/과열도가드를 통과한 스캘핑 복리 대상 전략은
+    # high_opportunity와 동일하게 $1 폴백까지 허용해 작게라도 체결되게 한다.
+    scalp_execution_floor = (
+        strategy in SCALP_COMPOUND_STRATEGIES and tf_key in SCALP_COMPOUND_TF
+    )
     position_pct, est_sl_loss, portfolio_notes, portfolio_block = _apply_portfolio_capacity_gate(
         balance_now, position_pct, est_sl_loss, max_m_final, direction,
         high_opportunity=high_opportunity,
         label=f"{strategy} 포트폴리오 용량",
-        min_execution_margin_usd=(MIN_FALLBACK_TRADE_MARGIN_USD if high_opportunity else MIN_TRADE_MARGIN_USD),
+        min_execution_margin_usd=(
+            MIN_FALLBACK_TRADE_MARGIN_USD
+            if (high_opportunity or scalp_execution_floor)
+            else MIN_TRADE_MARGIN_USD
+        ),
     )
     if portfolio_block:
         _block(portfolio_block, send_diag=True)

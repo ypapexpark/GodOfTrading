@@ -539,6 +539,15 @@ AUTO_TRADE_STRATEGY_WHITELIST: set = {
     # divergence.py _check_bullish/_check_bearish가 signal_type="bullish"/"bearish"로 생성.
     "bullish",
     "bearish",
+    # 2026-07-08: 파라볼릭 급등-반전 사이클 신규 전략(관찰모드). 리서치 근거:
+    # Bybit 거래대금 상위 45종목 최근 3.5일 1h OHLCV 스캔 → 7개 실측 사례
+    # (BLUR +79%/-27%, VANRY +204%/-59%, YFI +58%/-30%, EDGE +73%, TLM +96%,
+    # OPG +52%, LIT +31%). 기존 EMA눌림목/돌파가 파라볼릭 움직임을 추세미달/돌파
+    # 불일치로 반복 차단해 하나도 못 잡음 → 별도 전략 필요. 초입(저이격) 롱 점화 +
+    # 고점(고이격) 숏 반전을 한 패밀리로 포착. 완전 미검증 → 아래
+    # PARABOLIC_OBSERVATION_RISK_MULT(0.30) 소액 관찰모드로 표본만 축적.
+    "파라볼릭점화",
+    "파라볼릭반전",
 }
 # SHORT 방향 전체 차단은 하지 않는다.
 # EMA눌림목(하락), hidden_bearish 등 EMA 계열 숏 신호는 정상 실거래.
@@ -562,6 +571,43 @@ SHORT_NON_EMA_RISK_MULT = 0.40
 # hidden_bullish/hidden_bearish는 대상 아님 — 기존 정상 사이징 유지.
 # 방향 무관(bullish=LONG, bearish=SHORT) 적용. 표본 20건+ 쌓이면 EV 재평가 후 배율 상향/제거 결정.
 DIVERGENCE_GENERAL_OBSERVATION_RISK_MULT = 0.35
+
+# ─── 파라볼릭 급등-반전 사이클 전략 (관찰모드, 2026-07-08 신설) ──────────────
+# 리서치: Bybit 선물 거래대금 상위 45종목 최근 3.5일 1h OHLCV 스캔에서
+# "24~48h내 +30%↑ 급등 → 고점형성 → 10%↑ 되돌림" 7개 실측 사례 수집
+# (BLUR/VANRY/YFI/EDGE/TLM/OPG/LIT). 공통패턴 실측치:
+#   · 점화(초입)바: 거래량 3.1~9.3x, 실체비율 0.65~0.98, 봉상승 +2.5~11.8%,
+#     VWAP(24h)이격 +2.9~7.0% → 전부 EXTENSION_HARD_BLOCK(8%) 미만이라 자연 호환.
+#   · 고점/반전바: 최근 블로우오프 고점의 VWAP이격 +9~55%(초입의 3~8배),
+#     RSI 66~96, 상단꼬리 0.22~0.81, 거래량 클라이맥스 후 감소, 직전봉 저가이탈 음봉.
+#     (반전확정 바에서는 가격이 이미 고점서 내려와 현재봉 이격이 낮으므로 이격/RSI는
+#      최근 RECENT봉 블로우오프 고점 기준으로 측정 — 실측 반영한 보정.)
+# 초입은 이격≤6%에서만, 반전은 이격≥12%에서만 발화 → 상호배타(동일심볼 초입롱→
+# 고점숏 사이클이 겹치지 않음). 기존 EMA눌림목/돌파가 못 잡는 파라볼릭 구간 전용.
+# 미검증 신규전략 → main.py에서 관찰모드 소액 사이징(0.30x)으로만 진입.
+# 트레일링: 이번 관찰 시작 단계에선 전용 배선 없이 기존 전역 트레일(TRAIL_ATR_MULT)을
+# 그대로 쓴다. 파라볼릭 전용 ATR 트레일 배선은 표본 축적 후 별도 승인받아 진행.
+PARABOLIC_CYCLE_ENABLED            = True
+PARABOLIC_CYCLE_TF: set            = {"1h"}   # 사례 전부 1h에서 형성. 15m은 표본축적 후 재검토.
+PARABOLIC_IGNITION_MIN_VOL         = 3.0      # 점화바 최소 거래량 배수(실측 하한 3.1x)
+PARABOLIC_IGNITION_MIN_BODY_RATIO  = 0.60     # 실체/전체범위 비율(실측 0.65~0.98)
+PARABOLIC_IGNITION_MIN_BAR_GAIN    = 2.5      # 점화바 최소 상승률 %(실측 2.5~11.8)
+PARABOLIC_IGNITION_MAX_VWAP_DISLOC = 6.0      # 초입 이격 상한 %(실측 2.9~7.0, <8 하드차단과 호환)
+PARABOLIC_REVERSAL_MIN_VWAP_DISLOC = 12.0     # 반전 이격 하한 %(초입 6%와 상호배타)
+PARABOLIC_REVERSAL_MIN_RSI         = 72       # 반전 과매수 하한(실측 고점 66~96)
+PARABOLIC_REVERSAL_LOOKBACK        = 48       # 급등이력 확인 봉수(1h → 48h)
+PARABOLIC_REVERSAL_MIN_PUMP_PCT    = 30       # 반전 전 최소 급등폭 %(고점 형성 확인)
+PARABOLIC_REVERSAL_MIN_UPWICK      = 0.35     # 고점봉 상단꼬리 비율(실측 0.22~0.81)
+PARABOLIC_REVERSAL_RECENT          = 6        # 반전 직전 블로우오프 고점 탐색 봉수
+PARABOLIC_TP_SCHEME                = [        # 러너형 TP(ATR배수, 물량%) — 추세 최대추출
+    {"pct": 30, "atr_mult": 2.0},
+    {"pct": 30, "atr_mult": 5.0},
+    {"pct": 40, "atr_mult": 9.0},
+]
+PARABOLIC_OBSERVATION_RISK_MULT    = 0.30     # 관찰모드 리스크배율(다이버전스 0.35보다 보수적)
+# 실측검증(2026-07-08): SHORT_NON_EMA_RISK_MULT(0.40)는 적용조건이
+# `direction=="SHORT" and "거래량급등" in strategy`인데 "파라볼릭반전"엔 "거래량급등"
+# 문자열이 없어 적용되지 않는다 → 파라볼릭 숏 실효배율은 0.30 (중첩 0.12 아님).
 
 REALIZED_TRADE_LEARNING_ENABLED = True
 REALIZED_BLOCK_EXACT_MIN_TRADES = 2

@@ -16,8 +16,15 @@ from config import (BB_MID_3D_LOOKBACK, BB_MID_3D_MIN_ABOVE,
                     BB_MID_PULLBACK_TF, BB_MID_WEEK_LOOKBACK,
                     BB_MID_WEEK_MIN_ABOVE, VOLUME_MOMENTUM_BODY_ATR,
                     VOLUME_MOMENTUM_LOOKBACK, VOLUME_MOMENTUM_MIN_VOL,
-                    VOLUME_MOMENTUM_TF)
-from divergence import calc_rsi, _ema_trend
+                    VOLUME_MOMENTUM_TF,
+                    PARABOLIC_CYCLE_ENABLED, PARABOLIC_CYCLE_TF,
+                    PARABOLIC_IGNITION_MIN_VOL, PARABOLIC_IGNITION_MIN_BODY_RATIO,
+                    PARABOLIC_IGNITION_MIN_BAR_GAIN, PARABOLIC_IGNITION_MAX_VWAP_DISLOC,
+                    PARABOLIC_REVERSAL_MIN_VWAP_DISLOC, PARABOLIC_REVERSAL_MIN_RSI,
+                    PARABOLIC_REVERSAL_LOOKBACK, PARABOLIC_REVERSAL_MIN_PUMP_PCT,
+                    PARABOLIC_REVERSAL_MIN_UPWICK, PARABOLIC_REVERSAL_RECENT,
+                    PARABOLIC_TP_SCHEME)
+from divergence import calc_rsi, _ema_trend, calc_vwap
 
 
 def _atr(df: pd.DataFrame, period: int = 14) -> float:
@@ -583,11 +590,144 @@ def detect_bb_mid_pullback_long(df: pd.DataFrame, tf_key: str,
 
 # ─── 통합 스캔 ────────────────────────────────────────────────────────────────
 
+# ─── 전략 5: 파라볼릭 급등-반전 사이클 (2026-07-08 신설, 관찰모드) ───────────
+
+def detect_parabolic(df: pd.DataFrame, tf_key: str) -> dict | None:
+    """
+    파라볼릭 급등-반전 사이클 포착 — 초입 롱 점화 / 고점 숏 반전(단일 함수 2분기).
+
+    기존 EMA눌림목/돌파가 추세미달·돌파불일치로 놓치는 파라볼릭 구간 전용 전략.
+    리서치: Bybit 거래대금 상위 45종목 3.5일 1h 스캔에서 "24~48h내 +30%↑ 급등→고점
+    형성→10%↑ 되돌림" 7개 실측사례(BLUR/VANRY/YFI/EDGE/TLM/OPG/LIT) 공통패턴 기반.
+      · 초입 점화: 거래량 3.1~9.3x + 강한양봉(실체 0.65~0.98) + 봉상승 2.5~11.8%,
+        아직 VWAP(24h) 저이격(2.9~7.0%)일 때만 = "막 시작"하는 자리.
+      · 고점 반전: 최근 급등이력 + 최근 RECENT봉 블로우오프 고점의 극단 VWAP고이격
+        (9~55%) + RSI과매수(66~96) + 상단꼬리 고점봉 + 직전봉 저가이탈 음봉 +
+        거래량 클라이맥스 후 감소. (반전확정 바에서는 현재봉 이격이 이미 낮으므로
+        이격/RSI는 최근 블로우오프 고점 기준으로 측정 — 실측 반영한 보정.)
+    초입(이격≤6%)과 반전(이격≥12%)이 상호배타라 동일심볼 롱→숏 사이클이 겹치지 않음.
+    미검증 신규전략 → strength를 VERY STRONG로 두되(관찰 라이브 진입 조건: STRONG은
+    페이퍼 전용, 다이버전스 관찰 선례와 동일), main.py가
+    PARABOLIC_OBSERVATION_RISK_MULT(0.30) 소액 관찰모드로 사이징한다.
+    트레일링은 이번 단계에선 전용 배선 없이 기존 전역 트레일(TRAIL_ATR_MULT)을 그대로 씀.
+    """
+    if not PARABOLIC_CYCLE_ENABLED or tf_key not in PARABOLIC_CYCLE_TF:
+        return None
+    need = max(80, PARABOLIC_REVERSAL_LOOKBACK + 20)
+    if len(df) < need:
+        return None
+
+    close = df["close"].astype(float)
+    high  = df["high"].astype(float)
+    low   = df["low"].astype(float)
+    open_ = df["open"].astype(float)
+    volume = df["volume"].astype(float)
+
+    atr_val = _atr(df)
+    if atr_val <= 0:
+        return None
+    vwap_val = calc_vwap(df, period=24)   # 24봉(1h→24h) 롤링 VWAP
+    if vwap_val <= 0:
+        return None
+
+    cur_o = float(open_.iloc[-1]); cur_c = float(close.iloc[-1])
+    cur_h = float(high.iloc[-1]);  cur_l = float(low.iloc[-1])
+    rng = max(cur_h - cur_l, 1e-12)
+    body = abs(cur_c - cur_o)
+    body_ratio = body / rng
+    bar_gain = (cur_c / cur_o - 1) * 100 if cur_o > 0 else 0.0
+    vwap_disloc = (cur_c / vwap_val - 1) * 100
+    vol_r = _vol_ratio(df)
+    rsi_series = calc_rsi(close)
+    rsi_now = float(rsi_series.iloc[-1])
+    up_wick = (cur_h - max(cur_o, cur_c)) / rng
+    ema_t = _ema_trend(close)
+
+    # ── (A) 초입 점화 LONG ──────────────────────────────────────────────────
+    # 거래량 급증 + 강한 양봉 + 마이크로 신고가 + 아직 VWAP 저이격(막 시작).
+    # ema_t >= 0 요구(하락추세 데드캣 방지). ema 필드는 volume_momentum 관례대로
+    # 최소 1로 세워 하위 EMA중립 게이트를 통과시킨다(초입은 EMA가 막 도는 자리).
+    lookback_hi = float(high.iloc[-(VOLUME_MOMENTUM_LOOKBACK + 1):-1].max())
+    if (
+        vol_r >= PARABOLIC_IGNITION_MIN_VOL
+        and cur_c > cur_o
+        and body_ratio >= PARABOLIC_IGNITION_MIN_BODY_RATIO
+        and bar_gain >= PARABOLIC_IGNITION_MIN_BAR_GAIN
+        and 0 <= vwap_disloc <= PARABOLIC_IGNITION_MAX_VWAP_DISLOC
+        and cur_c >= lookback_hi
+        and ema_t >= 0
+    ):
+        confirmed = 5
+        if vol_r >= PARABOLIC_IGNITION_MIN_VOL * 1.6:
+            confirmed += 1
+        sig = _base_signal(
+            "parabolic_ignition_long", "LONG", "VERY STRONG 🔥", min(confirmed, 6),
+            atr_val, max(ema_t, 1), float(low.iloc[-3:].min()),
+            vol_r, rsi_now, "파라볼릭점화",
+        )
+        sig["parabolic"] = {
+            "phase": "ignition",
+            "vol_ratio": round(vol_r, 2),
+            "body_ratio": round(body_ratio, 2),
+            "bar_gain_pct": round(bar_gain, 2),
+            "vwap_disloc_pct": round(vwap_disloc, 2),
+            "note": f"파라볼릭 초입: 거래량 {vol_r:.1f}x + VWAP이격 {vwap_disloc:+.1f}%(저이격)",
+        }
+        sig["tp_scheme_override"] = list(PARABOLIC_TP_SCHEME)   # 러너형 TP(2/5/9 ATR)
+        return sig
+
+    # ── (B) 고점 반전 SHORT ─────────────────────────────────────────────────
+    # 최근 급등이력(고점형성) + 최근 블로우오프 고점의 극단 VWAP고이격 + RSI과매수
+    # + 직전봉 저가이탈 음봉 + 상단꼬리 고점봉 + 거래량 클라이맥스 후 감소.
+    win_hi = float(high.iloc[-PARABOLIC_REVERSAL_LOOKBACK:].max())
+    win_lo = float(low.iloc[-PARABOLIC_REVERSAL_LOOKBACK:].min())
+    pump_pct = (win_hi / win_lo - 1) * 100 if win_lo > 0 else 0.0
+    recent_hi = float(high.iloc[-PARABOLIC_REVERSAL_RECENT:].max())
+    recent_disloc = (recent_hi / vwap_val - 1) * 100
+    recent_rsi_max = float(rsi_series.iloc[-PARABOLIC_REVERSAL_RECENT:].max())
+    prev_low = float(low.iloc[-2])
+    p_o = float(open_.iloc[-2]); p_c = float(close.iloc[-2])
+    p_h = float(high.iloc[-2]);  p_l = float(low.iloc[-2])
+    p_rng = max(p_h - p_l, 1e-12)
+    prev_upwick = (p_h - max(p_o, p_c)) / p_rng
+    vol_recent_max = float(volume.iloc[-PARABOLIC_REVERSAL_RECENT:-1].max())
+    cur_vol = float(volume.iloc[-1])
+    vol_fading = cur_vol < vol_recent_max
+    if (
+        pump_pct >= PARABOLIC_REVERSAL_MIN_PUMP_PCT
+        and recent_disloc >= PARABOLIC_REVERSAL_MIN_VWAP_DISLOC
+        and recent_rsi_max >= PARABOLIC_REVERSAL_MIN_RSI
+        and cur_c < cur_o
+        and cur_c < prev_low
+        and (up_wick >= PARABOLIC_REVERSAL_MIN_UPWICK
+             or prev_upwick >= PARABOLIC_REVERSAL_MIN_UPWICK)
+        and vol_fading
+    ):
+        sig = _base_signal(
+            "parabolic_reversal_short", "SHORT", "VERY STRONG 🔥", 5,
+            atr_val, min(ema_t, -1), recent_hi,
+            vol_r, rsi_now, "파라볼릭반전",
+        )
+        sig["parabolic"] = {
+            "phase": "reversal",
+            "pump_pct": round(pump_pct, 1),
+            "recent_disloc_pct": round(recent_disloc, 1),
+            "recent_rsi_max": round(recent_rsi_max, 1),
+            "upwick": round(max(up_wick, prev_upwick), 2),
+            "note": f"파라볼릭 반전: 급등 +{pump_pct:.0f}% 후 고점이격 {recent_disloc:.0f}% "
+                    f"+ RSI {recent_rsi_max:.0f} + 저가이탈 음봉",
+        }
+        sig["tp_scheme_override"] = list(PARABOLIC_TP_SCHEME)
+        return sig
+
+    return None
+
+
 def scan_additional(df: pd.DataFrame, tf_key: str,
                     higher_bias: dict | None = None) -> list:
     """
     다이버전스 외 추가 신호 스캔
-    (RSI반전 / EMA눌림목 / BB스퀴즈 / 거래량급등추세 / BB중단내림롱).
+    (RSI반전 / EMA눌림목 / BB스퀴즈 / 거래량급등추세 / BB중단내림롱 / 파라볼릭).
     반환: detect()와 동일 포맷의 신호 리스트 (0~3개)
     """
     results = []
@@ -656,5 +796,11 @@ def scan_additional(df: pd.DataFrame, tf_key: str,
             existing["strategy"] = existing["strategy"] + "+돌파"
         else:
             results.append(micro_sig)
+
+    # 파라볼릭 점화/반전은 EMA눌림목 등 기존 전략과 다른 조건(VWAP이격/블로우오프)을
+    # 측정하는 독립 전략이라, 다른 신호와 합산하지 않고 별도 신호로 둔다.
+    parabolic_sig = detect_parabolic(df, tf_key)
+    if parabolic_sig:
+        results.append(parabolic_sig)
 
     return results
