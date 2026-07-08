@@ -23,7 +23,14 @@ from config import (BB_MID_3D_LOOKBACK, BB_MID_3D_MIN_ABOVE,
                     PARABOLIC_REVERSAL_MIN_VWAP_DISLOC, PARABOLIC_REVERSAL_MIN_RSI,
                     PARABOLIC_REVERSAL_LOOKBACK, PARABOLIC_REVERSAL_MIN_PUMP_PCT,
                     PARABOLIC_REVERSAL_MIN_UPWICK, PARABOLIC_REVERSAL_RECENT,
-                    PARABOLIC_TP_SCHEME)
+                    PARABOLIC_TP_SCHEME,
+                    VWAP_REVERSION_TF, VWAP_REVERSION_MIN_DISLOC,
+                    VWAP_REVERSION_MAX_DISLOC, VWAP_REVERSION_RSI_LONG_MIN,
+                    VWAP_REVERSION_RSI_LONG_MAX, VWAP_REVERSION_RSI_SHORT_MIN,
+                    VWAP_REVERSION_RSI_SHORT_MAX, VWAP_REVERSION_MIN_VOL,
+                    RSI2_REVERSION_TF, RSI2_PERIOD, RSI2_LONG_THRESHOLD,
+                    RSI2_SHORT_THRESHOLD, RSI2_EXTREME_LONG, RSI2_EXTREME_SHORT,
+                    RSI2_MIN_VOL)
 from divergence import calc_rsi, _ema_trend, calc_vwap
 
 
@@ -723,6 +730,172 @@ def detect_parabolic(df: pd.DataFrame, tf_key: str) -> dict | None:
     return None
 
 
+# ─── 전략 6: VWAP 소폭이격 평균회귀 스캘핑 (2026-07-08 신설, 관찰모드) ─────────
+
+def detect_vwap_reversion(df: pd.DataFrame, tf_key: str) -> dict | None:
+    """
+    VWAP 소폭이격 평균회귀 — 가격이 세션 VWAP에서 일상적 소폭 이탈했다 되돌아오는 자리.
+
+    문헌: VWAP 평균회귀 스캘핑(고빈도). 기존 calc_vwap(24봉)은 파라볼릭 극단이격/과열
+    필터로만 썼고 "소폭 이탈→회귀" 진입은 우리 시스템에 없던 격차 → 신규 구현.
+    파라볼릭(이격≥12%)과 이격대(0.6~2.0%)가 상호배타라 충돌 없음.
+
+    LONG : VWAP 아래 소폭(-2.0~-0.6%)에서 되돌림 시작(현재봉 양봉·상승) + ema_t>=0
+    SHORT: VWAP 위 소폭(+0.6~+2.0%)에서 되돌림 시작(현재봉 음봉·하락) + ema_t<=0
+    RSI(14)는 비극단(회귀 초기)만 허용해 자유낙하/과열 추격을 배제.
+
+    미검증 신규(반사실 표본 0건) → strength VERY STRONG(라이브 조건)으로 두되 main.py가
+    VWAP_REVERSION_OBSERVATION_RISK_MULT(0.25)로 소액 관찰 사이징. TP/SL은 우회 없이 기존
+    배선 상속 — 15m은 FAST_TP(TP1 1.0ATR)라 "빠른 익절" 설계의도 자연 충족.
+    5m은 기존 단독매매 금지 게이트로 라이브 제외 → 실거래는 15m만.
+    """
+    if tf_key not in VWAP_REVERSION_TF or len(df) < 40:
+        return None
+
+    close = df["close"].astype(float)
+    open_ = df["open"].astype(float)
+    atr_val = _atr(df)
+    if atr_val <= 0:
+        return None
+    vwap_val = calc_vwap(df, period=24)
+    if vwap_val <= 0:
+        return None
+
+    vol_r = _vol_ratio(df)
+    if vol_r < VWAP_REVERSION_MIN_VOL:
+        return None
+    ema_t = _ema_trend(close)
+    rsi_now = float(calc_rsi(close).iloc[-1])
+
+    cur_c = float(close.iloc[-1]); cur_o = float(open_.iloc[-1])
+    prev_c = float(close.iloc[-2])
+    disloc = (cur_c / vwap_val - 1) * 100          # 현재봉 VWAP이격 %
+    prev_disloc = (prev_c / vwap_val - 1) * 100
+
+    # ── LONG: VWAP 아래 소폭이격 + 회귀 시작(위로) + 상승추세 정합 ──────────────
+    if (
+        -VWAP_REVERSION_MAX_DISLOC <= disloc <= -VWAP_REVERSION_MIN_DISLOC
+        and cur_c > cur_o                          # 현재봉 양봉(되돌림 확인)
+        and disloc > prev_disloc                   # 직전봉보다 VWAP에 근접(위로 회귀중)
+        and VWAP_REVERSION_RSI_LONG_MIN <= rsi_now <= VWAP_REVERSION_RSI_LONG_MAX
+        and ema_t >= 0
+    ):
+        sig = _base_signal(
+            "vwap_reversion_long", "LONG", "VERY STRONG 🔥", 5,
+            atr_val, max(ema_t, 1), float(df["low"].iloc[-1]),
+            vol_r, rsi_now, "VWAP회귀",
+        )
+        sig["vwap_reversion"] = {
+            "disloc_pct": round(disloc, 2),
+            "prev_disloc_pct": round(prev_disloc, 2),
+            "rsi": round(rsi_now, 1),
+            "note": f"VWAP {disloc:+.1f}%(소폭저이격)→회귀 롱, RSI {rsi_now:.0f}",
+        }
+        return sig
+
+    # ── SHORT: VWAP 위 소폭이격 + 회귀 시작(아래로) + 하락추세 정합 ─────────────
+    if (
+        VWAP_REVERSION_MIN_DISLOC <= disloc <= VWAP_REVERSION_MAX_DISLOC
+        and cur_c < cur_o                          # 현재봉 음봉(되돌림 확인)
+        and disloc < prev_disloc                   # 직전봉보다 VWAP에 근접(아래로 회귀중)
+        and VWAP_REVERSION_RSI_SHORT_MIN <= rsi_now <= VWAP_REVERSION_RSI_SHORT_MAX
+        and ema_t <= 0
+    ):
+        sig = _base_signal(
+            "vwap_reversion_short", "SHORT", "VERY STRONG 🔥", 5,
+            atr_val, min(ema_t, -1), float(df["high"].iloc[-1]),
+            vol_r, rsi_now, "VWAP회귀",
+        )
+        sig["vwap_reversion"] = {
+            "disloc_pct": round(disloc, 2),
+            "prev_disloc_pct": round(prev_disloc, 2),
+            "rsi": round(rsi_now, 1),
+            "note": f"VWAP {disloc:+.1f}%(소폭고이격)→회귀 숏, RSI {rsi_now:.0f}",
+        }
+        return sig
+
+    return None
+
+
+# ─── 전략 7: Connors RSI(2) 초단기 평균회귀 (2026-07-08 신설, 관찰모드) ───────
+
+def detect_rsi2_reversion(df: pd.DataFrame, tf_key: str) -> dict | None:
+    """
+    Connors RSI(2) 초단기 평균회귀 — 매우 짧은 RSI(2) 극단에서 추세순응 반전.
+
+    문헌: Larry Connors RSI(2). RSI(2)≤10(과매도)에서 매수/≥90(과매수)에서 매도하되
+    상위 추세와 같은 방향일 때만(추세순응 눌림/반등). 기존 RSI반전은 RSI(14) 28/72로
+    훨씬 느려 이 초단기 엣지를 못 잡던 격차 → 신규 구현. 빠른 청산 지향.
+
+    LONG : rsi2<=10 + ema_t>=0(상승추세 눌림) + 현재봉 반등(양봉 또는 전봉 종가 상회)
+    SHORT: rsi2>=90 + ema_t<=0(하락추세 반등) + 현재봉 반락(음봉 또는 전봉 종가 하회)
+    극단(rsi2<=5 / >=95)이면 VERY STRONG(라이브), 아니면 STRONG(페이퍼 전용).
+
+    미검증 신규(반사실 표본 0건) → main.py가 RSI2_REVERSION_OBSERVATION_RISK_MULT(0.25)
+    소액 관찰 사이징. TP/SL 기존 배선 상속(15m FAST_TP=빠른익절). 5m은 단독매매 금지로
+    라이브 제외 → 실거래는 15m만.
+    """
+    if tf_key not in RSI2_REVERSION_TF or len(df) < 40:
+        return None
+
+    close = df["close"].astype(float)
+    open_ = df["open"].astype(float)
+    atr_val = _atr(df)
+    if atr_val <= 0:
+        return None
+    vol_r = _vol_ratio(df)
+    if vol_r < RSI2_MIN_VOL:
+        return None
+    ema_t = _ema_trend(close)
+    rsi2 = float(calc_rsi(close, period=RSI2_PERIOD).iloc[-1])
+    if rsi2 != rsi2:   # NaN 방어
+        return None
+
+    # 2026-07-08 버그수정: 원래 "현재봉이 이미 양봉/직전종가 상회"를 요구했으나,
+    # RSI(2)가 극단으로 떨어지는 건 보통 현재봉이 아직 하락 중이기 때문이라
+    # 동시봉에 반등 확인을 요구하면 논리적으로 거의 항상 거짓(실측 1000+봉 0건 발화
+    # 확인 후 발견). Connors 원조 기법은 극단 자체에서 바로 진입한다 — 반등을
+    # 기다리지 않고 EMA추세 필터만으로 진입, 대신 관찰모드 소액(0.25x)으로 방어한다.
+
+    # ── LONG: 초단기 과매도 + 상승추세 정합 ─────────────────────────────────────
+    if (
+        rsi2 <= RSI2_LONG_THRESHOLD
+        and ema_t >= 0
+    ):
+        very = rsi2 <= RSI2_EXTREME_LONG
+        strength = "VERY STRONG 🔥" if very else "STRONG ⚡"
+        sig = _base_signal(
+            "rsi2_reversion_long", "LONG", strength, 5 if very else 4,
+            atr_val, max(ema_t, 1), float(df["low"].iloc[-1]),
+            vol_r, rsi2, "RSI2반전",
+        )
+        sig["rsi2_reversion"] = {
+            "rsi2": round(rsi2, 1),
+            "note": f"RSI(2) {rsi2:.0f} 과매도 + 상승추세 눌림 반등",
+        }
+        return sig
+
+    # ── SHORT: 초단기 과매수 + 하락추세 정합 ────────────────────────────────────
+    if (
+        rsi2 >= RSI2_SHORT_THRESHOLD
+        and ema_t <= 0
+    ):
+        very = rsi2 >= RSI2_EXTREME_SHORT
+        strength = "VERY STRONG 🔥" if very else "STRONG ⚡"
+        sig = _base_signal(
+            "rsi2_reversion_short", "SHORT", strength, 5 if very else 4,
+            atr_val, min(ema_t, -1), float(df["high"].iloc[-1]),
+            vol_r, rsi2, "RSI2반전",
+        )
+        sig["rsi2_reversion"] = {
+            "rsi2": round(rsi2, 1),
+            "note": f"RSI(2) {rsi2:.0f} 과매수 + 하락추세 반등 반락",
+        }
+        return sig
+
+    return None
+
+
 def scan_additional(df: pd.DataFrame, tf_key: str,
                     higher_bias: dict | None = None) -> list:
     """
@@ -802,5 +975,15 @@ def scan_additional(df: pd.DataFrame, tf_key: str,
     parabolic_sig = detect_parabolic(df, tf_key)
     if parabolic_sig:
         results.append(parabolic_sig)
+
+    # VWAP 소폭이격 회귀 / Connors RSI(2) 회귀도 파라볼릭처럼 독립 조건(VWAP소폭이격 /
+    # 초단기 RSI극단)을 측정하는 별도 전략이라 다른 신호와 합산하지 않고 별도 신호로 둔다.
+    vwap_rev_sig = detect_vwap_reversion(df, tf_key)
+    if vwap_rev_sig:
+        results.append(vwap_rev_sig)
+
+    rsi2_rev_sig = detect_rsi2_reversion(df, tf_key)
+    if rsi2_rev_sig:
+        results.append(rsi2_rev_sig)
 
     return results

@@ -98,6 +98,26 @@ SIGNAL_META = {
         "desc": "급등 후 고VWAP이격 + RSI과매수 + 저가이탈 음봉 → 블로우오프 반전 (관찰모드)",
         "direction": "SHORT",
     },
+    "vwap_reversion_long": {
+        "emoji": "🎯", "label": "VWAP 회귀 LONG",
+        "desc": "VWAP 아래 소폭이격 + 상승추세 정합 되돌림 → 평균회귀 스캘핑 (관찰모드)",
+        "direction": "LONG",
+    },
+    "vwap_reversion_short": {
+        "emoji": "🎯", "label": "VWAP 회귀 SHORT",
+        "desc": "VWAP 위 소폭이격 + 하락추세 정합 되돌림 → 평균회귀 스캘핑 (관찰모드)",
+        "direction": "SHORT",
+    },
+    "rsi2_reversion_long": {
+        "emoji": "♻️", "label": "RSI(2) 반전 LONG",
+        "desc": "초단기 RSI(2) 과매도 + 상승추세 눌림 반등 → Connors 평균회귀 (관찰모드)",
+        "direction": "LONG",
+    },
+    "rsi2_reversion_short": {
+        "emoji": "♻️", "label": "RSI(2) 반전 SHORT",
+        "desc": "초단기 RSI(2) 과매수 + 하락추세 반락 → Connors 평균회귀 (관찰모드)",
+        "direction": "SHORT",
+    },
 }
 
 TF_ENTRY = {

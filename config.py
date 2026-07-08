@@ -548,6 +548,21 @@ AUTO_TRADE_STRATEGY_WHITELIST: set = {
     # PARABOLIC_OBSERVATION_RISK_MULT(0.30) 소액 관찰모드로 표본만 축적.
     "파라볼릭점화",
     "파라볼릭반전",
+    # 2026-07-08: 스캘핑/단타 고빈도 회전 강화(사용자 요청 "계속 매매") 3종 편입.
+    #   1) 마이크로돌파: 반사실 검증 근거 있음. 화이트리스트만 통과못한 순수표본
+    #      (모든 게이트 통과, whitelist에서만 차단)으로 ccxt 공개 OHLCV 반사실 시뮬
+    #      (SL1.5ATR/TP1.8ATR 선접촉) → 37종목 분산, 시간당중복제거 독립이벤트
+    #      LONG n=21 WR52% avgR+0.15 / SHORT n=33 WR50% avgR+0.10 로 양방향 EV양수.
+    #      고빈도(15m 중심)라 "계속 매매" 취지 부합. 관찰모드 0.30x.
+    #   2) VWAP회귀: 문헌(VWAP 평균회귀 스캘핑) 격차 — 기존 VWAP는 과열필터로만 썼음.
+    #      실거래 반사실 표본 0건 → 완전 미검증, 더 보수적 0.25x.
+    #   3) RSI2반전: 문헌(Connors RSI(2) 초단기 평균회귀) 격차 — 기존 RSI반전은
+    #      RSI(14) 28/72로 더 느림. 완전 미검증 → 0.25x.
+    # 셋 다 기존 게이트(추세/과열/포트폴리오캡/5m단독금지/VERY STRONG만 라이브/SHORT
+    # 정책) 전부 상속 — 화이트리스트 진입 여부만 다름.
+    "마이크로돌파",
+    "VWAP회귀",
+    "RSI2반전",
 }
 # SHORT 방향 전체 차단은 하지 않는다.
 # EMA눌림목(하락), hidden_bearish 등 EMA 계열 숏 신호는 정상 실거래.
@@ -608,6 +623,48 @@ PARABOLIC_OBSERVATION_RISK_MULT    = 0.30     # 관찰모드 리스크배율(다
 # 실측검증(2026-07-08): SHORT_NON_EMA_RISK_MULT(0.40)는 적용조건이
 # `direction=="SHORT" and "거래량급등" in strategy`인데 "파라볼릭반전"엔 "거래량급등"
 # 문자열이 없어 적용되지 않는다 → 파라볼릭 숏 실효배율은 0.30 (중첩 0.12 아님).
+
+# ─── 스캘핑/단타 고빈도 3종 관찰모드 사이징 (2026-07-08 신설) ─────────────────
+# 사용자 요청 "좋은 자리 빠르게 들어가서 빠르게 수익보고 나오는" 고빈도 회전 강화.
+# 세 전략 모두 main.py에서 signal_type 기준으로 아래 배율을 장세게이트 배율에 곱한다.
+# SHORT_NON_EMA_RISK_MULT(0.40)와의 중첩: 세 전략명 모두 "거래량급등" 문자열이 없어
+# 적용조건 미충족 → SHORT여도 중첩 안 됨(실효 = 아래 배율 그대로). 파라볼릭과 동일 구조.
+# 마이크로돌파: 반사실 EV양수(LONG+0.15/SHORT+0.10) 근거 있음 → 0.30 (파라볼릭과 동급).
+MICRO_BREAKOUT_OBSERVATION_RISK_MULT = 0.30
+# VWAP회귀/RSI2반전: 실거래 반사실 표본 0건(문헌 격차 신규 구현) → 더 보수적 0.25.
+VWAP_REVERSION_OBSERVATION_RISK_MULT = 0.25
+RSI2_REVERSION_OBSERVATION_RISK_MULT = 0.25
+
+# ─── VWAP 소폭이격 평균회귀 스캘핑 (신규, 2026-07-08) ────────────────────────
+# 문헌: 가격이 세션 VWAP에서 일상적 소폭 이탈했다 되돌아오는 것을 노리는 고빈도 스캘핑.
+# 기존 calc_vwap(24봉)은 파라볼릭 극단이격(+8%↑)·과열필터로만 쓰였고, "소폭 이탈→회귀"
+# 진입은 우리 시스템에 없던 격차. 파라볼릭(이격≥12%)과 이격대가 상호배타(0.6~2.0%)라 충돌 없음.
+# TF: 5m/15m만(초단타). 5m은 기존 단독매매 금지 게이트로 라이브 제외 → 15m만 실거래.
+# 방향정합: LONG은 ema_t>=0(하락추세 LONG 금지), SHORT은 ema_t<=0.
+# TP/SL은 별도 우회 없이 기존 배선 상속 — 15m은 FAST_TP(TP1 1.0ATR)라 설계의도(빠른익절,
+# TP1~1ATR) 자연 충족, SL도 기존 SL_ATR_MULT 사용.
+VWAP_REVERSION_TF: set          = {"5m", "15m"}
+VWAP_REVERSION_MIN_DISLOC       = 0.6    # |VWAP이격| 하한 %(너무 붙으면 엣지 없음)
+VWAP_REVERSION_MAX_DISLOC       = 2.0    # |VWAP이격| 상한 %(그 이상은 추세이탈/파라볼릭 영역)
+VWAP_REVERSION_RSI_LONG_MIN     = 30     # LONG시 RSI(14) 하한(그 아래는 자유낙하=칼받기 방지)
+VWAP_REVERSION_RSI_LONG_MAX     = 50     # LONG시 RSI 상한(회귀 초기만)
+VWAP_REVERSION_RSI_SHORT_MIN    = 50     # SHORT시 RSI 하한
+VWAP_REVERSION_RSI_SHORT_MAX    = 70     # SHORT시 RSI 상한(그 위는 과열=파라볼릭 영역)
+VWAP_REVERSION_MIN_VOL          = 1.0    # 최소 거래량 배수(빈껍데기 회귀 배제, 완만)
+
+# ─── Connors RSI(2) 초단기 평균회귀 (신규, 2026-07-08) ──────────────────────
+# 문헌: Larry Connors의 RSI(2) 평균회귀 — 매우 짧은 RSI(2)로 극단(≤10/≥90)에서 빠른 반전
+# 포착. 상위 추세와 같은 방향일 때만 진입(추세순응 눌림/반등). 기존 RSI반전은 RSI(14)
+# 28/72로 훨씬 느려 이 초단기 엣지를 못 잡던 격차. 빠른 청산 지향.
+# TF: 5m/15m만. 5m은 단독매매 금지로 라이브 제외 → 15m만 실거래(15m FAST_TP로 빠른익절).
+# 방향정합: LONG은 ema_t>=0에서 rsi2 과매도, SHORT은 ema_t<=0에서 rsi2 과매수.
+RSI2_REVERSION_TF: set          = {"5m", "15m"}
+RSI2_PERIOD                     = 2      # Connors식 초단기 RSI 룩백
+RSI2_LONG_THRESHOLD             = 10     # LONG 진입 rsi2 상한(과매도)
+RSI2_SHORT_THRESHOLD            = 90     # SHORT 진입 rsi2 하한(과매수)
+RSI2_EXTREME_LONG               = 5      # 이 이하면 VERY STRONG(라이브), 아니면 STRONG(페이퍼)
+RSI2_EXTREME_SHORT              = 95     # 이 이상이면 VERY STRONG(라이브)
+RSI2_MIN_VOL                    = 1.0    # 최소 거래량 배수(완만)
 
 REALIZED_TRADE_LEARNING_ENABLED = True
 REALIZED_BLOCK_EXACT_MIN_TRADES = 2

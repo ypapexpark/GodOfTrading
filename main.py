@@ -101,6 +101,9 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     AUTO_TRADE_STRATEGY_WHITELIST, BLOCK_SHORT_AUTO_TRADE,
                     SHORT_NON_EMA_RISK_MULT, DIVERGENCE_GENERAL_OBSERVATION_RISK_MULT,
                     PARABOLIC_OBSERVATION_RISK_MULT,
+                    MICRO_BREAKOUT_OBSERVATION_RISK_MULT,
+                    VWAP_REVERSION_OBSERVATION_RISK_MULT,
+                    RSI2_REVERSION_OBSERVATION_RISK_MULT,
                     BINANCE_FIXED_MARGIN_USD, EXTENSION_HARD_BLOCK_PCT,
                     SCALP_COMPOUND_ENABLED, SCALP_COMPOUND_TF,
                     SCALP_COMPOUND_STRATEGIES, SCALP_COMPOUND_TP1_PCT,
@@ -2154,6 +2157,29 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         )
         print(f"  [파라볼릭관찰] {best.get('signal_type')} 소액 진입 "
               f"리스크×{PARABOLIC_OBSERVATION_RISK_MULT:.2f} → 목표비중 {position_pct*100:.2f}%")
+
+    # 스캘핑/단타 고빈도 3종 관찰모드(2026-07-08 신규): 마이크로돌파(반사실 EV양수 근거,
+    # 0.30) / VWAP회귀·RSI2반전(문헌 격차 신규구현, 미검증 0.25). signal_type 기준으로만
+    # 적용 → 마이크로돌파가 다른 신호와 합산돼 strategy가 "...+돌파"로 바뀐 케이스는
+    # signal_type이 micro_breakout_*이 아니므로 이 배율을 안 받음(정상 사이징 조합과 중복방지).
+    # SHORT_NON_EMA_RISK_MULT(0.40)는 "거래량급등" 문자열 조건이라 세 전략명(마이크로돌파/
+    # VWAP회귀/RSI2반전) 모두 미충족 → 중첩 안 됨(실효배율 = 아래 값 그대로). 파라볼릭과 동일.
+    _scalp_obs_mult = {
+        "micro_breakout_long":  MICRO_BREAKOUT_OBSERVATION_RISK_MULT,
+        "micro_breakout_short": MICRO_BREAKOUT_OBSERVATION_RISK_MULT,
+        "vwap_reversion_long":  VWAP_REVERSION_OBSERVATION_RISK_MULT,
+        "vwap_reversion_short": VWAP_REVERSION_OBSERVATION_RISK_MULT,
+        "rsi2_reversion_long":  RSI2_REVERSION_OBSERVATION_RISK_MULT,
+        "rsi2_reversion_short": RSI2_REVERSION_OBSERVATION_RISK_MULT,
+    }.get(best.get("signal_type"))
+    if _scalp_obs_mult is not None:
+        position_pct = position_pct * _scalp_obs_mult
+        risk_notes.append(
+            f"스캘핑 관찰모드({best.get('signal_type')}, 표본축적중) "
+            f"리스크×{_scalp_obs_mult:.2f}"
+        )
+        print(f"  [스캘핑관찰] {best.get('signal_type')} 소액 진입 "
+              f"리스크×{_scalp_obs_mult:.2f} → 목표비중 {position_pct*100:.2f}%")
 
     # Binance 고정 증거금 override: 위험기반 사이징이 무엇을 산출했든 마지막에 $100
     # 고정으로 덮어쓰되(2026-07-06 사용자 지시), 아래 포트폴리오 상관캡은 그대로 통과시킨다.
