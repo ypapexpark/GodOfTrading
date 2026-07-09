@@ -105,6 +105,7 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     VWAP_REVERSION_OBSERVATION_RISK_MULT,
                     RSI2_REVERSION_OBSERVATION_RISK_MULT,
                     BINANCE_FIXED_MARGIN_USD, EXTENSION_HARD_BLOCK_PCT,
+                    DRAWDOWN_RISK_OFF_PCT,
                     SCALP_COMPOUND_ENABLED, SCALP_COMPOUND_TF,
                     SCALP_COMPOUND_STRATEGIES, SCALP_COMPOUND_TP1_PCT,
                     ROUND_TRIP_FEE)
@@ -2021,6 +2022,12 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     state_now = _load_state()
     daily_limit = get_daily_loss_limit(balance_now)
     daily_loss = float(state_now.get("daily_loss", 0) or 0)
+    # 2026-07-09 진단: DD risk_off(리스크×0.25) 상태에서 소액계좌는 축소된 목표증거금이
+    # $8 최소실행증거금 밑으로 떨어져 신호품질과 무관하게 통째로 거부됨(바이빗 3일
+    # 공백의 실제 원인 — 108건이 이 사유로 실패). DD 리스크축소는 소프트캡이어야
+    # 하는데 $8 하한과 만나면 사실상 하드차단이 되는 문제 — DD risk_off 이상이면
+    # high_opportunity와 동일하게 $1 폴백을 허용해 계좌가 완전히 얼어붙지 않게 한다.
+    dd_risk_off = float(state_now.get("drawdown_pct", 0) or 0) >= DRAWDOWN_RISK_OFF_PCT * 100
     high_opportunity_block = (
         _risk_off_high_opportunity_reason(state_now)
         if high_opportunity else ""
@@ -2218,7 +2225,7 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         label=f"{strategy} 포트폴리오 용량",
         min_execution_margin_usd=(
             MIN_FALLBACK_TRADE_MARGIN_USD
-            if (high_opportunity or scalp_execution_floor)
+            if (high_opportunity or scalp_execution_floor or dd_risk_off)
             else MIN_TRADE_MARGIN_USD
         ),
     )
@@ -2325,7 +2332,9 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         atr          = best.get("atr", 0.0),
         is_elite     = ("ELITE" in strength),
         max_margin_usd = max_m_final,
-        min_margin_usd = (MIN_FALLBACK_TRADE_MARGIN_USD if high_opportunity else MIN_TRADE_MARGIN_USD),
+        min_margin_usd = (
+            MIN_FALLBACK_TRADE_MARGIN_USD if (high_opportunity or dd_risk_off) else MIN_TRADE_MARGIN_USD
+        ),
         allow_pause_override = high_opportunity,
         pause_override_reason = (
             f"{tf_key} {raw} 고기대수익 기회"
@@ -2507,6 +2516,9 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
     state_now = _load_state()
     daily_loss  = float(state_now.get("daily_loss", 0) or 0)
     daily_limit = get_daily_loss_limit(balance_now)
+    # 2026-07-09: DD risk_off 이상이면 소액계좌의 축소된 목표증거금이 $8 하한에
+    # 걸려 신호품질과 무관하게 거부되는 문제 수정(_try_auto_trade와 동일 근거).
+    dd_risk_off = float(state_now.get("drawdown_pct", 0) or 0) >= DRAWDOWN_RISK_OFF_PCT * 100
     if daily_loss >= daily_limit:
         print(
             f"  [돌파리스크] 일일 손실한도 도달 ${daily_loss:.2f}/${daily_limit:.2f} — "
@@ -2934,7 +2946,9 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
         balance_now, position_pct, est_sl_loss, max_margin, direction,
         high_opportunity=high_opportunity,
         label=f"{trade_strategy} 포트폴리오 용량",
-        min_execution_margin_usd=(MIN_FALLBACK_TRADE_MARGIN_USD if high_opportunity else MIN_TRADE_MARGIN_USD),
+        min_execution_margin_usd=(
+            MIN_FALLBACK_TRADE_MARGIN_USD if (high_opportunity or dd_risk_off) else MIN_TRADE_MARGIN_USD
+        ),
     )
     if portfolio_block:
         notify_trade_block(
@@ -3048,7 +3062,9 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
         atr          = atr,
         is_elite     = ("ELITE" in strength),
         max_margin_usd = max_margin,
-        min_margin_usd = (MIN_FALLBACK_TRADE_MARGIN_USD if high_opportunity else MIN_TRADE_MARGIN_USD),
+        min_margin_usd = (
+            MIN_FALLBACK_TRADE_MARGIN_USD if (high_opportunity or dd_risk_off) else MIN_TRADE_MARGIN_USD
+        ),
         allow_pause_override = high_opportunity,
         pause_override_reason = f"{tf_key} 돌파 고기대수익 기회",
     )
