@@ -6,6 +6,17 @@ CryptoSignal — BTC/ETH 선물 다이버전스 스캐너 (RSI + MACD + OBV + St
   python3 main.py              # 스캔 + 텔레그램 알림만
   python3 main.py --auto-trade # 스캔 + 텔레그램 + 자동매매
   python3 main.py --dry-run    # 출력만 (텔레그램/거래 없음)
+
+구조 맵: ARCHITECTURE.md (이 파일 통독 금지 — 아래 함수명으로 grep)
+  scan                          스캔 엔트리
+  _try_auto_trade               일반 자동진입 게이트 (최대 블록)
+  _try_breakout_trade           돌파 진입
+  _try_btc_sync_direct_trade    BTC 동기 직행
+  _apply_portfolio_capacity_gate / _apply_min_trade_margin
+  _mtf_soft_override            MTF 완화
+  _do_pyramid                   불타기
+  _reconcile_orphan_positions   고아 포지션
+  _maybe_send_periodic_report   주기 리포트
 """
 import math
 import sys
