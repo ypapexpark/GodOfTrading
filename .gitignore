@@ -22,6 +22,10 @@ polymarket_whale_paper_state.json
 polymarket_whale_paper_journal.jsonl
 polymarket_whale_live_state.json
 polymarket_whale_live_journal.jsonl
+polymarket_insight_paper_state.json
+polymarket_insight_paper_journal.jsonl
+polymarket_insight_live_state.json
+polymarket_insight_live_journal.jsonl
 hyperliquid_whale_paper_state.json
 hyperliquid_whale_paper_journal.jsonl
 trade_postmortem.jsonl

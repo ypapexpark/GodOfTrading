@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.polymarket.insight.paper</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/ghp/Projects/GodOfTrading/polymarket_insight_paper_bot.py</string>
+    </array>
+
+    <!-- 15분: 수집·시그널·정산. 텔레그램은 봇 내부 4h 주기. 실주문 없음. -->
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/ghp/Projects/GodOfTrading</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/ghp</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+        <key>POLYINSIGHT_ROOT</key>
+        <string>/Users/ghp/Projects/PolyInsight</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/polymarket_insight_paper.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/polymarket_insight_paper_err.log</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

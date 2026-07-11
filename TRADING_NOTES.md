@@ -1,5 +1,24 @@
 # GodOfTrading Trading Notes
 
+## 2026-07-11 PolyInsight momentum paper (고래 카피와 분리)
+
+- **전략:** PolyInsight analytics `momentum_break` / `prob_shock` 만 paper 진입.
+  `extreme_price` 는 진입 안 함 (avoid_chase 필터 용).
+- **계좌 분리:** state/journal 전용
+  - `polymarket_insight_paper_state.json`
+  - `polymarket_insight_paper_journal.jsonl`
+  - 태그 `account=insight_paper` — 고래 paper/live 와 bankroll·한도 공유 안 함.
+- **러너:** `polymarket_insight_paper_bot.py`
+  - LaunchAgent: `com.polymarket.insight.paper.plist` (15분 스캔, TG는 봇 내부 4h)
+  - 리포트: `send_review` (고래 4h와 동일 TG 채널, 제목으로 구분)
+- **졸업 게이트 (LIVE 전, 수동):** 정산 ≥30 · WR≥55% · PnL>0 · ≥7일
+  (`polymarket_insight_insights.py`). 통과해도 paper 봇은 LIVE 안 함.
+- **LIVE 스켈레톤:** `polymarket_insight_live_bot.py`
+  - “나중에 실주문 넣을 빈 집” 파일. 기본 `POLYMARKET_INSIGHT_LIVE=false`,
+    `orders_implemented=False`. 졸업 전/플래그 off 면 상태 출력만.
+  - 확인: `python3 polymarket_insight_live_bot.py --status`
+- **의견 원칙:** 검증 전 실매매 금지. 검증 후에도 초소액 + 고래 LIVE 지갑/한도와 분리.
+
 ## 2026-07-03 Polymarket Paper Bot
 
 - Initial mode: read-only paper trading only. No wallet signing, no live Polymarket orders.
