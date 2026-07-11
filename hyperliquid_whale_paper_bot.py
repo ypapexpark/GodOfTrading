@@ -93,9 +93,15 @@ def _wallets(cfg: dict) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+# 정산 표본 마일스톤 — 도달 시 1회 텔레그램 리마인드 (까먹지 않게)
+# 20: 1차 판단 가능 / 30: 모수·min_fill 재평가 / 50: 라이브 검토 후보
+SAMPLE_MILESTONES = (20, 30, 50)
+
+
 def _load_state(cfg: dict) -> dict:
     data = load_json(STATE_FILE, default=None)
     if isinstance(data, dict):
+        data.setdefault("sample_milestones_sent", {})
         return data
     return {
         "wallets": {
@@ -106,6 +112,7 @@ def _load_state(cfg: dict) -> dict:
         "bankroll": 1000.0,
         "last_report_time": 0.0,
         "last_scan": {},
+        "sample_milestones_sent": {},
     }
 
 
@@ -509,10 +516,14 @@ def build_report(state: dict, cfg: dict) -> str:
         weak = sorted(by_w.items(), key=lambda x: x[1])[:2]
         lines.append("")
         lines.append("💡 개선 코멘트")
-        if len(settled) < 15:
+        if len(settled) < 20:
             lines.append(
-                f"• [관찰] 정산 {len(settled)}건 — 모수 변경은 20~30건 후. "
-                f"지금은 추적·기록 유지."
+                f"• [관찰] 정산 {len(settled)}/20건 — 1차 마일스톤 전. "
+                f"도달 시 별도 TG 리마인드가 1회 갑니다."
+            )
+        elif len(settled) < 30:
+            lines.append(
+                f"• [관찰] 정산 {len(settled)}/30건 — 재평가 마일스톤 대기 중."
             )
         if top and top[0][1] > 0:
             lines.append(
@@ -531,6 +542,127 @@ def build_report(state: dict, cfg: dict) -> str:
         "※ 실주문 없음 · 콜드스타트 시 과거 체결 미카피 · 폴리 고래와 계좌 분리.",
     ]
     return "\n".join(lines)
+
+
+def _read_journal_settled() -> list[dict]:
+    rows: list[dict] = []
+    if not JOURNAL_FILE.exists():
+        return rows
+    for line in JOURNAL_FILE.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            r = json.loads(line)
+        except Exception:
+            continue
+        if r.get("event") == "settled":
+            rows.append(r)
+    return rows
+
+
+def build_sample_milestone_report(state: dict, cfg: dict, milestone: int) -> str:
+    """표본 충분 마일스톤 전용 리포트 (4h 정기 리포트와 별도 1회 발송)."""
+    p = _params(cfg)
+    settled = _read_journal_settled()
+    n = len(settled)
+    pnls = [float(r.get("pnl_usd") or 0) for r in settled]
+    wins = sum(1 for x in pnls if x > 0)
+    losses = sum(1 for x in pnls if x <= 0)
+    wr = wins / n if n else 0.0
+    total = sum(pnls)
+    avg = total / n if n else 0.0
+    avg_w = (sum(x for x in pnls if x > 0) / wins) if wins else 0.0
+    avg_l = (sum(x for x in pnls if x <= 0) / losses) if losses else 0.0
+    by_reason: dict[str, int] = {}
+    by_coin: dict[str, float] = {}
+    for r in settled:
+        reason = str(r.get("settle_reason") or "?")[:32]
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+        coin = str(r.get("coin") or "?")
+        by_coin[coin] = by_coin.get(coin, 0.0) + float(r.get("pnl_usd") or 0)
+
+    if milestone <= 20:
+        verdict = (
+            "1차 표본 도달 — min_fill·지갑 모수 큰 변경 전 성과 방향만 확인하세요."
+        )
+    elif milestone <= 30:
+        verdict = (
+            "재평가 구간 — $3k min_fill / 12지갑 유지 vs 조정 여부를 결정해도 됩니다."
+        )
+    else:
+        verdict = (
+            "라이브 검토 후보 구간 — paper EV·DD·지갑별 편차 보고 "
+            "초소액 LIVE 여부를 논의해도 됩니다 (자동 전환 없음)."
+        )
+
+    lines = [
+        f"📊 <b>[HL Paper 표본 마일스톤 n≥{milestone}]</b> — "
+        f"{datetime.now(KST).strftime('%m/%d %H:%M KST')}",
+        "",
+        "⏰ 까먹지 말라고 보내는 <b>1회성</b> 리마인드입니다.",
+        f"정산 <b>{n}</b>건 도달 (목표 게이트 {milestone})",
+        "",
+        f"bankroll ${float(state.get('bankroll') or 1000):.2f} | "
+        f"WR {wr:.0%} ({wins}W/{losses}L) | 누적 PnL <b>${total:+.2f}</b>",
+        f"건당 기댓값 ${avg:+.3f} | avgW ${avg_w:+.2f} | avgL ${avg_l:+.2f}",
+        f"설정: min fill ${p['min_fill_notional_usd']:.0f} | "
+        f"카피 ${p['copy_notional_usd']:.0f} | 지갑 {len(_wallets(cfg))}개",
+        "",
+        f"📌 {escape(verdict)}",
+    ]
+    if by_reason:
+        lines.append("")
+        lines.append("정산 사유:")
+        for reason, cnt in sorted(by_reason.items(), key=lambda x: -x[1])[:6]:
+            lines.append(f"• {escape(reason)} ×{cnt}")
+    if by_coin:
+        top = sorted(by_coin.items(), key=lambda x: -x[1])[:5]
+        weak = sorted(by_coin.items(), key=lambda x: x[1])[:3]
+        lines.append("")
+        lines.append("코인별 PnL (상위):")
+        for c, v in top:
+            lines.append(f"• {escape(c)} ${v:+.2f}")
+        if weak and weak[0][1] < 0:
+            lines.append("코인별 PnL (하위):")
+            for c, v in weak:
+                lines.append(f"• {escape(c)} ${v:+.2f}")
+    lines += [
+        "",
+        "다음 액션 예:",
+        "• 텔레에 「HL paper 리뷰」라고 하면 같이 판단",
+        "• 모수 갱신: tools/hl_whale_screen.py --from-leaderboard",
+        "• LIVE 전환은 사람 승인 후에만 (이 알림이 자동 켜지 않음)",
+        "",
+        "※ paper only · 같은 마일스톤은 다시 안 보냄",
+    ]
+    return "\n".join(lines)
+
+
+def _maybe_send_sample_milestones(state: dict, cfg: dict) -> list[int]:
+    """정산 건수가 마일스톤에 도달하면 1회씩 TG 발송. 발송된 milestone 리스트 반환."""
+    settled = _read_journal_settled()
+    n = len(settled)
+    sent_map = state.setdefault("sample_milestones_sent", {})
+    fired: list[int] = []
+    for m in SAMPLE_MILESTONES:
+        key = f"n{m}"
+        if n < m:
+            continue
+        if sent_map.get(key):
+            continue
+        msg = build_sample_milestone_report(state, cfg, m)
+        if send_review(msg):
+            sent_map[key] = {
+                "sent_at": _now_kst(),
+                "settled_n": n,
+                "bankroll": state.get("bankroll"),
+            }
+            fired.append(m)
+            print(f"  [HL-paper] sample milestone n>={m} report sent (settled={n})")
+        else:
+            print(f"  [HL-paper] sample milestone n>={m} TG 실패 — 다음 주기에 재시도")
+            break  # 실패 시 순서 유지하며 재시도
+    return fired
 
 
 def run_once(report_now: bool = False) -> dict:
@@ -553,12 +685,17 @@ def run_once(report_now: bool = False) -> dict:
     settled = mark_and_settle(state, cfg)
     signals = scan_signals(state, cfg)
     opened = open_paper(signals, state, cfg)
+    # 정산 누적 후 표본 마일스톤 (20/30/50) 1회 리마인드
+    milestones = _maybe_send_sample_milestones(state, cfg)
+    n_settled = len(_read_journal_settled())
     state["last_scan"] = {
         "time": _now_kst(),
         "signals": len(signals),
         "opened": opened,
         "settled": settled,
         "wallets": len(wallets),
+        "settled_total": n_settled,
+        "milestones_fired": milestones,
     }
     interval = float(_params(cfg).get("report_interval_seconds") or 4 * 3600)
     reported = False
@@ -574,9 +711,11 @@ def run_once(report_now: bool = False) -> dict:
         "signals": len(signals),
         "opened": opened,
         "settled": settled,
+        "settled_total": n_settled,
         "open_positions": len(state.get("open_positions") or []),
         "bankroll": state.get("bankroll"),
         "reported": reported,
+        "milestones_fired": milestones,
     }
 
 
