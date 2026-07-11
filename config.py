@@ -93,7 +93,9 @@ HYPERLIQUID_MAX_FUNDING_ABS = 0.0025
 # ─── BTC 장기봉 참고 바이어스 ───────────────────────────────────────────────
 # 월봉/주봉/일봉은 단타·스캘핑의 직접 진입 트리거가 아니라 큰 배경 추세 확인용이다.
 # 실제 진입/방향/시드는 15m·1h·4h의 타점, 손익비, 거래량, 최근 성과가 결정한다.
-BTC_MACRO_SHORT_ONLY_ENABLED = True
+# 2026-07-12 반사실: BTC Macro Short 1건 -$5.18 + SHORT 계열 누수.
+# 라이브 중지(레이더/관찰은 코드 경로 남김). 재개 시 별도 승인.
+BTC_MACRO_SHORT_ONLY_ENABLED = False
 BTC_MACRO_SHORT_SYMBOL = "BTC/USDT"
 BTC_MACRO_TREND_REFERENCE_ONLY = True
 BTC_MACRO_SHORT_BLOCK_LONG = False
@@ -212,17 +214,20 @@ MIN_TRADE_MARGIN_MAX_BALANCE_PCT = 0.12  # 2026-07-06: 0.25 → 0.12 (2026-07-07
 MIN_FALLBACK_TRADE_MARGIN_USD = 1.0
 
 # ─── Binance 사이징 (2026-07-11 개정) ───────────────────────────────────────
-# 구버전: BINANCE_FIXED_MARGIN_USD=$100 이 위험기반 사이징을 통째로 덮어씀.
+# 2026-07-12: Binance 청산 12건 중 평균 손실 ≈ -$31 vs Bybit ≈ -$1.1.
+# 동일 전략이라도 불릿이 과대해 EV 붕괴 → 마진·1R 상한을 Bybit 급으로 축소.
+# (필터만 적용 시 D안에서도 Binance pnl -$125; 사이즈 정규화 시 피해 대폭 감소)
+
 # 실측(07/10): DD 16.9% + risk×0.25 상태에서도 BTC SHORT에 $100×19x 강제 →
 # 단건 -$34. 알트 와이드SL(20~37%)도 고정 $100과 겹쳐 한 방 -$60~.
 # 개정: 고정 override 비활성(0). 위험기반 사이징 유지 + 단건 증거금/최악손실 상한만.
 # 0 또는 None = 고정 override 없음.
 BINANCE_FIXED_MARGIN_USD = 0.0
 BINANCE_FIXED_MARGIN_DOUBLE_AT = 200.0  # 레거시 참고값(자동 동작 없음)
-# 단건 증거금 상한(위험기반 결과와 min). 소액 재가동 단계 보수값.
-BINANCE_MAX_MARGIN_USD = 40.0
-# 단건 최악손실(est SL) ≤ equity × 이 비율. 넘으면 사이즈 축소, 최소마진 이하면 차단.
-BINANCE_MAX_TRADE_SL_LOSS_PCT = 0.010  # 1.0%
+# 단건 증거금 상한(위험기반 결과와 min). 2026-07-12: 40→15 (건당 -$30대 방지)
+BINANCE_MAX_MARGIN_USD = 15.0
+# 단건 최악손실(est SL) ≤ equity × 이 비율. 2026-07-12: 1.0%→0.45%
+BINANCE_MAX_TRADE_SL_LOSS_PCT = 0.0045
 
 # 확신도 높은 자리는 "맞췄는데 수익금이 너무 작음"을 막기 위해 증거금 하한을 따로 둔다.
 # 목표 증거금 = max(고정 USD, 잔고 비율). 단, 일손실/DD 하드스톱은 그대로 유지한다.
@@ -505,7 +510,7 @@ OBSERVATION_MODE_PAPER_ONLY = True
 SCALP_COMPOUND_ENABLED = True
 SCALP_COMPOUND_TF = {"15m"}
 SCALP_COMPOUND_STRATEGIES = {
-    "EMA눌림목+거래량급등", "EMA눌림목+돌파", "EMA눌림목+거래량급등+돌파",
+    "EMA눌림목+거래량급등", "EMA눌림목+돌파",
 }
 # 2026-07-11: 70→55. TP1에 너무 많이 실어 잔량 BE 청산 시 전체 승리가 얕아짐
 # (실측 부분익절 후 잔량 보호청산 다수). 55% 확정 + 45% 러너로 기대값 개선.
@@ -542,53 +547,21 @@ SYMBOL_COOLDOWN_HOURS = 8
 ASYMMETRIC_SYMBOL_DAILY_LOSS_LIMIT = 1
 
 # ─── 전략 화이트리스트 & 방향 차단 ──────────────────────────────────────────
-# 실거래 허용 전략 집합. 빈 set = 모든 전략 허용. 승률 기반 선별.
-# 성과 있는 전략: EMA눌림목+거래량급등 (67%, +$5.79), EMA눌림목+돌파 (75%, +$1.06)
-# 배제된 전략: BTC Sync Momentum (38%, -$10.27), 돌파 (0%), 거래량급등추세 (0%)
+# 2026-07-12 반사실(trade_execution_journal 청산 대입):
+#   Bybit 실제 n=114 WR53% pnl-$25 exp-$0.22
+#   → D) EMA2종+LONG only n=31 WR71% pnl+$9.5 exp+$0.31
+#   스킵 83건 합 pnl ≈ -$34.6 (숏·Sync·RSI2·3중조합 등)
+# 방어만 하는 게 아니라 −EV 버킷 제거로 기대값 부호 전환. 15m EMA 롱은 유지
+# (D 내 15m n=20 exp+$0.43 — 15m 전면 금지는 이 샘플에선 과한 방어).
+# 제거분(hidden/다이버/파라볼릭/MR/마이크로/3중조합)은 후보로그·시그널 알림은 가능,
+# 실주문만 화이트리스트 밖. 재편입은 표본+승인 후.
 AUTO_TRADE_STRATEGY_WHITELIST: set = {
-    # 2026-07-03 리뷰: 순수 "EMA눌림목"(거래량/돌파 확인 없음) 제거.
-    # 실측 5건 전부 SHORT, EV -$0.544/건 (BTC -3.13 포함, 순손익 -$2.72).
-    # 거래량급등/돌파 확인이 붙은 조합만 실거래 유지 (확인 조합이 승률 원천).
     "EMA눌림목+거래량급등",
     "EMA눌림목+돌파",
-    "EMA눌림목+거래량급등+돌파",
-    "hidden_bullish",
-    "hidden_bearish",  # 3건 -$2.67 — 표본 부족으로 유지하되 관찰 대상
-    # 2026-07-07: 일반(non-hidden) 다이버전스 편입. 사용자가 다이버전스를 선행지표로
-    # 신뢰하나 실거래 표본이 8건(대부분 hidden)뿐이라 EV 미검증 → 표본 축적 목적으로
-    # 실거래 허용하되 아래 DIVERGENCE_GENERAL_OBSERVATION_RISK_MULT로 소액 관찰모드 진입.
-    # divergence.py _check_bullish/_check_bearish가 signal_type="bullish"/"bearish"로 생성.
-    "bullish",
-    "bearish",
-    # 2026-07-08: 파라볼릭 급등-반전 사이클 신규 전략(관찰모드). 리서치 근거:
-    # Bybit 거래대금 상위 45종목 최근 3.5일 1h OHLCV 스캔 → 7개 실측 사례
-    # (BLUR +79%/-27%, VANRY +204%/-59%, YFI +58%/-30%, EDGE +73%, TLM +96%,
-    # OPG +52%, LIT +31%). 기존 EMA눌림목/돌파가 파라볼릭 움직임을 추세미달/돌파
-    # 불일치로 반복 차단해 하나도 못 잡음 → 별도 전략 필요. 초입(저이격) 롱 점화 +
-    # 고점(고이격) 숏 반전을 한 패밀리로 포착. 완전 미검증 → 아래
-    # PARABOLIC_OBSERVATION_RISK_MULT(0.30) 소액 관찰모드로 표본만 축적.
-    "파라볼릭점화",
-    "파라볼릭반전",
-    # 2026-07-08: 스캘핑/단타 고빈도 회전 강화(사용자 요청 "계속 매매") 3종 편입.
-    #   1) 마이크로돌파: 반사실 검증 근거 있음. 화이트리스트만 통과못한 순수표본
-    #      (모든 게이트 통과, whitelist에서만 차단)으로 ccxt 공개 OHLCV 반사실 시뮬
-    #      (SL1.5ATR/TP1.8ATR 선접촉) → 37종목 분산, 시간당중복제거 독립이벤트
-    #      LONG n=21 WR52% avgR+0.15 / SHORT n=33 WR50% avgR+0.10 로 양방향 EV양수.
-    #      고빈도(15m 중심)라 "계속 매매" 취지 부합. 관찰모드 0.30x.
-    #   2) VWAP회귀: 문헌(VWAP 평균회귀 스캘핑) 격차 — 기존 VWAP는 과열필터로만 썼음.
-    #      실거래 반사실 표본 0건 → 완전 미검증, 더 보수적 0.25x.
-    #   3) RSI2반전: 문헌(Connors RSI(2) 초단기 평균회귀) 격차 — 기존 RSI반전은
-    #      RSI(14) 28/72로 더 느림. 완전 미검증 → 0.25x.
-    # 셋 다 기존 게이트(추세/과열/포트폴리오캡/5m단독금지/VERY STRONG만 라이브/SHORT
-    # 정책) 전부 상속 — 화이트리스트 진입 여부만 다름.
-    "마이크로돌파",
-    "VWAP회귀",
-    "RSI2반전",
 }
-# SHORT 방향 전체 차단은 하지 않는다.
-# EMA눌림목(하락), hidden_bearish 등 EMA 계열 숏 신호는 정상 실거래.
-# 나쁜 숏 전략(BTC Macro Short, 돌파 숏 등)은 이미 화이트리스트로 차단됨.
-BLOCK_SHORT_AUTO_TRADE = False
+# 2026-07-12: Bybit SHORT n=44 pnl-$25.4 exp-$0.58 (롱은 ≈본전).
+# 전역 SHORT 신규 실주문 차단. 시그널 알림은 유지. 재개는 별도 승인.
+BLOCK_SHORT_AUTO_TRADE = True
 
 # ─── 비-EMA(거래량급등) SHORT 강등 ──────────────────────────────────────────
 # 2026-07-06 진단: live SHORT을 방향+전략으로 분해하니 순수 EMA눌림목 계열 SHORT
@@ -608,21 +581,15 @@ SHORT_NON_EMA_RISK_MULT = 0.40
 SHORT_STRICT_GATES_ENABLED = True
 SHORT_REQUIRE_MTF_ALIGNED = True   # mtf_boost > 1.0 (상위봉 전정렬) 필수
 SHORT_REQUIRE_EMA_ALIGNED = True   # EMA 방향 일치 필수
-SHORT_GLOBAL_RISK_MULT = 0.50      # 라이브 SHORT 전역 리스크 배율 (2026-07-11: 0.55→0.50)
-# 15m SHORT는 EMA 확인 조합만 (히든/역추세 15m 숏 제외)
-SHORT_15M_STRATEGY_WHITELIST = {
-    "EMA눌림목+돌파",
-    "EMA눌림목+거래량급등",
-    "EMA눌림목+거래량급등+돌파",
-}
+SHORT_GLOBAL_RISK_MULT = 0.50      # BLOCK_SHORT 시 미사용; 재개 시 상한
+# BLOCK_SHORT_AUTO_TRADE=True 동안 빈 set 유지
+SHORT_15M_STRATEGY_WHITELIST: set = set()
 
-# ─── 15m 실거래 전략 제한 (2026-07-11) ───────────────────────────────────────
-# 15m n=80 WR 52.5% 인데 누적 -$12.8 — 빈도 높은 노이즈 TF. 양의 엣지가 확인된
-# EMA 계열만 라이브, 히든/다이버전스/기타는 1h+ 또는 paper.
+# ─── 15m 실거래 전략 제한 ───────────────────────────────────────────────────
+# 2026-07-12: 코어 2종만 (15m EMA 롱은 반사실 +EV → 유지)
 LIVE_15M_STRATEGIES = {
     "EMA눌림목+거래량급등",
     "EMA눌림목+돌파",
-    "EMA눌림목+거래량급등+돌파",
 }
 
 # ─── EMA 전략 MACD 히스토그램 soft 필터 (2026-07-11) ─────────────────────────
@@ -650,7 +617,7 @@ REGIME_HIGH_VOL_BLOCK_MEANREV = True
 
 # 실거래 A/B 귀속 태그 (journal/history에 남겨 "기존 vs 신규 스택" 구분)
 # 2026-07-11 이후 진입은 이 버전 문자열로 묶어서 복기한다.
-LOGIC_STACK_VERSION = "2026-07-11-v2"
+LOGIC_STACK_VERSION = "2026-07-12-v3-ema-long-core"
 
 # ─── 일반 다이버전스 관찰모드 사이징 ────────────────────────────────────────
 # 2026-07-07: 일반(non-hidden) bullish/bearish 다이버전스를 화이트리스트에 편입하되,
