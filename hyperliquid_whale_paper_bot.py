@@ -39,34 +39,23 @@ CONFIG_FILE = ROOT / "hyperliquid_whale_config.json"
 STATE_FILE = ROOT / "hyperliquid_whale_paper_state.json"
 JOURNAL_FILE = ROOT / "hyperliquid_whale_paper_journal.jsonl"
 API = "https://api.hyperliquid.xyz/info"
-KST = timezone(timedelta(hours=9))
 
-
-def _now() -> float:
-    return time.time()
-
-
-def _now_kst() -> str:
-    return datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST")
-
-
-def _json_safe(v: Any) -> Any:
-    if isinstance(v, dict):
-        return {str(k): _json_safe(x) for k, x in v.items()}
-    if isinstance(v, (list, tuple)):
-        return [_json_safe(x) for x in v]
-    if isinstance(v, (str, int, float, bool)) or v is None:
-        return v
-    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-        return 0.0
-    return str(v)
+from bot_util import (  # noqa: E402
+    KST,
+    append_jsonl,
+    json_safe as _json_safe,
+    load_json,
+    now as _now,
+    now_kst as _now_kst,
+    save_json,
+)
 
 
 def _load_config() -> dict:
-    if not CONFIG_FILE.exists():
-        return {"params": {}, "whales": [], "seed_wallets": []}
-    return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-
+    data = load_json(CONFIG_FILE, default=None)
+    if isinstance(data, dict):
+        return data
+    return {"params": {}, "whales": [], "seed_wallets": []}
 
 def _params(cfg: dict) -> dict:
     p = cfg.get("params") or {}
@@ -102,11 +91,9 @@ def _wallets(cfg: dict) -> list[str]:
 
 
 def _load_state(cfg: dict) -> dict:
-    if STATE_FILE.exists():
-        try:
-            return json.loads(STATE_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    data = load_json(STATE_FILE, default=None)
+    if isinstance(data, dict):
+        return data
     return {
         "wallets": {
             w: {"last_fill_time": 0, "status": "active", "copied_keys": {}}
@@ -120,13 +107,11 @@ def _load_state(cfg: dict) -> dict:
 
 
 def _save_state(state: dict) -> None:
-    STATE_FILE.write_text(json.dumps(_json_safe(state), ensure_ascii=False, indent=2), encoding="utf-8")
+    save_json(STATE_FILE, state)
 
 
 def _append(row: dict) -> None:
-    with JOURNAL_FILE.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(_json_safe(row), ensure_ascii=False) + "\n")
-
+    append_jsonl(JOURNAL_FILE, row)
 
 def _post(body: dict) -> Any:
     r = requests.post(API, json=body, timeout=20)

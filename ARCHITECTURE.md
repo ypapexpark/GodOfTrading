@@ -184,15 +184,16 @@ Poly insight 시그널 원천: **`/Users/ghp/Projects/PolyInsight`** (별 저장
 
 | 우선 | 작업 | 효과 | 리스크 |
 |------|------|------|--------|
-| P1 | `bot_util.py` — 사이드 봇 공통 util | 중복↓ | 낮음 |
-| P2 | `main_report.py` — 리포트 빌더만 분리 | main −200~400줄 | 낮음 |
-| P3 | `main_btc_sync.py` — BTC sync 경로 분리 | main −600줄 | 중 |
-| P4 | `main_entry_gates.py` — capacity/margin/roi 헬퍼 | 가독성 | 중 |
-| P5 | `_try_auto_trade` 단계 함수 분리 (동작 동일) | 분석성 | 중~높 |
-| P6 | candidates 로테이션 스크립트 | 디스크 | 낮음 |
+| P1 | `bot_util.py` — 사이드 봇 공통 util | 중복↓ | 낮음 → **완료 2026-07-11** |
+| P2 | candidates 로테이션 | 디스크 | 낮음 → **완료 2026-07-11** (`tools/rotate_candidates.py`) |
+| P3 | `main_report.py` — 리포트 빌더만 분리 | main −200~400줄 | 낮음 |
+| P4 | `main_btc_sync.py` — BTC sync 경로 분리 | main −600줄 | 중 |
+| P5 | `main_entry_gates.py` — capacity/margin/roi 헬퍼 | 가독성 | 중 |
+| P6 | `_try_auto_trade` 단계 함수 분리 (동작 동일) | 분석성 | 중~높 |
 | — | config 상수 그룹 파일 분리 | 탐색 | 중 (import 다수) |
 
-**이번 세션 적용:** 맵 문서 + 잡파일 정리 + gitignore. **매매 로직 0 변경.**
+**사이드 봇 `bot_util` 적용:** insight paper/live, whale paper/live, HL paper, BTC paper.  
+**본선 `main`/`trader` 로직 미변경.**
 
 ---
 

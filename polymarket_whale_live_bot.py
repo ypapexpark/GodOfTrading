@@ -38,7 +38,6 @@ load_dotenv(ROOT / ".env")
 
 STATE_FILE = ROOT / "polymarket_whale_live_state.json"
 JOURNAL_FILE = ROOT / "polymarket_whale_live_journal.jsonl"
-KST = timezone(timedelta(hours=9))
 
 # paper와 동일 비율: bankroll × 2% (2026-07-11)
 # paper: $1000×2%=$20 / live: $200×2%=$4 (cap으로 상한만 둠)
@@ -53,25 +52,21 @@ MIN_NET_USDC = float(os.getenv("POLYMARKET_WHALE_MIN_NET_USDC", "1000") or 1000)
 REPORT_INTERVAL_SECONDS = int(os.getenv("POLYMARKET_LIVE_REPORT_INTERVAL", str(4 * 3600)) or (4 * 3600))
 
 
-def _now() -> float:
-    return time.time()
-
-
-def _now_kst() -> str:
-    return datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST")
+from bot_util import (  # noqa: E402
+    KST,
+    append_jsonl,
+    json_safe as _json_safe,
+    now as _now,
+    now_kst as _now_kst,
+)
 
 
 def _today() -> str:
     return datetime.now(KST).strftime("%Y-%m-%d")
 
 
-def _json_safe(v: Any) -> Any:
-    return paper._json_safe(v)
-
-
 def _append(row: dict) -> None:
-    with JOURNAL_FILE.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(_json_safe(row), ensure_ascii=False) + "\n")
+    append_jsonl(JOURNAL_FILE, row)
 
 
 def _load_state() -> dict[str, Any]:

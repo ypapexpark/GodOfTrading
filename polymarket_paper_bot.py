@@ -45,31 +45,22 @@ STATE_FILE = ROOT / "polymarket_paper_state.json"
 JOURNAL_FILE = ROOT / "polymarket_paper_journal.jsonl"
 CANDIDATE_FILE = ROOT / "polymarket_paper_candidates.jsonl"
 
-KST = timezone(timedelta(hours=9))
 POLY_CRYPTO_TAKER_FEE_RATE = 0.07
 
 load_dotenv(ROOT / ".env")
 
-
-def _env_float(name: str, default: float) -> float:
-    raw = os.getenv(name, "").strip()
-    if not raw or "여기에" in raw:
-        return default
-    try:
-        return float(raw)
-    except Exception:
-        return default
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name, "").strip()
-    if not raw or "여기에" in raw:
-        return default
-    try:
-        return int(raw)
-    except Exception:
-        return default
-
+from bot_util import (  # noqa: E402
+    KST,
+    append_jsonl as _append_jsonl,
+    env_float as _env_float,
+    env_int as _env_int,
+    json_safe as _json_safe,
+    load_json,
+    now as _now,
+    now_kst as _now_kst,
+    read_jsonl as _read_jsonl,
+    save_json,
+)
 
 PAPER_ORDER_USD = _env_float("POLYMARKET_PAPER_ORDER_USD", 100.0)
 MIN_EDGE = _env_float("POLYMARKET_PAPER_MIN_EDGE", 0.025)
@@ -82,14 +73,6 @@ RECURRENCE = os.getenv("POLYMARKET_PAPER_RECURRENCE", "5m").strip() or "5m"
 MILESTONE_REPORT_AT = (
     os.getenv("POLYMARKET_PAPER_MILESTONE_REPORT_AT", "2026-07-10 06:00").strip()
 )
-
-
-def _now() -> float:
-    return time.time()
-
-
-def _now_kst() -> str:
-    return datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST")
 
 
 def _parse_ts(value: str | None) -> float:
@@ -113,27 +96,10 @@ def _parse_kst_minute(value: str) -> float:
     return 0.0
 
 
-def _json_safe(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(k): _json_safe(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(v) for v in value]
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    if hasattr(value, "item"):
-        try:
-            return _json_safe(value.item())
-        except Exception:
-            pass
-    return str(value)
-
-
 def _load_state() -> dict[str, Any]:
-    if STATE_FILE.exists():
-        try:
-            return json.loads(STATE_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    data = load_json(STATE_FILE, default=None)
+    if isinstance(data, dict):
+        return data
     return {
         "open_positions": [],
         "traded_keys": {},
@@ -143,29 +109,7 @@ def _load_state() -> dict[str, Any]:
 
 
 def _save_state(state: dict[str, Any]) -> None:
-    STATE_FILE.write_text(
-        json.dumps(_json_safe(state), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-
-def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(_json_safe(row), ensure_ascii=False) + "\n")
-
-
-def _read_jsonl(path: Path, limit: int | None = None) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            rows.append(json.loads(line))
-        except Exception:
-            continue
-    return rows[-limit:] if limit else rows
+    save_json(STATE_FILE, state)
 
 
 def _normal_cdf(x: float) -> float:

@@ -52,29 +52,13 @@ PAPER_JOURNAL = ROOT / "polymarket_insight_paper_journal.jsonl"
 LIVE_STATE = ROOT / "polymarket_insight_live_state.json"  # 생성 예약 (아직 미사용)
 LIVE_JOURNAL = ROOT / "polymarket_insight_live_journal.jsonl"
 
-KST = timezone(timedelta(hours=9))
 load_dotenv(ROOT / ".env")
 
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name, "").strip().lower()
-    if not raw or "여기에" in raw:
-        return default
-    return raw in ("1", "true", "yes", "on")
-
-
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            rows.append(json.loads(line))
-        except Exception:
-            continue
-    return rows
+from bot_util import (  # noqa: E402
+    KST,
+    env_bool as _env_bool,
+    read_jsonl as _read_jsonl,
+)
 
 
 def paper_graduation() -> dict[str, Any]:

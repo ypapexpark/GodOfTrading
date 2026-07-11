@@ -60,6 +60,12 @@ def json_safe(value: Any) -> Any:
         return 0.0
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
+    # numpy / scalar wrappers (BTC paper 등)
+    if hasattr(value, "item"):
+        try:
+            return json_safe(value.item())
+        except Exception:
+            pass
     return str(value)
 
 
