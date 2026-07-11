@@ -76,6 +76,8 @@ def _params(cfg: dict) -> dict:
         "max_leverage_copy": float(p.get("max_leverage_copy", 5)),
         "max_open_positions": int(p.get("max_open_positions", 8)),
         "slippage_bps": float(p.get("slippage_bps", 15)),
+        "report_interval_seconds": int(p.get("report_interval_seconds", 4 * 3600)),
+        "max_hold_hours": float(p.get("max_hold_hours", 48)),
     }
 
 
@@ -155,12 +157,30 @@ def _clearinghouse(addr: str) -> dict:
         return {}
 
 
+def _fill_direction(f: dict) -> str:
+    """HL side: B=buy/bid, A=sell/ask. dir 필드가 있으면 우선."""
+    d = str(f.get("dir") or "").lower()
+    if "long" in d or d in ("open long", "close short"):
+        # Open Long / Close Short → 우리는 long 쪽 노출 증가/숏청산 = LONG 카피 신호로 Open Long만
+        if "open long" in d:
+            return "LONG"
+        if "open short" in d:
+            return "SHORT"
+        # close * 는 진입 카피 대상 아님
+        if "close" in d:
+            return "CLOSE"
+    side_raw = str(f.get("side") or "").lower()
+    if side_raw in ("b", "buy"):
+        return "LONG"
+    return "SHORT"
+
+
 def scan_signals(state: dict, cfg: dict) -> list[dict]:
     p = _params(cfg)
     signals = []
     for wallet in _wallets(cfg):
         wstate = state["wallets"].setdefault(
-            wallet, {"last_fill_time": 0, "status": "active", "copied_keys": {}}
+            wallet, {"last_fill_time": 0, "status": "active", "copied_keys": {}, "seeded": False}
         )
         if wstate.get("status") == "suspended":
             continue
@@ -169,9 +189,20 @@ def scan_signals(state: dict, cfg: dict) -> list[dict]:
         except Exception as e:
             wstate["last_error"] = str(e)
             continue
-        # newest first typically — sort by time
         fills = sorted(fills, key=lambda f: int(f.get("time") or 0))
+        if not fills:
+            continue
+
+        # 콜드스타트: 과거 전량 카피 금지 — 커서만 최신 체결로 시드
         last_t = int(wstate.get("last_fill_time") or 0)
+        if not wstate.get("seeded") and last_t <= 0:
+            newest = max(int(f.get("time") or 0) for f in fills)
+            wstate["last_fill_time"] = newest
+            wstate["seeded"] = True
+            wstate["seeded_at"] = _now_kst()
+            continue
+
+        wstate["seeded"] = True
         for f in fills:
             t = int(f.get("time") or 0)
             if t <= last_t:
@@ -187,16 +218,15 @@ def scan_signals(state: dict, cfg: dict) -> list[dict]:
                 continue
             coin = str(f.get("coin") or "")
             if not coin or coin.startswith("@"):
-                continue  # skip some spot/special
-            side_raw = str(f.get("side") or "").lower()
-            direction = "LONG" if side_raw in ("b", "buy") else "SHORT"
+                continue
+            direction = _fill_direction(f)
+            if direction == "CLOSE":
+                continue  # 청산 체결은 별도 settle 로직이 처리
             key = f"{wallet}:{coin}:{t}:{direction}"
             if wstate.setdefault("copied_keys", {}).get(key):
                 continue
             wstate["copied_keys"][key] = True
-            # prune keys map
             if len(wstate["copied_keys"]) > 500:
-                # keep arbitrary tail
                 items = list(wstate["copied_keys"].items())[-200:]
                 wstate["copied_keys"] = dict(items)
             signals.append({
@@ -208,6 +238,7 @@ def scan_signals(state: dict, cfg: dict) -> list[dict]:
                 "notional": notional,
                 "fill_time": t,
                 "key": key,
+                "dir_raw": f.get("dir"),
             })
     return signals
 
@@ -253,13 +284,20 @@ def open_paper(signals: list[dict], state: dict, cfg: dict) -> int:
 
 
 def mark_and_settle(state: dict, cfg: dict) -> int:
-    """마크 업데이트. 고래가 포지션을 닫으면(같은 코인 반대 대량 체결 단순화) 정산.
-    v1: 미실현만 갱신, 자동 청산은 보유 12시간 또는 mid 기반 임의 청산 없음.
-    청산 트리거: 소스 지갑 clearinghouse에 해당 코인 포지션 없음.
+    """마크 업데이트 + 정산.
+
+    청산 트리거:
+      1) 소스 지갑 clearinghouse 에 해당 코인 포지션 없음 (고래 flat)
+      2) max_hold_hours 초과 (강제 paper 청산 — 무기한 홀딩 방지)
     """
+    p = _params(cfg)
+    max_hold = float(p.get("max_hold_hours") or 48) * 3600
     settled = 0
     remaining = []
     mids = _mids()
+    # wallet -> clearinghouse cache (한 사이클 1회)
+    ch_cache: dict[str, dict] = {}
+
     for pos in state.get("open_positions") or []:
         coin = pos["coin"]
         mid = float(mids.get(coin) or pos["entry_price"])
@@ -272,33 +310,51 @@ def mark_and_settle(state: dict, cfg: dict) -> int:
         pos["mark"] = mid
         pos["unrealized_pnl"] = round(upnl, 4)
 
-        # whale flat? clearinghouse 정상 응답일 때만 판정
         closed = False
-        try:
-            ch = _clearinghouse(pos["wallet"])
-            if not isinstance(ch, dict) or (
-                "assetPositions" not in ch and "marginSummary" not in ch
-            ):
-                remaining.append(pos)
-                continue
-            asset_pos = ch.get("assetPositions") or []
-            still = False
-            for ap in asset_pos:
-                if not isinstance(ap, dict):
-                    continue
-                pos_inner = ap.get("position") if isinstance(ap.get("position"), dict) else ap
-                c = pos_inner.get("coin")
-                try:
-                    szi = float(pos_inner.get("szi") or 0)
-                except Exception:
-                    szi = 0.0
-                if c == coin and abs(szi) > 1e-12:
-                    still = True
-                    break
-            if not still and _now() - float(pos.get("opened_ts") or 0) > 120:
-                closed = True
-        except Exception:
-            closed = False
+        reason = ""
+        age = _now() - float(pos.get("opened_ts") or 0)
+
+        # 1) max hold
+        if age >= max_hold:
+            closed = True
+            reason = f"max_hold_{p.get('max_hold_hours')}h"
+
+        # 2) whale flat
+        if not closed and age > 120:
+            try:
+                w = pos["wallet"]
+                if w not in ch_cache:
+                    ch_cache[w] = _clearinghouse(w)
+                ch = ch_cache[w]
+                if isinstance(ch, dict) and (
+                    "assetPositions" in ch or "marginSummary" in ch
+                ):
+                    still = False
+                    for ap in ch.get("assetPositions") or []:
+                        if not isinstance(ap, dict):
+                            continue
+                        pos_inner = (
+                            ap.get("position")
+                            if isinstance(ap.get("position"), dict)
+                            else ap
+                        )
+                        c = pos_inner.get("coin")
+                        try:
+                            szi = float(pos_inner.get("szi") or 0)
+                        except Exception:
+                            szi = 0.0
+                        if c == coin and abs(szi) > 1e-12:
+                            # 방향 불일치(우리가 LONG인데 고래 숏만 남음)도 flat 취급
+                            if pos["direction"] == "LONG" and szi > 0:
+                                still = True
+                            elif pos["direction"] == "SHORT" and szi < 0:
+                                still = True
+                            break
+                    if not still:
+                        closed = True
+                        reason = "whale_flat"
+            except Exception:
+                pass
 
         if closed:
             pnl = float(pos.get("unrealized_pnl") or 0)
@@ -306,13 +362,15 @@ def mark_and_settle(state: dict, cfg: dict) -> int:
                 **pos,
                 "event": "settled",
                 "settled_at": _now_kst(),
+                "settled_ts": _now(),
                 "pnl_usd": round(pnl, 4),
                 "exit_price": mid,
+                "settle_reason": reason,
             }
             _append(row)
             state["bankroll"] = float(state.get("bankroll") or 1000) + pnl
             settled += 1
-            print(f"  [HL-paper] settle {pos['direction']} {coin} pnl={pnl:+.2f}")
+            print(f"  [HL-paper] settle {pos['direction']} {coin} pnl={pnl:+.2f} ({reason})")
         else:
             remaining.append(pos)
     state["open_positions"] = remaining
@@ -329,21 +387,74 @@ def build_report(state: dict, cfg: dict) -> str:
             except Exception:
                 pass
     settled = [r for r in rows if r.get("event") == "settled"]
+    opened = [r for r in rows if r.get("event") == "opened"]
+    wins = [r for r in settled if float(r.get("pnl_usd") or 0) > 0]
     pnl = sum(float(r.get("pnl_usd") or 0) for r in settled)
+    wr = len(wins) / len(settled) if settled else 0.0
+    wallets_n = len(_wallets(cfg))
+
+    # wallet pnl breakdown
+    by_w: dict[str, float] = {}
+    for r in settled:
+        w = str(r.get("wallet") or "?")[:12]
+        by_w[w] = by_w.get(w, 0.0) + float(r.get("pnl_usd") or 0)
+
     lines = [
-        f"🌊 <b>[Hyperliquid 고래 Paper 카피]</b> — {datetime.now(KST).strftime('%m/%d %H:%M KST')}",
-        f"bankroll ${float(state.get('bankroll') or 1000):.2f} | 정산 {len(settled)} | PnL ${pnl:+.2f}",
-        f"오픈 {len(state.get('open_positions') or [])}/{p['max_open_positions']} | "
-        f"카피 ${p['copy_notional_usd']:.0f} | min whale fill ${p['min_fill_notional_usd']:.0f}",
-        f"추적 지갑 {len(_wallets(cfg))}개",
+        f"🌊 <b>[Hyperliquid 고래 Paper 카피]</b> — "
+        f"{datetime.now(KST).strftime('%m/%d %H:%M KST')}",
         "",
-        "※ 실주문 없음. seed/whales 비어 있으면 동작 안 함 → tools/hl_whale_screen.py",
+        "🏷 계좌: <b>hl_whale_paper</b> (Poly/Bybit 과 분리)",
+        f"bankroll ${float(state.get('bankroll') or 1000):.2f} | "
+        f"정산 {len(settled)}건 | 승(PnL&gt;0) {wr:.0%} | 누적 PnL ${pnl:+.2f}",
+        f"오픈 {len(state.get('open_positions') or [])}/{p['max_open_positions']} | "
+        f"카피 ${p['copy_notional_usd']:.0f}/건 | min fill ${p['min_fill_notional_usd']:.0f} | "
+        f"max hold {p['max_hold_hours']:.0f}h",
+        f"추적 지갑 {wallets_n}개 | 누적 진입 기록 {len(opened)}건",
     ]
-    for pos in (state.get("open_positions") or [])[:5]:
+    if state.get("open_positions"):
+        lines.append("")
+        lines.append("오픈:")
+        for pos in (state.get("open_positions") or [])[:6]:
+            lines.append(
+                f"• {pos.get('direction')} {escape(str(pos.get('coin')))} "
+                f"uPnL ${float(pos.get('unrealized_pnl') or 0):+.2f} "
+                f"via {escape(str(pos.get('wallet') or '')[:10])}..."
+            )
+    if settled:
+        lines.append("")
+        lines.append("최근 정산:")
+        for r in settled[-5:]:
+            lines.append(
+                f"• {escape(str(r.get('direction')))} {escape(str(r.get('coin')))} "
+                f"${float(r.get('pnl_usd') or 0):+.2f} "
+                f"({escape(str(r.get('settle_reason') or ''))})"
+            )
+    if by_w:
+        top = sorted(by_w.items(), key=lambda x: -x[1])[:3]
+        weak = sorted(by_w.items(), key=lambda x: x[1])[:2]
+        lines.append("")
+        lines.append("💡 개선 코멘트")
+        if len(settled) < 15:
+            lines.append(
+                f"• [관찰] 정산 {len(settled)}건 — 모수 변경은 20~30건 후. "
+                f"지금은 추적·기록 유지."
+            )
+        if top and top[0][1] > 0:
+            lines.append(
+                f"• [유지] 고성과 지갑 {escape(top[0][0])}... PnL ${top[0][1]:+.2f}"
+            )
+        if weak and weak[0][1] < 0 and len(settled) >= 10:
+            lines.append(
+                f"• [건의] 저성과 {escape(weak[0][0])}... PnL ${weak[0][1]:+.2f} — "
+                f"제외 검토 (config whales[])."
+            )
         lines.append(
-            f"• {pos.get('direction')} {escape(str(pos.get('coin')))} "
-            f"uPnL ${float(pos.get('unrealized_pnl') or 0):+.2f}"
+            "• [개선] 분기 1회 tools/hl_whale_screen.py --from-leaderboard 로 모수 갱신."
         )
+    lines += [
+        "",
+        "※ 실주문 없음 · 콜드스타트 시 과거 체결 미카피 · 폴리 고래와 계좌 분리.",
+    ]
     return "\n".join(lines)
 
 
@@ -374,18 +485,23 @@ def run_once(report_now: bool = False) -> dict:
         "settled": settled,
         "wallets": len(wallets),
     }
-    if report_now or (_now() - float(state.get("last_report_time") or 0) > 4 * 3600):
+    interval = float(_params(cfg).get("report_interval_seconds") or 4 * 3600)
+    reported = False
+    if report_now or (_now() - float(state.get("last_report_time") or 0) >= interval):
         if send_review(build_report(state, cfg)):
             state["last_report_time"] = _now()
+            reported = True
     _save_state(state)
     return {
         "ok": True,
+        "account": "hl_whale_paper",
         "wallets": len(wallets),
         "signals": len(signals),
         "opened": opened,
         "settled": settled,
         "open_positions": len(state.get("open_positions") or []),
         "bankroll": state.get("bankroll"),
+        "reported": reported,
     }
 
 

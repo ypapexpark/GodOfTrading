@@ -58,35 +58,50 @@
 ## B. Hyperliquid 고래 paper
 
 ### 파일
-- `hyperliquid_whale_paper_bot.py`
-- `hyperliquid_whale_config.json` (seed_wallets / whales)
-- `tools/hl_whale_screen.py`
+- `hyperliquid_whale_paper_bot.py` — 3분 폴링, 4h TG, **실주문 없음**
+- `hyperliquid_whale_config.json` — whales[] 모수 (2026-07-11 리더보드 12지갑 시드)
+- `tools/hl_whale_screen.py` — 활동 검증 / 리더보드 재스크리닝
+- state/journal: `hyperliquid_whale_paper_state.json`, `*_journal.jsonl`
 
-### 시작
-1. 추적할 HL 주소 확보 (탐색/리서치) 후:
-   ```bash
-   # config seed_wallets에 넣거나
-   python3 tools/hl_whale_screen.py --wallets 0xabc...,0xdef... --write-config
-   ```
-2. 실행:
-   ```bash
-   python3 hyperliquid_whale_paper_bot.py --json
-   ```
-3. Agent (선택):
-   ```bash
-   cp com.hyperliquid.whale.paper.plist ~/Library/LaunchAgents/
-   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hyperliquid.whale.paper.plist
-   ```
+### 상태 점검 (2026-07-11)
+| 항목 | 상태 |
+|------|------|
+| 봇 코드 | 동작 (콜드스타트 과거 전량 카피 버그 수정) |
+| 모수 지갑 | **12개** 리더보드 스크리닝 (월수익+거래량+최근활동) |
+| LaunchAgent | `com.hyperliquid.whale.paper` (180s) |
+| LIVE | **없음** (paper only — 폴리 insight 와 동일 원칙) |
+
+### 시작 / 재스크리닝
+```bash
+# 리더보드에서 모수 갱신
+python3 tools/hl_whale_screen.py --from-leaderboard --write-config --top 12
+
+# 1회 실행 (첫 사이클은 커서 시드만, 두 번째부터 신규 체결 카피)
+python3 hyperliquid_whale_paper_bot.py --json
+python3 hyperliquid_whale_paper_bot.py --report-now
+
+# Agent
+cp com.hyperliquid.whale.paper.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hyperliquid.whale.paper.plist
+```
 
 ### 파라미터 (`hyperliquid_whale_config.json` params)
-- `min_fill_notional_usd`: 고래 체결 최소 규모 (기본 5000)
+- `min_fill_notional_usd`: 고래 체결 최소 (기본 5000)
 - `copy_notional_usd`: paper 카피 크기 (기본 25)
-- `max_leverage_copy`: 기록용 캡 (기본 5) — 실주문 시 강제에 사용 예정
+- `max_leverage_copy`: 기록용 캡 (기본 5)
+- `max_hold_hours`: paper 최대 보유 (기본 48) — 고래 flat 또는 시간초과 시 정산
+- `report_interval_seconds`: TG 주기 (기본 14400 = 4h)
+
+### 카피 로직 요약
+1. 지갑 userFills 폴링 → notional ≥ min 인 **Open Long/Short** 만 신호
+2. 코인당 1 포지션, 고정 $25 notional, 슬리피지 bps
+3. 정산: 고래 clearinghouse flat **또는** max_hold
+4. 첫 발견 시 커서를 최신 체결로 시드 → **과거 체결 소급 카피 안 함**
 
 ### 다음 단계 (아직 안 함)
-- HL 실주문 어댑터
-- 장기 성과 스크리너 (폴리 PolyBacktest급)
-- GOT 본선과 시그널 소프트 결합
+- HL 실주문 어댑터 (paper 검증 후)
+- 지갑별 z-score suspend (폴리 고래 paper 패턴)
+- GOT 본선 시그널과 소프트 결합
 
 ---
 

@@ -1,5 +1,13 @@
 # GodOfTrading Trading Notes
 
+## 2026-07-11 Hyperliquid whale paper (가동)
+
+- **상태:** paper only, 12 지갑 리더보드 시드, LaunchAgent 180s.
+- **핵심 수정:** 콜드스타트 시 과거 체결 소급 카피 금지 (커서 시드).
+- **정산:** 고래 flat 또는 max_hold 48h. 카피 notional $25, min whale fill $5k.
+- **재스크리닝:** `python3 tools/hl_whale_screen.py --from-leaderboard --write-config --top 12`
+- **LIVE:** 없음. 폴리 고래처럼 paper 성과 본 뒤 결정.
+
 ## 2026-07-11 PolyInsight momentum paper (고래 카피와 분리)
 
 - **전략:** PolyInsight analytics `momentum_break` / `prob_shock` 만 paper 진입.
