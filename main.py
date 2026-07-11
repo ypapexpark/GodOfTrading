@@ -5547,6 +5547,21 @@ def scan():
 
 
 if __name__ == "__main__":
+    # LaunchAgent StartInterval 겹침 방지: 같은 venue+mode 는 1프로세스만.
+    # Bybit full / Bybit fast / Binance full / Binance fast 는 서로 독립.
+    from process_lock import main_run_lock_name, try_acquire
+
+    _venue = runtime_context()["state_namespace"]
+    if BITHUMB_ONLY:
+        _lock = main_run_lock_name(venue=_venue, fast=False, special="bithumb_only")
+    elif KRX_ONLY:
+        _lock = main_run_lock_name(venue=_venue, fast=False, special="krx_only")
+    else:
+        _lock = main_run_lock_name(venue=_venue, fast=FAST_RADAR)
+    if not try_acquire(_lock):
+        # exit 0: LaunchAgent 가 실패로 재시도 폭풍 일으키지 않게
+        sys.exit(0)
+
     if not wait_for_network():
         print("네트워크 연결 실패 — 종료")
         sys.exit(1)

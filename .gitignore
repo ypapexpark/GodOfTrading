@@ -60,3 +60,6 @@ logs/
 tappy-logo-*.png
 trend-radar-free/
 .pycache_check/
+
+# ── 프로세스 잠금 (런타임) ──────────────────────────────────
+.locks/

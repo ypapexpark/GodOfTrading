@@ -43,6 +43,7 @@
 | `binance_trader.py` | ~750 | Binance 어댑터 (trader 미러) | 바이낸스만 |
 | `trade_router.py` | ~110 | `AUTO_TRADE_EXCHANGE` 로 bybit/binance 분기 | 벤뉴 라우팅 |
 | `venue_runtime.py` | ~65 | state/journal 파일명 벤뉴 분리 | 경로 |
+| `process_lock.py` | ~90 | LaunchAgent 겹침 방지 (venue×mode flock) | 중복 스캔 |
 | `config.py` | ~900 | 리스크·게이트·전략 플래그 (로직 적고 상수 多) | 파라미터 |
 | `strategies.py` | ~1050 | 보조 전략 detect_* | 신규 패턴 |
 | `divergence.py` | ~690 | 다이버전스 핵심 신호 | 다이버 로직 |
@@ -194,6 +195,13 @@ Poly insight 시그널 원천: **`/Users/ghp/Projects/PolyInsight`** (별 저장
 
 **사이드 봇 `bot_util` 적용:** insight paper/live, whale paper/live, HL paper, BTC paper.  
 **본선 `main`/`trader` 로직 미변경.**
+
+### 겹침 방지 (2026-07-11)
+
+LaunchAgent `StartInterval` 은 이전 종료를 기다리지 않음 → 스캔이 주기보다 길면 동일
+`main.py` 가 2~3개 겹칠 수 있음.  
+`process_lock.py` 가 `main_{venue}_{full|fast}` flock 으로 **같은 키만** 스킵.
+Bybit full ↔ fast, Bybit ↔ Binance 는 **동시 허용** (의도된 분리 실행).
 
 ---
 
