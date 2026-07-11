@@ -8,12 +8,16 @@
   - 그 외에는 dry-run 로그만
 
 환경변수:
-  POLYMARKET_PRIVATE_KEY   Polygon EOA private key (0x...)
-  POLYMARKET_FUNDER        (선택) proxy/funder 주소 — Magic/email 지갑
-  POLYMARKET_SIGNATURE_TYPE  (선택) 0=EOA(기본), 1=POLY_PROXY, 2=GNOSIS_SAFE 등
+  POLYMARKET_PRIVATE_KEY   Polygon EOA private key (0x...) — MetaMask 등 서명 키
+  POLYMARKET_FUNDER        Polymarket 프로필/deposit 지갑 (잔고가 여기 있음)
+  POLYMARKET_SIGNATURE_TYPE  0=EOA, 1=POLY_PROXY, 2=GNOSIS_SAFE, 3=POLY_1271(deposit)
+                             웹 입금 계정은 보통 funder=proxyWallet + type=3
   POLYMARKET_CHAIN_ID      기본 137
   POLYMARKET_CLOB_HOST     기본 https://clob.polymarket.com
   POLYMARKET_LIVE_TRADING_ENABLED  true 일 때만 live
+
+주의: MetaMask 주소 ≠ Polymarket 잔고 주소인 경우가 많다.
+  서명=EOA, 잔고=proxyWallet(deposit). funder 미설정 시 EOA 잔고 $0 으로 보임.
 """
 from __future__ import annotations
 
@@ -21,12 +25,14 @@ import os
 from pathlib import Path
 from typing import Any
 
+import requests
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
 CLOB_HOST = os.getenv("POLYMARKET_CLOB_HOST", "https://clob.polymarket.com").strip()
 CHAIN_ID = int(os.getenv("POLYMARKET_CHAIN_ID", "137") or 137)
+_PROXY_CACHE: dict[str, str | None] = {}
 
 
 def live_enabled() -> bool:
@@ -37,23 +43,63 @@ def _private_key() -> str:
     return (os.getenv("POLYMARKET_PRIVATE_KEY") or os.getenv("POLY_PRIVATE_KEY") or "").strip()
 
 
+def _eoa_address() -> str | None:
+    key = _private_key()
+    if not key:
+        return None
+    if not key.startswith("0x"):
+        key = "0x" + key
+    try:
+        from eth_account import Account
+        return Account.from_key(key).address
+    except Exception:
+        return None
+
+
+def resolve_proxy_wallet(eoa: str | None = None) -> str | None:
+    """gamma public-profile 로 Polymarket proxyWallet 조회."""
+    addr = (eoa or _eoa_address() or "").strip()
+    if not addr.startswith("0x"):
+        return None
+    key = addr.lower()
+    if key in _PROXY_CACHE:
+        return _PROXY_CACHE[key]
+    try:
+        r = requests.get(
+            "https://gamma-api.polymarket.com/public-profile",
+            params={"address": addr},
+            timeout=15,
+        )
+        if r.ok:
+            proxy = (r.json() or {}).get("proxyWallet")
+            if proxy and str(proxy).startswith("0x"):
+                _PROXY_CACHE[key] = str(proxy)
+                return _PROXY_CACHE[key]
+    except Exception:
+        pass
+    _PROXY_CACHE[key] = None
+    return None
+
+
 def _funder() -> str | None:
     f = (os.getenv("POLYMARKET_FUNDER") or os.getenv("POLYMARKET_FUNDER_ADDRESS") or "").strip()
-    return f or None
+    if f:
+        return f
+    # 자동: 웹 계정 proxyWallet (deposit 잔고 위치)
+    return resolve_proxy_wallet()
 
 
 def _signature_type() -> int | None:
     raw = (os.getenv("POLYMARKET_SIGNATURE_TYPE") or "").strip()
-    if not raw:
-        # funder 있으면 proxy 지갑 흔한 기본값 1, 없으면 EOA(None→SDK 기본)
-        if _funder():
-            return 1
-        return None
-    try:
-        return int(raw)
-    except Exception:
-        return None
-
+    if raw:
+        try:
+            return int(raw)
+        except Exception:
+            return None
+    # funder 가 proxy 면 2026 deposit wallet 기본 = POLY_1271 (3)
+    if _funder():
+        return 3
+    return None  # EOA
 
 def client_available() -> tuple[bool, str]:
     """v2 우선 (CLOB 백엔드 2026 마이그레이션 대응)."""
@@ -288,18 +334,25 @@ def place_buy_usd(
 
 def smoke_test() -> dict[str, Any]:
     ok_pkg, which = client_available()
+    eoa = _eoa_address()
+    funder = _funder()
     info: dict[str, Any] = {
         "live_enabled": live_enabled(),
         "private_key_set": bool(_private_key()),
-        "funder_set": bool(_funder()),
+        "signer_eoa": eoa,
+        "funder": funder,
+        "funder_set": bool(funder),
+        "funder_is_proxy_not_eoa": bool(
+            eoa and funder and eoa.lower() != funder.lower()
+        ),
         "signature_type": _signature_type(),
         "client_package": which if ok_pkg else None,
         "client_version": _package_version(which) if ok_pkg else None,
         "client_ok": ok_pkg,
         "prefer": "py-clob-client-v2 (required after 2026 CLOB migration)",
         "hint": (
-            "LIVE: POLYMARKET_LIVE_TRADING_ENABLED=true + "
-            "POLYMARKET_PRIVATE_KEY + pip install py-clob-client-v2"
+            "웹 입금 잔고는 MetaMask EOA가 아니라 proxyWallet(funder)에 있음. "
+            "POLYMARKET_FUNDER + POLYMARKET_SIGNATURE_TYPE=3 필요."
         ),
     }
     if ok_pkg and live_enabled() and _private_key():
@@ -314,6 +367,11 @@ def smoke_test() -> dict[str, Any]:
                     info["exchange_order_version_error"] = str(e)[:120]
             bal = get_usdc_balance_approx()
             info["usdc_balance_approx"] = bal
+            if bal is not None and bal >= 0 and bal < 1:
+                info["balance_warning"] = (
+                    "CLOB USDC≈0 — funder/signature_type 확인. "
+                    "웹 UI 잔고와 EOA 온체인 잔고는 다를 수 있음."
+                )
         except Exception as e:
             info["build_ok"] = False
             info["build_error"] = str(e)[:300]

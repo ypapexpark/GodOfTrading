@@ -24,9 +24,17 @@
    /Users/ghp/Projects/GodOfTrading/.venv-poly/bin/pip install -U py-clob-client-v2
    ```
 1. `pip install py-clob-client-v2` — **3.12 + .venv-poly** (LaunchAgent 가 이 venv 사용)
-1b. **서명 지갑에 USDC 잔고** 필요. CLOB `get_balance_allowance` 가 $0 이면 주문 안 나감.  
-    Magic/email 프록시 지갑이면 `POLYMARKET_FUNDER=0x...` + `POLYMARKET_SIGNATURE_TYPE=1` (또는 2).  
-    점검: ` .venv-poly/bin/python polymarket_whale_live_bot.py --smoke `
+1b. **잔고는 MetaMask EOA가 아니라 Polymarket proxyWallet(deposit)에 있음**  
+    - 서명: MetaMask EOA private key  
+    - 잔고/funder: 웹 Settings 의 Wallet / `proxyWallet`  
+    - 설정 예:
+      ```bash
+      POLYMARKET_FUNDER=0x(프로필_proxyWallet)
+      POLYMARKET_SIGNATURE_TYPE=3   # POLY_1271 deposit (웹 입금 계정 기본)
+      ```
+    - 미설정 시 코드가 gamma public-profile 로 proxy 자동 조회 시도  
+    - 점검: `.venv-poly/bin/python polymarket_whale_live_bot.py --smoke`  
+      → `usdc_balance_approx` ≈ 웹 잔고, `funder_is_proxy_not_eoa: true`
 2. `.env`:
    ```bash
    POLYMARKET_PRIVATE_KEY=0x...
