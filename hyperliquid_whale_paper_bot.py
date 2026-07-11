@@ -60,7 +60,9 @@ def _load_config() -> dict:
 def _params(cfg: dict) -> dict:
     p = cfg.get("params") or {}
     return {
-        "min_fill_notional_usd": float(p.get("min_fill_notional_usd", 5000)),
+        # 2026-07-12: 5000→3000. Open 레그의 ~72%가 $5k 미만이지만 $2k는
+        # 분할/시드 노이즈 비중이 큼. $3k는 7d 후보 ~1.25×, 품질 타협점.
+        "min_fill_notional_usd": float(p.get("min_fill_notional_usd", 3000)),
         "copy_notional_usd": float(p.get("copy_notional_usd", 25)),
         "max_leverage_copy": float(p.get("max_leverage_copy", 5)),
         "max_open_positions": int(p.get("max_open_positions", 8)),

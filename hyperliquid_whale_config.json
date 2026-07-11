@@ -3,7 +3,7 @@
   "generated_at": "2026-07-11",
   "source": "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard",
   "params": {
-    "min_fill_notional_usd": 5000,
+    "min_fill_notional_usd": 3000,
     "copy_notional_usd": 25,
     "max_leverage_copy": 5,
     "max_open_positions": 8,
