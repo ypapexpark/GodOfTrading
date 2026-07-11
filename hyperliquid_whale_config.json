@@ -10,7 +10,8 @@
     "slippage_bps": 15,
     "poll_fills_limit": 50,
     "report_interval_seconds": 14400,
-    "max_hold_hours": 48
+    "max_hold_hours": 48,
+    "min_whale_flat_age_sec": 180
   },
   "seed_wallets": [],
   "whales": [

@@ -67,6 +67,7 @@ def _params(cfg: dict) -> dict:
         "slippage_bps": float(p.get("slippage_bps", 15)),
         "report_interval_seconds": int(p.get("report_interval_seconds", 4 * 3600)),
         "max_hold_hours": float(p.get("max_hold_hours", 48)),
+        "min_whale_flat_age_sec": float(p.get("min_whale_flat_age_sec", 180)),
     }
 
 
@@ -113,10 +114,43 @@ def _save_state(state: dict) -> None:
 def _append(row: dict) -> None:
     append_jsonl(JOURNAL_FILE, row)
 
-def _post(body: dict) -> Any:
-    r = requests.post(API, json=body, timeout=20)
-    r.raise_for_status()
-    return r.json()
+
+def _post(body: dict, retries: int = 3, timeout: int = 25) -> Any:
+    """HL info API — 간헐적 네트워크 실패 재시도."""
+    last: Exception | None = None
+    for i in range(max(1, retries)):
+        try:
+            r = requests.post(API, json=body, timeout=timeout)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            last = e
+            if i + 1 < retries:
+                time.sleep(0.35 * (i + 1))
+    assert last is not None
+    raise last
+
+
+def _coin_dex(coin: str) -> str:
+    """'xyz:ORCL' → 'xyz', 'BTC' → '' (메인 perp dex)."""
+    c = str(coin or "")
+    if ":" in c:
+        return c.split(":", 1)[0].strip()
+    return ""
+
+
+def _coins_match(a: str, b: str) -> bool:
+    """심볼 매칭 (정확 일치 또는 dex 접두 정규화)."""
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    # xyz:ORCL vs ORCL (드묾)
+    al, bl = a.split(":")[-1], b.split(":")[-1]
+    if al == bl and (":" in a or ":" in b):
+        # 같은 base 여도 dex 다르면 다른 마켓 — 한쪽만 prefix 있을 때만 허용
+        return (":" in a) != (":" in b)
+    return False
 
 
 def _user_fills(addr: str) -> list[dict]:
@@ -124,23 +158,81 @@ def _user_fills(addr: str) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
+def _perp_dex_names() -> list[str]:
+    """HIP-3 등 추가 perp dex 이름 목록."""
+    try:
+        data = _post({"type": "perpDexs"})
+        if not isinstance(data, list):
+            return []
+        out = []
+        for d in data:
+            if isinstance(d, dict) and d.get("name"):
+                out.append(str(d["name"]))
+        return out
+    except Exception:
+        return ["xyz"]  # 폴백: 주식 perp 등
+
+
 def _mids() -> dict[str, float]:
-    """coin -> mid price."""
+    """coin -> mid. 메인 + 모든 perp dex allMids 병합."""
+    out: dict[str, float] = {}
     try:
         data = _post({"type": "allMids"})
         if isinstance(data, dict):
-            return {k: float(v) for k, v in data.items()}
+            for k, v in data.items():
+                try:
+                    out[str(k)] = float(v)
+                except Exception:
+                    pass
     except Exception:
         pass
-    return {}
+    for dex in _perp_dex_names():
+        try:
+            data = _post({"type": "allMids", "dex": dex})
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    try:
+                        out[str(k)] = float(v)
+                    except Exception:
+                        pass
+        except Exception:
+            continue
+    return out
 
 
-def _clearinghouse(addr: str) -> dict:
+def _clearinghouse(addr: str, dex: str = "") -> dict | None:
+    """포지션 조회. dex='' 메인, 'xyz' 등 HIP-3.
+
+    실패 시 None (빈 dict 과 구분 — 실패를 whale_flat 로 오인 금지).
+    """
+    body: dict[str, Any] = {"type": "clearinghouseState", "user": addr}
+    if dex:
+        body["dex"] = dex
     try:
-        return _post({"type": "clearinghouseState", "user": addr}) or {}
+        data = _post(body)
+        if isinstance(data, dict) and (
+            "assetPositions" in data or "marginSummary" in data
+        ):
+            return data
+        return None
     except Exception:
-        return {}
+        return None
 
+
+def _position_szi(ch: dict, coin: str) -> float | None:
+    """clearinghouse 에서 coin 포지션 szi. 없으면 0. 조회 불가면 None 아님 — 호출측에서 ch None 처리."""
+    for ap in ch.get("assetPositions") or []:
+        if not isinstance(ap, dict):
+            continue
+        pos_inner = ap.get("position") if isinstance(ap.get("position"), dict) else ap
+        c = str(pos_inner.get("coin") or "")
+        if not _coins_match(c, coin) and c != coin:
+            continue
+        try:
+            return float(pos_inner.get("szi") or 0)
+        except Exception:
+            return 0.0
+    return 0.0
 
 def _fill_direction(f: dict) -> str:
     """HL side: B=buy/bid, A=sell/ask. dir 필드가 있으면 우선."""
@@ -171,8 +263,9 @@ def scan_signals(state: dict, cfg: dict) -> list[dict]:
             continue
         try:
             fills = _user_fills(wallet)
+            wstate.pop("last_error", None)
         except Exception as e:
-            wstate["last_error"] = str(e)
+            wstate["last_error"] = str(e)[:200]
             continue
         fills = sorted(fills, key=lambda f: int(f.get("time") or 0))
         if not fills:
@@ -272,20 +365,27 @@ def mark_and_settle(state: dict, cfg: dict) -> int:
     """마크 업데이트 + 정산.
 
     청산 트리거:
-      1) 소스 지갑 clearinghouse 에 해당 코인 포지션 없음 (고래 flat)
-      2) max_hold_hours 초과 (강제 paper 청산 — 무기한 홀딩 방지)
+      1) 소스 지갑 clearinghouse(해당 dex) 에 같은 방향 포지션 없음 (고래 flat)
+      2) max_hold_hours 초과
+
+    중요: xyz:ORCL 등 HIP-3 는 dex='xyz' clearinghouse 를 봐야 함.
+    메인 CH 만 보면 항상 flat 오판 → pnl≈0 즉시 정산 버그.
+    CH 조회 실패 시에는 정산하지 않고 유지.
     """
     p = _params(cfg)
     max_hold = float(p.get("max_hold_hours") or 48) * 3600
+    # 오픈 직후 너무 이른 flat 판정 방지 (API 지연·부분체결)
+    min_flat_age = float(p.get("min_whale_flat_age_sec") or 180)
     settled = 0
     remaining = []
     mids = _mids()
-    # wallet -> clearinghouse cache (한 사이클 1회)
-    ch_cache: dict[str, dict] = {}
+    # (wallet, dex) -> clearinghouse | None(실패)
+    ch_cache: dict[tuple[str, str], dict | None] = {}
 
     for pos in state.get("open_positions") or []:
         coin = pos["coin"]
-        mid = float(mids.get(coin) or pos["entry_price"])
+        dex = _coin_dex(coin)
+        mid = float(mids.get(coin) or pos.get("mark") or pos["entry_price"])
         entry = float(pos["entry_price"])
         qty = float(pos["qty"])
         if pos["direction"] == "LONG":
@@ -294,6 +394,7 @@ def mark_and_settle(state: dict, cfg: dict) -> int:
             upnl = (entry - mid) * qty
         pos["mark"] = mid
         pos["unrealized_pnl"] = round(upnl, 4)
+        pos["dex"] = dex or "main"
 
         closed = False
         reason = ""
@@ -304,42 +405,30 @@ def mark_and_settle(state: dict, cfg: dict) -> int:
             closed = True
             reason = f"max_hold_{p.get('max_hold_hours')}h"
 
-        # 2) whale flat
-        if not closed and age > 120:
-            try:
-                w = pos["wallet"]
-                if w not in ch_cache:
-                    ch_cache[w] = _clearinghouse(w)
-                ch = ch_cache[w]
-                if isinstance(ch, dict) and (
-                    "assetPositions" in ch or "marginSummary" in ch
-                ):
-                    still = False
-                    for ap in ch.get("assetPositions") or []:
-                        if not isinstance(ap, dict):
-                            continue
-                        pos_inner = (
-                            ap.get("position")
-                            if isinstance(ap.get("position"), dict)
-                            else ap
-                        )
-                        c = pos_inner.get("coin")
-                        try:
-                            szi = float(pos_inner.get("szi") or 0)
-                        except Exception:
-                            szi = 0.0
-                        if c == coin and abs(szi) > 1e-12:
-                            # 방향 불일치(우리가 LONG인데 고래 숏만 남음)도 flat 취급
-                            if pos["direction"] == "LONG" and szi > 0:
-                                still = True
-                            elif pos["direction"] == "SHORT" and szi < 0:
-                                still = True
-                            break
-                    if not still:
-                        closed = True
-                        reason = "whale_flat"
-            except Exception:
-                pass
+        # 2) whale flat — 올바른 dex CH 필수
+        if not closed and age >= min_flat_age:
+            w = str(pos["wallet"])
+            cache_key = (w, dex)
+            if cache_key not in ch_cache:
+                ch_cache[cache_key] = _clearinghouse(w, dex=dex)
+            ch = ch_cache[cache_key]
+            if ch is None:
+                # 네트워크/API 실패 → 유지 (false whale_flat 금지)
+                remaining.append(pos)
+                continue
+            szi = _position_szi(ch, coin)
+            if szi is None:
+                szi = 0.0
+            still = False
+            if abs(szi) > 1e-12:
+                if pos["direction"] == "LONG" and szi > 0:
+                    still = True
+                elif pos["direction"] == "SHORT" and szi < 0:
+                    still = True
+                # 반대 방향만 남음 = 우리 카피 방향은 flat
+            if not still:
+                closed = True
+                reason = "whale_flat"
 
         if closed:
             pnl = float(pos.get("unrealized_pnl") or 0)
@@ -360,7 +449,6 @@ def mark_and_settle(state: dict, cfg: dict) -> int:
             remaining.append(pos)
     state["open_positions"] = remaining
     return settled
-
 
 def build_report(state: dict, cfg: dict) -> str:
     p = _params(cfg)
