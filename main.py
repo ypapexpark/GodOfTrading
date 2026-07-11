@@ -99,12 +99,24 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     ASYMMETRIC_SYMBOL_DAILY_LOSS_LIMIT, SYMBOL_STRATEGY_DAILY_LOSS_LIMIT,
                     SYMBOL_DAILY_TOTAL_LOSS_LIMIT,
                     AUTO_TRADE_STRATEGY_WHITELIST, BLOCK_SHORT_AUTO_TRADE,
-                    SHORT_NON_EMA_RISK_MULT, DIVERGENCE_GENERAL_OBSERVATION_RISK_MULT,
+                    SHORT_NON_EMA_RISK_MULT, SHORT_STRICT_GATES_ENABLED,
+                    SHORT_REQUIRE_MTF_ALIGNED, SHORT_REQUIRE_EMA_ALIGNED,
+                    SHORT_GLOBAL_RISK_MULT, SHORT_15M_STRATEGY_WHITELIST,
+                    LIVE_15M_STRATEGIES,
+                    EMA_MACD_FILTER_ENABLED, EMA_MACD_SOFT_RISK_MULT,
+                    EMA_MACD_HARD_BLOCK,
+                    REGIME_ROUTER_ENABLED, LOGIC_STACK_VERSION,
+                    DIVERGENCE_GENERAL_OBSERVATION_RISK_MULT,
                     PARABOLIC_OBSERVATION_RISK_MULT,
                     MICRO_BREAKOUT_OBSERVATION_RISK_MULT,
                     VWAP_REVERSION_OBSERVATION_RISK_MULT,
                     RSI2_REVERSION_OBSERVATION_RISK_MULT,
-                    BINANCE_FIXED_MARGIN_USD, EXTENSION_HARD_BLOCK_PCT,
+                    BINANCE_FIXED_MARGIN_USD, BINANCE_MAX_MARGIN_USD,
+                    BINANCE_MAX_TRADE_SL_LOSS_PCT,
+                    EXTENSION_HARD_BLOCK_PCT, MAX_ENTRY_SL_PCT,
+                    HIDDEN_LIVE_MAX_BARS_AGO, ENTRY_SYMBOL_BLOCKLIST,
+                    SCALP_TIMING_HARD_BLOCK_SIGNAL_TYPES,
+                    OBSERVATION_MODE_PAPER_ONLY,
                     DRAWDOWN_RISK_OFF_PCT,
                     SCALP_COMPOUND_ENABLED, SCALP_COMPOUND_TF,
                     SCALP_COMPOUND_STRATEGIES, SCALP_COMPOUND_TP1_PCT,
@@ -118,6 +130,7 @@ from fetcher import (fetch_btc_sync_dislocations, fetch_ohlcv,
 from divergence import (detect, calc_vwap, detect_breakout,
                         get_freshness_score, check_candle_momentum, check_entry_zone)
 from strategies import get_bb_midline_long_bias, scan_additional
+from regime import classify_regime, apply_regime_to_trade
 from bithumb_screener import maybe_send_bithumb_ma200_alert
 from krx_screener import maybe_send_krx_ma200_alert
 from project_reminders import maybe_send_kis_api_review_reminder
@@ -458,6 +471,9 @@ def _raise_leverage_for_roi(entry_price: float, direction: str,
     base_leverage = max(1, int(leverage or 1))
     metrics = _planned_roi_metrics(entry_price, direction, tps, base_leverage)
     gate_reason, _ = _roi_gate_reason(entry_price, direction, tps, base_leverage)
+    # 2026-07-11: SHORT 실현 R:R 0.38 — ROI 맞추려 레버 올리면 단건 손실만 커짐
+    if str(direction).upper() == "SHORT":
+        return base_leverage, metrics, []
     if not ROI_LEVERAGE_RESCUE_ENABLED or not gate_reason:
         return base_leverage, metrics, []
 
@@ -1099,6 +1115,108 @@ def _build_open_summary(trade_num: int, symbol: str, direction: str,
     return "\n".join(lines)
 
 
+def _build_logic_attribution(
+    strategy: str,
+    direction: str,
+    tf_key: str,
+    risk_notes: list[str],
+    regime_info: dict | None,
+    regime_risk_mult: float,
+    signal: dict | None = None,
+) -> dict:
+    """
+    실거래 복기용: 이 진입이 '기존 엔진'인지, 2026-07-11 신규 스택이 사이즈/허용에
+    영향을 줬는지 태깅. journal/history/entry_context에 동일 객체로 저장.
+    """
+    notes = list(risk_notes or [])
+    signal = signal or {}
+    new_feats: list[str] = []
+    legacy_feats: list[str] = [
+        f"strategy={strategy}",
+        f"tf={tf_key}",
+        f"dir={direction}",
+    ]
+
+    # ── 신규 스택 (2026-07-11~) ────────────────────────────────────────────
+    if regime_info and regime_info.get("regime") not in (None, "unknown"):
+        rg = regime_info.get("regime")
+        tag = f"regime:{rg}"
+        if regime_risk_mult < 0.999:
+            tag += f":size×{regime_risk_mult:.2f}"
+        new_feats.append(tag)
+    for n in notes:
+        ns = str(n)
+        if "레짐" in ns and not any(x.startswith("regime:") for x in new_feats):
+            new_feats.append(f"regime_note:{ns[:80]}")
+        if "SHORT 전역" in ns or "SHORT 전역 리스크" in ns:
+            new_feats.append("short_global_size")
+        if "비-EMA(거래량급등)숏" in ns:
+            new_feats.append("short_non_ema_size")
+        if "EMA MACD" in ns or "MACD soft" in ns:
+            new_feats.append("ema_macd_soft")
+        if "Binance 위험캡" in ns or "Binance 고정" in ns or "BINANCE" in ns:
+            new_feats.append("binance_sizing_cap")
+        if "관찰모드" in ns:
+            new_feats.append("observation_mode")
+
+    macd = signal.get("macd") or {}
+    if "EMA눌림목" in strategy and macd.get("ok") is True:
+        if not any("ema_macd" in x for x in new_feats):
+            new_feats.append("ema_macd_aligned")
+    elif "EMA눌림목" in strategy and macd.get("ok") is False:
+        if not any("ema_macd" in x for x in new_feats):
+            new_feats.append("ema_macd_misalign_soft")
+
+    if str(direction).upper() == "SHORT":
+        new_feats.append("short_strict_gates_passed")
+
+    if tf_key == "15m" and "EMA눌림목" in strategy:
+        new_feats.append("live_15m_ema_only_gate")
+
+    # ── 레거시 (기존 엔진) ──────────────────────────────────────────────────
+    for n in notes:
+        ns = str(n)
+        if any(k in ns for k in ("MTF", "학습", "후보사후", "확신도", "포트폴리오", "DD", "드로우")):
+            legacy_feats.append(ns[:100])
+
+    new_size = float(regime_risk_mult or 1.0)
+    # risk_notes 에서 ×0.xx 패턴 추가 추정 (SHORT 0.5 등)
+    import re
+    for n in notes:
+        for m in re.findall(r"×\s*(0\.\d+)", str(n)):
+            try:
+                new_size *= float(m)
+            except Exception:
+                pass
+        for m in re.findall(r"리스크×(0\.\d+)", str(n)):
+            try:
+                new_size *= float(m)
+            except Exception:
+                pass
+
+    new_stack = len(new_feats) > 0
+    summary = (
+        f"스택 {LOGIC_STACK_VERSION} | 기존:{strategy}"
+        + (f" | 신규:{','.join(new_feats[:6])}" if new_feats else " | 신규:영향없음(게이트통과만)")
+    )
+    return {
+        "stack_version": LOGIC_STACK_VERSION,
+        "base_engine": "legacy_got_core",
+        "new_stack_applied": new_stack,
+        "new_features": new_feats,
+        "legacy_features": legacy_feats[:12],
+        "regime": (regime_info or {}).get("regime"),
+        "regime_note": (regime_info or {}).get("note"),
+        "regime_risk_mult": regime_risk_mult,
+        "approx_new_size_mult": round(new_size, 4),
+        "summary_ko": summary,
+        "attribution_hint": (
+            "new_stack_applied=True 이면 사이즈/허용에 신규 로직이 관여. "
+            "False 여도 진입 자체가 신규 게이트(SHORT/15m/레짐 paper) 통과 결과일 수 있음."
+        ),
+    }
+
+
 def _build_entry_context(signal: dict, tf_key: str, direction: str,
                          strategy: str, timing: dict | None,
                          mtf_boost: float, ema_aligned: bool,
@@ -1416,7 +1534,9 @@ def _trend_min_confirm(tf_key: str, trend_score: int, is_continuation: bool) -> 
 def _try_auto_trade(symbol: str, tf_key: str, signals: list,
                     current_price: float, scalp: bool = False,
                     mtf_boost: float = 1.0,
-                    premium_mtf: bool = False):
+                    premium_mtf: bool = False,
+                    regime: dict | None = None,
+                    ohlcv_df=None):
     """신호가 있을 때 자동매매 실행 시도.
     복리형 베팅: 신호 강도별 계좌 위험률을 먼저 정하고,
     SL폭/레버리지로 증거금 비율을 역산한다.
@@ -1482,6 +1602,28 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
             vol_ratio=best.get("vol", {}).get("value", 0),
             **extra,
         )
+
+    # 실행 거래소 private API 헬스 (Binance -2015 등) — 스캔은 계속, 신규 진입만 중단
+    from trade_router import (
+        is_execution_api_healthy, maybe_alert_execution_api_down, active_exchange,
+    )
+    if not is_execution_api_healthy():
+        maybe_alert_execution_api_down()
+        _block(
+            f"{active_exchange()} API 인증/권한 실패 — 신규 진입 hard-stop "
+            "(키 Futures 권한·IP 화이트리스트·.env 확인)",
+            send_diag=True,
+        )
+        return
+
+    # TradFi/특수 심볼 차단 (Binance -4411 agreement 등)
+    _base_sym = symbol.split(":")[0] if ":" in symbol else symbol
+    if _base_sym in ENTRY_SYMBOL_BLOCKLIST or symbol in ENTRY_SYMBOL_BLOCKLIST:
+        _block(
+            f"{symbol} — ENTRY_SYMBOL_BLOCKLIST (TradFi/특수 상품, 계정 agreement 필요)",
+            paper_only=True,
+        )
+        return
 
     repeat_profile = classify_strategy(
         strategy,
@@ -1566,6 +1708,18 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     timing = _check_lower_tf_timing(symbol, tf_key, direction)
     if not timing["ok"]:
         vol_r = float(best.get("vol", {}).get("value", 0) or 0)
+        sig_type = str(best.get("signal_type", "") or "")
+        # 2026-07-11: RSI2/VWAP회귀/마이크로돌파 — 하위TF 타이밍 실패·강한역방향 시
+        # soft×0.70 금지. 07/10 XRP RSI2가 5m 강한역방향인데 soft 진입 후 SL.
+        if (
+            sig_type in SCALP_TIMING_HARD_BLOCK_SIGNAL_TYPES
+            or strategy in ("RSI2반전", "VWAP회귀", "마이크로돌파")
+        ):
+            _block(
+                f"{timing['tf']} 스캘핑 타이밍 hard-block "
+                f"({sig_type or strategy}) — {timing['note']}"
+            )
+            return
         high_quality_additional = (
             not best.get("is_divergence", True)
             and best.get("confirmed_count", 0) >= 5
@@ -1636,6 +1790,72 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     if BLOCK_SHORT_AUTO_TRADE and direction == "SHORT":
         _block("SHORT 실거래 임시 차단 — EMA LONG 전략 집중", paper_only=True)
         return
+
+    # 2026-07-11: 15m 실거래는 양의 엣지 확인된 EMA 계열만 (히든/기타는 1h+ 또는 paper)
+    if tf_key == "15m" and LIVE_15M_STRATEGIES and strategy not in LIVE_15M_STRATEGIES:
+        _block(
+            f"15m 실거래는 EMA 계열만 허용 — {strategy} 은(는) paper/상위TF",
+            paper_only=True,
+        )
+        return
+
+    # 2026-07-11: SHORT 엄격 게이트 (실현 R:R 0.38 방어)
+    if SHORT_STRICT_GATES_ENABLED and direction == "SHORT":
+        if SHORT_REQUIRE_MTF_ALIGNED and not (mtf_boost > 1.0):
+            _block(
+                f"SHORT MTF 전정렬 필수 — mtf_boost={mtf_boost:.2f} (상위봉 미정렬)",
+                send_diag=True,
+            )
+            return
+        if SHORT_REQUIRE_EMA_ALIGNED and not ema_aligned:
+            _block(
+                f"SHORT EMA 정렬 필수 — ema_trend={ema_trend}",
+                send_diag=True,
+            )
+            return
+        if (
+            tf_key == "15m"
+            and SHORT_15M_STRATEGY_WHITELIST
+            and strategy not in SHORT_15M_STRATEGY_WHITELIST
+        ):
+            _block(
+                f"15m SHORT 허용 전략 아님 — {strategy}",
+                paper_only=True,
+            )
+            return
+        print(
+            f"  [SHORT게이트] MTF={mtf_boost:.2f} EMA정렬={ema_aligned} "
+            f"전역리스크×{SHORT_GLOBAL_RISK_MULT:.2f}"
+        )
+
+    # ── 레짐 라우터 P1 (trend/range/high_vol) ────────────────────────────────
+    regime_risk_mult = 1.0
+    regime_info = regime
+    if REGIME_ROUTER_ENABLED:
+        if regime_info is None and ohlcv_df is not None:
+            regime_info = classify_regime(ohlcv_df, tf_key)
+        if regime_info is None:
+            try:
+                _df_r = fetch_ohlcv(symbol, tf_key)
+                if _df_r is not None and len(_df_r) >= 40:
+                    regime_info = classify_regime(_df_r, tf_key)
+            except Exception as _re:
+                print(f"  [레짐] 조회 실패: {_re}")
+        if regime_info:
+            best = dict(best)
+            best["regime"] = regime_info
+            _rg = apply_regime_to_trade(
+                regime_info, strategy, str(best.get("signal_type") or ""), direction,
+            )
+            for _n in _rg.get("notes") or []:
+                print(f"  [레짐] {_n}")
+            if _rg.get("paper_only"):
+                _block(
+                    "레짐 라우터 paper_only — " + " | ".join(_rg.get("notes") or []),
+                    paper_only=True,
+                )
+                return
+            regime_risk_mult = float(_rg.get("risk_mult") or 1.0)
 
     # 스캘핑 복리 모드: 주봉/일봉 바이어스가 진입방향과 반대면 차단.
     # 2026-07-07: get_macro_bias/get_daily_bias는 이미 계산되고 있었지만 화면출력
@@ -1750,6 +1970,26 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     if not t:
         _block("타겟 계산 실패", send_diag=True)
         return
+    # 와이드 SL 하드 차단 (Binance HMSTR/CHIP/US 등 20~37% SL 대형손실 재발 방지)
+    _sl_pct_now = float(t.get("sl_pct", 0) or 0)
+    if MAX_ENTRY_SL_PCT > 0 and _sl_pct_now > MAX_ENTRY_SL_PCT:
+        _block(
+            f"SL {_sl_pct_now:.2f}% > 한도 {MAX_ENTRY_SL_PCT:.1f}% — "
+            f"와이드 SL 진입 차단 (단건 대형손실 방지)",
+            send_diag=True,
+        )
+        return
+    # 히든 다이버전스 신선도 (5봉 전 BTC SHORT -$34 재발 방지)
+    _sig_for_fresh = str(best.get("signal_type", "") or "")
+    if _sig_for_fresh in ("hidden_bullish", "hidden_bearish"):
+        _bars = int(best.get("bars_ago", 99) or 99)
+        if _bars > HIDDEN_LIVE_MAX_BARS_AGO:
+            _block(
+                f"히든 신호 신선도 {_bars}봉전 > 한도 {HIDDEN_LIVE_MAX_BARS_AGO}봉 — "
+                f"늦은 히든 진입 차단",
+                send_diag=True,
+            )
+            return
     if asymmetric_mode:
         print(f"  [비대칭TP] 손실 짧게 / 러너 길게 — {' | '.join(asym_notes)}")
 
@@ -1928,6 +2168,15 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         print(f"  [리스크거버너] {' | '.join(risk_notes)} → 목표리스크 {risk_pct*100:.2f}%")
     elif premium_mtf_entry and risk_notes:
         print(f"  [MTF고확신] {' | '.join(risk_notes)} → 정상 리스크 유지")
+    # 레짐 라우터 사이즈 (P1) — golden 경로 포함 공통 적용
+    if regime_risk_mult < 0.999:
+        risk_pct *= regime_risk_mult
+        _rg_note = (
+            f"레짐 리스크×{regime_risk_mult:.2f}"
+            + (f" ({(regime_info or {}).get('regime', '?')})" if regime_info else "")
+        )
+        risk_notes.append(_rg_note)
+        print(f"  [레짐사이즈] {_rg_note} → 목표리스크 {risk_pct*100:.2f}%")
     if quality_mult != 1.0:
         risk_pct = min(risk_pct * quality_mult, MAX_ACCOUNT_RISK_PCT)
         print(f"  [후보사후평가] {' | '.join(quality_notes)} → 목표리스크 {risk_pct*100:.2f}%")
@@ -2139,6 +2388,62 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         )
         print(f"  [숏강등] 거래량급등 SHORT 소액화 리스크×{SHORT_NON_EMA_RISK_MULT:.2f}")
 
+    # 2026-07-11: SHORT 전역 사이즈 감액 (실현 R:R 0.38 대응)
+    if SHORT_STRICT_GATES_ENABLED and direction == "SHORT" and SHORT_GLOBAL_RISK_MULT < 1.0:
+        position_pct = position_pct * SHORT_GLOBAL_RISK_MULT
+        est_sl_loss = round(est_sl_loss * SHORT_GLOBAL_RISK_MULT, 4)
+        risk_notes.append(f"SHORT 전역 리스크×{SHORT_GLOBAL_RISK_MULT:.2f}")
+        print(f"  [SHORT사이즈] 전역 리스크×{SHORT_GLOBAL_RISK_MULT:.2f} → 비중 {position_pct*100:.2f}%")
+
+    # 2026-07-11: EMA 계열 MACD 히스토그램 soft 필터
+    if EMA_MACD_FILTER_ENABLED and "EMA눌림목" in str(strategy):
+        macd_ok = bool((best.get("macd") or {}).get("ok"))
+        macd_note = (best.get("macd_align") or {}).get("note") or (
+            f"macd_ok={macd_ok} val={(best.get('macd') or {}).get('value')}"
+        )
+        if not macd_ok:
+            if EMA_MACD_HARD_BLOCK:
+                _block(
+                    f"EMA MACD 히스토그램 미정렬 hard-block — {macd_note}",
+                    send_diag=True,
+                )
+                return
+            position_pct = position_pct * EMA_MACD_SOFT_RISK_MULT
+            est_sl_loss = round(est_sl_loss * EMA_MACD_SOFT_RISK_MULT, 4)
+            risk_notes.append(
+                f"EMA MACD soft 미정렬 리스크×{EMA_MACD_SOFT_RISK_MULT:.2f} ({macd_note})"
+            )
+            print(
+                f"  [EMA-MACD] 미정렬 soft×{EMA_MACD_SOFT_RISK_MULT:.2f} — {macd_note}"
+            )
+        else:
+            print(f"  [EMA-MACD] 정렬 OK — {macd_note}")
+
+    # 관찰모드 signal_type / strategy 집합 (일반 다이버전스 / 파라볼릭 / 스캘핑3종)
+    _obs_signal = str(best.get("signal_type", "") or "")
+    _is_observation_signal = (
+        _obs_signal in {
+            "bullish", "bearish",
+            "parabolic_ignition_long", "parabolic_reversal_short",
+            "micro_breakout_long", "micro_breakout_short",
+            "vwap_reversion_long", "vwap_reversion_short",
+            "rsi2_reversion_long", "rsi2_reversion_short",
+        }
+        or strategy in {
+            "bullish", "bearish",
+            "파라볼릭점화", "파라볼릭반전",
+            "마이크로돌파", "VWAP회귀", "RSI2반전",
+        }
+    )
+    # 2026-07-11: 관찰모드 라이브 사이즈 0 — paper_only. EV 검증 전 실주문 금지.
+    if OBSERVATION_MODE_PAPER_ONLY and _is_observation_signal:
+        _block(
+            f"관찰모드 paper_only ({_obs_signal or strategy}) — 표본축적만, "
+            f"라이브 사이즈 0 (OBSERVATION_MODE_PAPER_ONLY=False 로 해제)",
+            paper_only=True,
+        )
+        return
+
     # 일반(non-hidden) 다이버전스 관찰모드: 사용자가 다이버전스를 선행지표로 신뢰하나
     # 실거래 표본이 8건(대부분 hidden)뿐이라 EV 미검증 → 화이트리스트에 편입하되 소액
     # 관찰모드로 표본만 축적한다. hidden_bullish/bearish는 정상 사이징 유지(대상 아님).
@@ -2188,28 +2493,69 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         print(f"  [스캘핑관찰] {best.get('signal_type')} 소액 진입 "
               f"리스크×{_scalp_obs_mult:.2f} → 목표비중 {position_pct*100:.2f}%")
 
-    # Binance 고정 증거금 override: 위험기반 사이징이 무엇을 산출했든 마지막에 $100
-    # 고정으로 덮어쓰되(2026-07-06 사용자 지시), 아래 포트폴리오 상관캡은 그대로 통과시킨다.
-    # 레버리지 압축(_cap_leverage_for_initial_sl)은 이 override보다 앞에서 이미 적용됨
-    # → 롱 알트 동시몰빵/넓은SL 대형손실 재발을 계속 막는다.
-    if BINANCE_FIXED_MARGIN_USD and runtime_context()["execution_venue"] == "binance" \
-            and balance_now > 0:
-        fixed_pct = min(BINANCE_FIXED_MARGIN_USD / balance_now, max_m_final / balance_now)
-        if fixed_pct > 0:
-            position_pct = round(fixed_pct, 6)
-            est_sl_loss = round(
-                balance_now * position_pct * leverage
-                * (t["sl_pct"] / 100 + ROUND_TRIP_FEE), 4
-            )
-            conviction_tier = "BINANCE-FIXED"
-            _fixed_margin_usd = round(balance_now * position_pct, 2)
-            note = (
-                f"Binance 고정증거금 ${_fixed_margin_usd:.2f} 적용 "
-                f"(위험기반 사이징 무시; 레버리지 {leverage}x, SL {t['sl_pct']:.2f}% → "
-                f"단건 최악손실 ~${est_sl_loss:.2f})"
-            )
-            risk_notes.append(note)
-            print(f"  [Binance고정] {note}")
+    # Binance 사이징 (2026-07-11): 고정 $100 override 폐기.
+    # 위험기반 유지 + 단건 증거금 상한 + 단건 최악손실(equity%) 상한.
+    if runtime_context()["execution_venue"] == "binance" and balance_now > 0:
+        if BINANCE_FIXED_MARGIN_USD and BINANCE_FIXED_MARGIN_USD > 0:
+            # 레거시 경로: 명시적으로 양수 고정값을 켠 경우만 override
+            fixed_pct = min(BINANCE_FIXED_MARGIN_USD / balance_now, max_m_final / balance_now)
+            if fixed_pct > 0:
+                position_pct = round(fixed_pct, 6)
+                est_sl_loss = round(
+                    balance_now * position_pct * leverage
+                    * (t["sl_pct"] / 100 + ROUND_TRIP_FEE), 4
+                )
+                conviction_tier = "BINANCE-FIXED"
+                _fixed_margin_usd = round(balance_now * position_pct, 2)
+                note = (
+                    f"Binance 고정증거금 ${_fixed_margin_usd:.2f} 적용 "
+                    f"(레거시 override; 레버리지 {leverage}x, SL {t['sl_pct']:.2f}% → "
+                    f"단건 최악손실 ~${est_sl_loss:.2f})"
+                )
+                risk_notes.append(note)
+                print(f"  [Binance고정] {note}")
+        else:
+            _cap_notes = []
+            if BINANCE_MAX_MARGIN_USD and BINANCE_MAX_MARGIN_USD > 0:
+                max_pct = min(BINANCE_MAX_MARGIN_USD / balance_now, max_m_final / balance_now)
+                if position_pct > max_pct > 0:
+                    old_pct = position_pct
+                    position_pct = round(max_pct, 6)
+                    est_sl_loss = round(
+                        balance_now * position_pct * leverage
+                        * (t["sl_pct"] / 100 + ROUND_TRIP_FEE), 4
+                    )
+                    _cap_notes.append(
+                        f"증거금상한 ${BINANCE_MAX_MARGIN_USD:.0f}: "
+                        f"{old_pct*100:.2f}%→{position_pct*100:.2f}%"
+                    )
+            if BINANCE_MAX_TRADE_SL_LOSS_PCT and BINANCE_MAX_TRADE_SL_LOSS_PCT > 0:
+                max_loss = balance_now * BINANCE_MAX_TRADE_SL_LOSS_PCT
+                if est_sl_loss > max_loss > 0 and est_sl_loss > 0:
+                    scale = max_loss / est_sl_loss
+                    old_pct = position_pct
+                    position_pct = round(position_pct * scale, 6)
+                    est_sl_loss = round(est_sl_loss * scale, 4)
+                    _cap_notes.append(
+                        f"단건손실상한 {BINANCE_MAX_TRADE_SL_LOSS_PCT*100:.1f}% "
+                        f"(${max_loss:.2f}): {old_pct*100:.2f}%→{position_pct*100:.2f}%"
+                    )
+            if _cap_notes:
+                conviction_tier = "BINANCE-CAPPED"
+                note = "Binance 위험캡 | " + " | ".join(_cap_notes) + (
+                    f" | 레버 {leverage}x SL {t['sl_pct']:.2f}% → "
+                    f"단건 최악 ~${est_sl_loss:.2f}"
+                )
+                risk_notes.append(note)
+                print(f"  [Binance캡] {note}")
+            # 캡 후 최소 실행 마진 미달이면 진입 포기 (깨진 초소액 방지)
+            if balance_now * position_pct < MIN_FALLBACK_TRADE_MARGIN_USD:
+                _block(
+                    f"Binance 위험캡 후 증거금 ${balance_now * position_pct:.2f} "
+                    f"< 하한 ${MIN_FALLBACK_TRADE_MARGIN_USD:.2f} — 진입 스킵",
+                    send_diag=True,
+                )
+                return
 
     # 2026-07-08: BLUR +71% 급등 구간 분석 — EMA눌림목+거래량급등 LONG 신호가 여러 번
     # 정상적으로 떴지만, 변동성이 커서 포트폴리오 SL위험캡에 맞추려 사이즈를 줄이다
@@ -2284,6 +2630,17 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         f"기대 증거금ROI {roi_metrics['weighted_margin_roi_pct']:+.1f}% "
         f"(TP1 {roi_metrics['tp1_margin_roi_pct']:+.1f}%)"
     )
+    # 기존 vs 신규 스택 귀속 태그 (실거래 A/B 복기용)
+    logic_attr = _build_logic_attribution(
+        strategy, direction, tf_key, risk_notes,
+        regime_info if REGIME_ROUTER_ENABLED else None,
+        regime_risk_mult if REGIME_ROUTER_ENABLED else 1.0,
+        signal=best,
+    )
+    entry_context["reasons"].append(f"로직귀속: {logic_attr['summary_ko']}")
+    print(f"  [로직귀속] {logic_attr['summary_ko']}")
+    if logic_attr.get("new_features"):
+        print(f"  [로직귀속] NEW → {', '.join(logic_attr['new_features'])}")
     entry_context.update({
         "entry_price": current_price,
         "sl": t["sl"],
@@ -2298,6 +2655,9 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         "tp1_margin_roi_pct": roi_metrics["tp1_margin_roi_pct"],
         "conviction_tier": conviction_tier,
         "target_margin_usd": target_margin,
+        "logic_attribution": logic_attr,
+        "logic_stack_version": LOGIC_STACK_VERSION,
+        "regime": (regime_info or {}) if REGIME_ROUTER_ENABLED else {},
     })
     if btc_macro_short:
         entry_context.update({
@@ -2357,6 +2717,9 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
             core_strategy=entry_context["core_strategy"],
             strategy_mode=entry_context["strategy_mode"],
             asymmetric_mode=entry_context["asymmetric_mode"],
+            logic_stack_version=LOGIC_STACK_VERSION,
+            logic_attribution=logic_attr,
+            new_stack_applied=bool(logic_attr.get("new_stack_applied")),
         )
         # 분석용 컨텍스트 추가 기록 (패인 분석에 사용)
         add_trade_context(
@@ -2382,6 +2745,9 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
             btc_macro_short_mode = bool(entry_context.get("btc_macro_short_mode", False)),
             btc_macro_short_score = entry_context.get("btc_macro_short_score", 0),
             btc_macro_short_note = entry_context.get("btc_macro_short_note", ""),
+            logic_stack_version=LOGIC_STACK_VERSION,
+            logic_attribution=logic_attr,
+            new_stack_applied=bool(logic_attr.get("new_stack_applied")),
         )
         log_trade_candidate(
             symbol, tf_key, strategy, direction, strength, "opened",
@@ -2397,6 +2763,9 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
             asymmetric_mode=entry_context["asymmetric_mode"],
             btc_macro_short_mode=bool(entry_context.get("btc_macro_short_mode", False)),
             btc_macro_short_score=entry_context.get("btc_macro_short_score", 0),
+            logic_stack_version=LOGIC_STACK_VERSION,
+            logic_attribution=logic_attr,
+            new_stack_applied=bool(logic_attr.get("new_stack_applied")),
         )
         log_execution_journal(
             trade_num, "opened",
@@ -2416,6 +2785,9 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
             btc_macro_short_score=entry_context.get("btc_macro_short_score", 0),
             btc_macro_short_note=entry_context.get("btc_macro_short_note", ""),
             entry_context=entry_context,
+            logic_stack_version=LOGIC_STACK_VERSION,
+            logic_attribution=logic_attr,
+            new_stack_applied=bool(logic_attr.get("new_stack_applied")),
         )
         scalp_tag = " [스캘핑]" if scalp else ""
         notif     = build_trade_notification(
@@ -2500,8 +2872,26 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
                         MAX_DAILY_LOSS,
                         has_open_position, get_daily_loss_limit, get_margin_cap,
                         log_trade_candidate, log_execution_journal, notify_trade_block,
-                        position_pct_for_risk, _load_state)
+                        position_pct_for_risk, _load_state,
+                        is_execution_api_healthy, maybe_alert_execution_api_down,
+                        active_exchange)
     from config import TP_BY_STRENGTH, SL_ATR_MULT
+
+    if not is_execution_api_healthy():
+        maybe_alert_execution_api_down()
+        notify_trade_block(
+            symbol, tf_key, bsig["direction"], bsig["strength"],
+            f"{active_exchange()} API 인증 실패 — 돌파 진입 hard-stop",
+            strategy="돌파", send_telegram=AUTO_TRADE_DIAGNOSTICS,
+        )
+        return
+    _bsym = symbol.split(":")[0] if ":" in symbol else symbol
+    if _bsym in ENTRY_SYMBOL_BLOCKLIST or symbol in ENTRY_SYMBOL_BLOCKLIST:
+        notify_trade_block(
+            symbol, tf_key, bsig["direction"], bsig["strength"],
+            f"{symbol} ENTRY_SYMBOL_BLOCKLIST", strategy="돌파", paper_only=True,
+        )
+        return
 
     # 이미 포지션 있으면 스킵
     if has_open_position(symbol):
@@ -3190,8 +3580,14 @@ def _do_pyramid(symbol: str, tf_key: str, direction: str,
     SL: 기존 SL 유지 (추세가 반전되면 전체 청산)
     """
     from trade_router import (execute, get_usdt_balance, add_pyramid_entry,
-                        build_pyramid_notification, MAX_MARGIN_USD)
+                        build_pyramid_notification, MAX_MARGIN_USD,
+                        is_execution_api_healthy, maybe_alert_execution_api_down)
     from config import MARGIN_BY_STRENGTH, LEVERAGE_MAP, TP_BY_STRENGTH
+
+    if not is_execution_api_healthy():
+        maybe_alert_execution_api_down()
+        print(f"  [불타기] API 인증 실패 — pyramid hard-stop")
+        return
 
     balance_now  = get_usdt_balance()
     base_pct     = MARGIN_BY_STRENGTH.get("VERY STRONG", 0.18)
@@ -3687,10 +4083,15 @@ def _try_btc_sync_direct_trade(candidate: dict) -> bool:
                         has_open_position, get_daily_loss_limit,
                         get_margin_cap, log_trade_candidate, log_execution_journal,
                         notify_trade_block, position_pct_for_risk, _load_state,
-                        _save_state)
+                        _save_state, is_execution_api_healthy,
+                        maybe_alert_execution_api_down, active_exchange)
 
     symbol = candidate.get("symbol", "")
     direction = candidate.get("direction", "")
+    if not is_execution_api_healthy():
+        maybe_alert_execution_api_down()
+        print(f"  [BTC Sync] {active_exchange()} API 인증 실패 — 진입 hard-stop")
+        return False
     sync_mode = candidate.get("sync_mode", "momentum")
     strategy = "BTC Sync Reversion" if sync_mode == "reversion" else "BTC Sync Momentum"
     tf_key = BTC_SYNC_DIRECT_TIMEFRAME
@@ -4351,7 +4752,19 @@ def _reconcile_orphan_positions():
 def scan():
     # ── Step 0: 포지션 모니터링 먼저 ───────────────────────────────────────────
     if AUTO_TRADE:
-        from trade_router import monitor_positions, evaluate_trade_candidates
+        from trade_router import (
+            monitor_positions, evaluate_trade_candidates,
+            probe_execution_api, is_execution_api_healthy,
+            maybe_alert_execution_api_down, active_exchange,
+        )
+        # 스캔 시작 시 private API 헬스 프로브 (Binance -2015 등 즉시 감지)
+        probe_execution_api()
+        if not is_execution_api_healthy():
+            maybe_alert_execution_api_down()
+            print(
+                f"  [API] {active_exchange()} private 인증 실패 — "
+                f"신규 진입 hard-stop (스캔/시그널은 계속)"
+            )
         monitor_positions()
         _reconcile_orphan_positions()
         if not FAST_RADAR:
@@ -4722,7 +5135,8 @@ def scan():
                                                 continue
                                         _try_auto_trade(symbol, tf_key, fresh, current_price,
                                                         scalp=True, mtf_boost=_sc_boost,
-                                                        premium_mtf=mtf_info["strong"])
+                                                        premium_mtf=mtf_info["strong"],
+                                                        ohlcv_df=df)
                                 else:
                                     reasons = []
                                     if not vwap_ok:
@@ -4894,7 +5308,8 @@ def scan():
 
                                             _try_auto_trade(symbol, tf_key, fresh_swing,
                                                             current_price, mtf_boost=boost,
-                                                            premium_mtf=mtf_info["strong"])
+                                                            premium_mtf=mtf_info["strong"],
+                                                            ohlcv_df=df)
 
                     time.sleep(1)
             else:
@@ -5019,7 +5434,8 @@ def scan():
                     print(f"  [{strategy_tag}] 자동매매 진입  레버:{_get_leverage(asig['strength'], tf_key)}x  부스트:{boost_a:.2f}x")
                     _try_auto_trade(symbol, tf_key, [asig], current_price,
                                     scalp=scalp_a, mtf_boost=boost_a,
-                                    premium_mtf=mtf_a["strong"])
+                                    premium_mtf=mtf_a["strong"],
+                                    ohlcv_df=df)
 
             # ══════════════════════════════════════════════════════════════
             # 돌파 추세 매매 (Breakout) + 불타기 (Pyramid)

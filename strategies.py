@@ -31,7 +31,7 @@ from config import (BB_MID_3D_LOOKBACK, BB_MID_3D_MIN_ABOVE,
                     RSI2_REVERSION_TF, RSI2_PERIOD, RSI2_LONG_THRESHOLD,
                     RSI2_SHORT_THRESHOLD, RSI2_EXTREME_LONG, RSI2_EXTREME_SHORT,
                     RSI2_MIN_VOL)
-from divergence import calc_rsi, _ema_trend, calc_vwap
+from divergence import calc_rsi, calc_macd, _ema_trend, calc_vwap
 
 
 def _atr(df: pd.DataFrame, period: int = 14) -> float:
@@ -46,11 +46,40 @@ def _vol_ratio(df: pd.DataFrame, period: int = 20) -> float:
     return float(vol.iloc[-1] / avg) if avg > 0 else 0.0
 
 
+def macd_hist_alignment(df: pd.DataFrame, direction: str) -> dict:
+    """
+    EMA 단타용 MACD 히스토그램 정렬 (2026-07-11).
+    크로스 필수 아님. LONG: hist>=0 또는 최근 상승 기울기 / SHORT: 반대.
+    """
+    if df is None or len(df) < 35:
+        return {"ok": False, "value": 0.0, "rising": False, "falling": False, "note": "데이터 부족"}
+    hist = calc_macd(df["close"])
+    h0 = float(hist.iloc[-1])
+    h1 = float(hist.iloc[-2]) if len(hist) > 1 else h0
+    h2 = float(hist.iloc[-3]) if len(hist) > 2 else h1
+    rising = h0 > h1 or (h0 >= h1 and h1 > h2)
+    falling = h0 < h1 or (h0 <= h1 and h1 < h2)
+    if direction == "LONG":
+        ok = (h0 >= 0.0) or rising
+        note = f"hist={h0:.6g} {'+' if rising else ''}{'zero+' if h0 >= 0 else 'below0'}"
+    else:
+        ok = (h0 <= 0.0) or falling
+        note = f"hist={h0:.6g} {'-' if falling else ''}{'zero-' if h0 <= 0 else 'above0'}"
+    return {
+        "ok": bool(ok),
+        "value": round(h0, 6),
+        "rising": bool(rising),
+        "falling": bool(falling),
+        "note": note,
+    }
+
+
 def _base_signal(signal_type: str, direction: str, strength: str,
                  confirmed: int, atr_val: float, ema_t: int,
                  pivot: float, vol_r: float, rsi_val: float,
-                 strategy: str) -> dict:
+                 strategy: str, macd_info: dict | None = None) -> dict:
     """공통 신호 포맷 — 기존 detect() 반환값과 호환."""
+    macd = macd_info or {"ok": False, "value": 0.0}
     return {
         "signal_type":     signal_type,
         "strength":        strength,
@@ -64,7 +93,8 @@ def _base_signal(signal_type: str, direction: str, strength: str,
         # 기존 formatter 호환용 (ok/value 형식)
         "rsi":  {"ok": rsi_val > 0,  "value": round(rsi_val, 1)},
         "cci":  {"ok": False,         "value": 0.0},
-        "macd": {"ok": False,         "value": 0.0},
+        "macd": {"ok": bool(macd.get("ok")), "value": float(macd.get("value") or 0.0)},
+        "macd_align": macd,
         "obv":  {"ok": False},
         "srsi": {"ok": False,         "value": 0},
         "vol":  {"ok": vol_r >= 1.1, "value": round(vol_r, 2)},
@@ -292,9 +322,11 @@ def detect_ema_touch(df: pd.DataFrame, tf_key: str) -> dict | None:
         )
         candle_bull = last_c > last_o and last_c >= c_ema20 and body >= min_body
         if pullback_seen and candle_bull and vol_r >= 1.0:
+            macd_a = macd_hist_alignment(df, "LONG")
             return _base_signal(
                 "ema_long", "LONG", "STRONG ⚡", 4,
                 atr_val, 1, prev_l, vol_r, 50.0, "EMA눌림목",
+                macd_info=macd_a,
             )
 
     # ── 하락 추세 반등매도 SHORT ───────────────────────────────────────────────
@@ -305,9 +337,11 @@ def detect_ema_touch(df: pd.DataFrame, tf_key: str) -> dict | None:
         )
         candle_bear = last_c < last_o and last_c <= c_ema20 and body >= min_body
         if pullback_seen and candle_bear and vol_r >= 1.0:
+            macd_a = macd_hist_alignment(df, "SHORT")
             return _base_signal(
                 "ema_short", "SHORT", "STRONG ⚡", 4,
                 atr_val, -1, prev_h, vol_r, 50.0, "EMA눌림목",
+                macd_info=macd_a,
             )
 
     return None
@@ -918,8 +952,14 @@ def scan_additional(df: pd.DataFrame, tf_key: str,
         if existing:
             existing["confirmed_count"] = min(existing["confirmed_count"] + 1, 6)
             existing["strategy"] = existing["strategy"] + "+EMA"
+            # EMA MACD 정렬 정보를 합산 신호에 보존 (soft 필터용)
+            existing["macd"] = ema_sig.get("macd", existing.get("macd"))
+            existing["macd_align"] = ema_sig.get("macd_align")
         else:
             results.append(ema_sig)
+
+    # 거래량/돌파 합산 시에도 EMA 기반이면 MACD 정렬을 계산해 붙인다
+    # (EMA 단독이 아니고 나중에 이름이 EMA눌림목+... 로 바뀌는 경우 대비)
 
     bb_sig = detect_bb_squeeze(df, tf_key)
     if bb_sig:
@@ -969,6 +1009,28 @@ def scan_additional(df: pd.DataFrame, tf_key: str,
             existing["strategy"] = existing["strategy"] + "+돌파"
         else:
             results.append(micro_sig)
+
+    # EMA 계열 합산 전략: MACD 정렬이 없으면 방향 기준으로 채움
+    for s in results:
+        strat = str(s.get("strategy") or "")
+        if "EMA눌림목" not in strat:
+            continue
+        if isinstance(s.get("macd_align"), dict) and "ok" in s["macd_align"]:
+            s["macd"] = {
+                "ok": bool(s["macd_align"]["ok"]),
+                "value": float(s["macd_align"].get("value") or 0.0),
+            }
+            continue
+        st = str(s.get("signal_type", ""))
+        if st.endswith("long") or "bull" in st:
+            direction = "LONG"
+        elif st.endswith("short") or "bear" in st:
+            direction = "SHORT"
+        else:
+            direction = "LONG"
+        macd_a = macd_hist_alignment(df, direction)
+        s["macd"] = {"ok": bool(macd_a["ok"]), "value": float(macd_a["value"])}
+        s["macd_align"] = macd_a
 
     # 파라볼릭 점화/반전은 EMA눌림목 등 기존 전략과 다른 조건(VWAP이격/블로우오프)을
     # 측정하는 독립 전략이라, 다른 신호와 합산하지 않고 별도 신호로 둔다.

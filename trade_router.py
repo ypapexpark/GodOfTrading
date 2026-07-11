@@ -71,6 +71,40 @@ def get_open_position_count() -> int:
     return len(adapter.fetch_all_positions_raw())
 
 
+def is_execution_api_healthy() -> bool:
+    """Active venue private API health. Bybit defaults True if adapter has no probe."""
+    adapter = _active_adapter()
+    fn = getattr(adapter, "is_execution_api_healthy", None)
+    if callable(fn):
+        return bool(fn())
+    return True
+
+
+def probe_execution_api() -> bool:
+    adapter = _active_adapter()
+    fn = getattr(adapter, "probe_execution_api", None)
+    if callable(fn):
+        return bool(fn())
+    return True
+
+
+def maybe_alert_execution_api_down() -> bool:
+    """Send one-shot alert if venue API is down. Returns True if alert was sent now."""
+    adapter = _active_adapter()
+    fn = getattr(adapter, "maybe_alert_execution_api_down", None)
+    if callable(fn):
+        return bool(fn())
+    return False
+
+
+def get_execution_api_status() -> dict:
+    adapter = _active_adapter()
+    fn = getattr(adapter, "get_execution_api_status", None)
+    if callable(fn):
+        return dict(fn())
+    return {"healthy": True, "venue": active_exchange()}
+
+
 # Explicitly expose private state helpers imported directly by main.py.
 _load_state = _bybit._load_state
 _save_state = _bybit._save_state

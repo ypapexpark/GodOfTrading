@@ -18,6 +18,16 @@ hyperliquid_radar_state_*.json
 polymarket_paper_state.json
 polymarket_paper_candidates.jsonl
 polymarket_paper_journal.jsonl
+polymarket_whale_paper_state.json
+polymarket_whale_paper_journal.jsonl
+polymarket_whale_live_state.json
+polymarket_whale_live_journal.jsonl
+hyperliquid_whale_paper_state.json
+hyperliquid_whale_paper_journal.jsonl
+trade_postmortem.jsonl
+trade_postmortem_*.jsonl
+weekly_learning_report_latest.txt
+krx_screener_state.json
 state.json
 
 # ── Python 캐시 ───────────────────────────────────────────────
@@ -31,6 +41,8 @@ __pycache__/
 venv/
 env/
 .venv/
+.venv-poly/
+.venv-*/
 
 # ── macOS ────────────────────────────────────────────────────
 .DS_Store

@@ -1,0 +1,78 @@
+{
+  "generated_from": "PolyBacktest whale_backtest.py, 2026-07-09",
+  "train_period": "2022-07-02 ~ 2026-04-10",
+  "whales": [
+    {
+      "wallet": "0xa6a856a8c8a7f14fd9be6ae11c367c7cbb755009",
+      "n": 577,
+      "win_rate": 0.714,
+      "expected_win_rate": 0.627,
+      "z": 4.57,
+      "avg_pnl_pct": 0.1388
+    },
+    {
+      "wallet": "0x3a613cdb8f00f7afe0196cbbb91bdb597383b560",
+      "n": 134,
+      "win_rate": 0.8582,
+      "expected_win_rate": 0.7027,
+      "z": 4.27,
+      "avg_pnl_pct": 0.2213
+    },
+    {
+      "wallet": "0x7fea691e28d169a33c500607279f2acb49058f74",
+      "n": 75,
+      "win_rate": 0.9067,
+      "expected_win_rate": 0.7328,
+      "z": 3.6,
+      "avg_pnl_pct": 0.2373
+    },
+    {
+      "wallet": "0x2005d16a84ceefa912d4e380cd32e7ff827875ea",
+      "n": 298,
+      "win_rate": 0.7248,
+      "expected_win_rate": 0.6342,
+      "z": 3.54,
+      "avg_pnl_pct": 0.1429
+    },
+    {
+      "wallet": "0x507e52ef684ca2dd91f90a9d26d149dd3288beae",
+      "n": 633,
+      "win_rate": 0.7125,
+      "expected_win_rate": 0.6539,
+      "z": 3.29,
+      "avg_pnl_pct": 0.0896
+    },
+    {
+      "wallet": "0xee613b3fc183ee44f9da9c05f53e2da107e3debf",
+      "n": 486,
+      "win_rate": 0.6749,
+      "expected_win_rate": 0.6073,
+      "z": 3.25,
+      "avg_pnl_pct": 0.1114
+    },
+    {
+      "wallet": "0xd3989ba133ab48b5b3a81e3dba9b37b5966a46d7",
+      "n": 58,
+      "win_rate": 0.931,
+      "expected_win_rate": 0.7813,
+      "z": 3.21,
+      "avg_pnl_pct": 0.1917
+    },
+    {
+      "wallet": "0x57cd939930fd119067ca9dc42b22b3e15708a0fb",
+      "n": 87,
+      "win_rate": 0.7011,
+      "expected_win_rate": 0.5532,
+      "z": 3.12,
+      "avg_pnl_pct": 0.2675
+    },
+    {
+      "wallet": "0x2652dd1140c3b9e69c8852264cf8dbe727672a1d",
+      "n": 261,
+      "win_rate": 0.7471,
+      "expected_win_rate": 0.666,
+      "z": 3.01,
+      "avg_pnl_pct": 0.1218
+    }
+  ]
+}

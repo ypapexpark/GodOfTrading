@@ -53,16 +53,19 @@ MAX_MARGIN_PCT_CAP       = 1.00
 MAX_SCALP_MARGIN_PCT_CAP = 1.00
 
 # ─── 트레일링 스톱 파라미터 (ELITE 전용) ─────────────────────────────────────
-TRAIL_ATR_MULT    = 1.5   # 현재가에서 SL까지 ATR 거리
+TRAIL_ATR_MULT    = 1.5   # ELITE: 현재가에서 SL까지 ATR 거리
+TRAIL_ATR_MULT_STANDARD = 2.0  # 2026-07-11: 일반(비-ELITE) TP1 이후 러너 트레일
 TRAIL_ADVANCE_MIN = 0.5   # SL 갱신 최소 이동량 (ATR 단위), 너무 자주 갱신 방지
-PRE_TP_BE_TRIGGER_R = 0.8 # TP1 전이라도 0.8R 수익이면 손실 방지 SL로 이동
+# 2026-07-11 R:R 개선: 0.8R에서 너무 일찍 잠그면 노이즈에 걸린 뒤 TP1을 못 먹는
+# 케이스가 있고, 잔량 BE 청산이 승리 금액을 깎음. 1.0R 도달 시 0.55R 잠금.
+PRE_TP_BE_TRIGGER_R = 1.0
 BE_FEE_CUSHION_MULT = 1.2 # 수수료까지 감안한 소폭 이익 보호
-# 2026-07-03 리뷰: 0.8R 도달 시 SL을 수수료만 겨우 넘는 손익분기로 당기면,
-# TP1에 못 미치고 되돌리는 다수 거래가 거의 $0짜리 "승리"로 기록된다
-# (실측 16건 평균 승리 +0.34R — 트리거인 0.8R보다도 낮음).
-# 트리거 조건(승률에 영향)은 그대로 두고, 잠그는 SL 위치만 이미 번 R의
-# 절반을 보호하도록 올려서 "얕은 승리"의 실현 금액을 키운다.
-PRE_TP_BE_LOCK_FRACTION = 0.5
+PRE_TP_BE_LOCK_FRACTION = 0.55
+# TP1 부분익절 후 잔량을 순수 BE가 아니라 +0.35R에 잠가 얕은 승리 금액 개선
+# (실측: "부분익절 후 잔량 보호청산" 다수 → 잔량이 BE에서 죽으면 전체 기대값 악화)
+POST_TP1_LOCK_R = 0.35
+# 일반 포지션도 TP1 이후 트레일 허용 (기존 ELITE only → 러너 기회 확대)
+TRAIL_AFTER_TP1_ALL = True
 PROFIT_LOCK_TRIGGER_MARGIN_ROI_PCT = 10.0 # 레버리지 포함 +10% 수익권 진입 시
 PROFIT_LOCK_SL_MARGIN_ROI_PCT = 10.0      # SL도 증거금 ROI +10% 부근으로 이동
 
@@ -1131,10 +1134,12 @@ def _aggregate_closed_pnl(entries: list[dict]) -> tuple[float, dict]:
 
 
 def _update_trail_sl(ex, symbol: str, fsym: str, info: dict,
-                     current_price: float, current_qty: float):
+                     current_price: float, current_qty: float,
+                     atr_mult: float | None = None):
     """
-    ELITE 포지션 트레일링 스톱 갱신.
-    현재가에서 TRAIL_ATR_MULT × ATR 뒤에 SL을 유지하며 방향으로만 이동(래칫).
+    트레일링 스톱 갱신.
+    현재가에서 atr_mult × ATR 뒤에 SL을 유지하며 방향으로만 이동(래칫).
+    ELITE는 타이트(1.5ATR), 일반 러너는 넓게(2.0ATR) — 2026-07-11.
     """
     from publisher import send as tg_send
 
@@ -1143,13 +1148,14 @@ def _update_trail_sl(ex, symbol: str, fsym: str, info: dict,
     current_sl   = info.get("trail_sl") or info["sl_price"]
     close_side   = "sell" if direction == "LONG" else "buy"
     tg_dir       = 2 if direction == "LONG" else 1
+    mult = float(atr_mult if atr_mult is not None else TRAIL_ATR_MULT)
 
     if trail_atr <= 0 or current_price <= 0:
         return
 
     new_sl = (
-        current_price - trail_atr * TRAIL_ATR_MULT if direction == "LONG"
-        else current_price + trail_atr * TRAIL_ATR_MULT
+        current_price - trail_atr * mult if direction == "LONG"
+        else current_price + trail_atr * mult
     )
     new_sl = round(new_sl, 4)
 
@@ -1403,24 +1409,28 @@ def monitor_positions():
                     except Exception as e:
                         print(f"[수익보호] {symbol} SL 이동 실패: {e}")
 
-        # ③ ELITE + TP1 이후 → 트레일링 스톱 래칫
-        if info.get("be_done") and info.get("is_elite"):
-            _update_trail_sl(ex, symbol, fsym, info, current_price, current_qty)
-            continue
-
-        # 이미 BE SL 적용됨 (non-ELITE) → 스킵
+        # ③ TP1 이후 트레일링 — ELITE 타이트 / 일반도 러너 허용(2026-07-11)
         if info.get("be_done"):
+            is_elite = info.get("is_elite", False)
+            if is_elite or TRAIL_AFTER_TP1_ALL:
+                mult = TRAIL_ATR_MULT if is_elite else TRAIL_ATR_MULT_STANDARD
+                _update_trail_sl(
+                    ex, symbol, fsym, info, current_price, current_qty,
+                    atr_mult=mult,
+                )
             continue
 
         # ② TP1 체결 감지: 현재 수량이 초기의 85% 미만
         initial_qty = info.get("initial_qty", 0)
         if initial_qty > 0 and current_qty < initial_qty * 0.85:
             direction   = info["direction"]
-            entry_price = info["entry_price"]
+            entry_price = float(info["entry_price"])
             close_side  = "sell" if direction == "LONG" else "buy"
             tg_dir      = 2 if direction == "LONG" else 1
-            trail_atr   = info.get("atr", 0)
+            trail_atr   = float(info.get("atr", 0) or 0)
             is_elite    = info.get("is_elite", False)
+            initial_sl  = float(info.get("initial_sl_price") or info.get("sl_price") or entry_price)
+            risk = abs(entry_price - initial_sl)
 
             try:
                 ex.cancel_all_orders(fsym, params={
@@ -1430,20 +1440,29 @@ def monitor_positions():
 
                 current_sl = float(info.get("sl_price") or entry_price)
 
-                # ELITE: 초기 트레일 SL (현재가 기준), 일반: 손익분기.
-                # 이미 +10% 수익락 SL이 더 유리하면 절대 낮추지 않는다.
+                # 잔량 SL: 순수 BE 대신 +POST_TP1_LOCK_R 잠금 (얕은 승리 개선)
+                lock_r = max(0.0, float(POST_TP1_LOCK_R))
+                lock_sl = (
+                    entry_price + risk * lock_r if direction == "LONG"
+                    else entry_price - risk * lock_r
+                ) if risk > 0 else entry_price
+
+                # ELITE: 초기 트레일 SL (현재가 기준). 이미 유리한 SL은 절대 낮추지 않음.
                 if is_elite and trail_atr > 0 and current_price > 0:
                     trail_candidate = (
                         current_price - trail_atr * TRAIL_ATR_MULT
                         if direction == "LONG"
                         else current_price + trail_atr * TRAIL_ATR_MULT
                     )
-                    init_sl = max(entry_price, current_sl, trail_candidate) if direction == "LONG" else min(entry_price, current_sl, trail_candidate)
+                    candidates = [entry_price, current_sl, lock_sl, trail_candidate]
+                    init_sl = max(candidates) if direction == "LONG" else min(candidates)
                     init_sl = round(init_sl, 4)
                     trail_note = f"트레일링 스톱 시작 ${init_sl:,.4f}"
                 else:
-                    init_sl = max(entry_price, current_sl) if direction == "LONG" else min(entry_price, current_sl)
-                    trail_note = f"손익분기 보호 ${init_sl:,.4f}"
+                    candidates = [entry_price, current_sl, lock_sl]
+                    init_sl = max(candidates) if direction == "LONG" else min(candidates)
+                    init_sl = round(init_sl, 4)
+                    trail_note = f"잔량 +{lock_r:.2f}R 보호 ${init_sl:,.4f}"
 
                 ex.create_order(
                     fsym, "market", close_side, current_qty,
@@ -1456,20 +1475,19 @@ def monitor_positions():
                     }
                 )
 
-                elite_tag = " 💎 트레일링 모드 진입" if is_elite else ""
+                elite_tag = " 💎 트레일링 모드 진입" if is_elite else " 🏃 러너 트레일 대기"
                 print(f"[모니터] {symbol} TP1 체결 → {trail_note}{elite_tag}")
                 tg_send(
-                    f"🔄 <b>[TP1 체결{'  💎 트레일링 스톱 시작' if is_elite else ''}]</b> {symbol}\n"
+                    f"🔄 <b>[TP1 체결{'  💎 트레일' if is_elite else '  러너 보호'}]</b> {symbol}\n"
                     f"SL → <b>${init_sl:,.4f}</b>  남은수량 {current_qty}\n"
-                    f"{'ELITE: 수익 따라 SL 자동 상향 시작' if is_elite else '손익분기 보호 완료'}"
+                    f"{'ELITE: 수익 따라 SL 자동 상향' if is_elite else f'잔량 +{lock_r:.2f}R 잠금 후 트레일'}"
                 )
 
                 s = _load_state()
                 if symbol in s.get("positions", {}):
                     s["positions"][symbol]["be_done"]  = True
                     s["positions"][symbol]["sl_price"] = init_sl
-                    if is_elite:
-                        s["positions"][symbol]["trail_sl"] = init_sl
+                    s["positions"][symbol]["trail_sl"] = init_sl
                 _save_state(s)
 
             except Exception as e:
@@ -1574,6 +1592,14 @@ def _update_trade_result(symbol: str, pnl_usd: float, close_info: dict | None = 
             if close_info:
                 record["close_info"] = _json_safe(close_info)
             record["exit_reason"] = _infer_exit_reason(record, exit_price, pnl_usd)
+            # 청산 직후 포스트모템 (승/패 원인 후보 + 레짐/로직 태그)
+            try:
+                from postmortem import build_and_save_postmortem
+                pm = build_and_save_postmortem(record)
+                record["postmortem"] = pm
+            except Exception as e:
+                print(f"  [포스트모템] 생성 실패: {e}")
+                pm = None
             closed_record = record
             break
     _save_state(s)
@@ -1596,6 +1622,11 @@ def _update_trade_result(symbol: str, pnl_usd: float, close_info: dict | None = 
             exit_price=closed_record.get("exit_price", 0),
             exit_reason=closed_record.get("exit_reason", ""),
             entry_reasons=closed_record.get("entry_reasons", []),
+            postmortem=closed_record.get("postmortem"),
+            logic_stack_version=closed_record.get("logic_stack_version")
+                or (closed_record.get("entry_context") or {}).get("logic_stack_version"),
+            logic_attribution=closed_record.get("logic_attribution")
+                or (closed_record.get("entry_context") or {}).get("logic_attribution"),
         )
     return closed_record
 
@@ -1922,7 +1953,25 @@ def build_trade_close_notification(record: dict) -> str:
     for reason in (record.get("entry_reasons") or ctx.get("reasons") or [])[:4]:
         lines.append(f"   • {escape(str(reason))}")
 
-    if status == "loss":
+    pm = record.get("postmortem")
+    if isinstance(pm, dict) and pm.get("causes"):
+        lines += ["", f"🔎 <b>{escape(str(pm.get('headline') or '포스트모템'))}</b>"]
+        if pm.get("r_multiple") is not None:
+            lines.append(
+                f"   R배수: <b>{pm['r_multiple']:+.2f}R</b>  |  보유 {pm.get('hold_minutes')}분"
+            )
+        for c in (pm.get("causes") or [])[:4]:
+            lines.append(f"   • {escape(str(c.get('text') or ''))}")
+        if pm.get("lessons"):
+            lines.append("")
+            lines.append("💡 <b>교훈</b>")
+            for lesson in pm["lessons"][:3]:
+                lines.append(f"   • {escape(str(lesson))}")
+        la = pm.get("logic_attribution") or {}
+        if la.get("summary_ko"):
+            lines.append("")
+            lines.append(f"🏷 {escape(str(la['summary_ko']))}")
+    elif status == "loss":
         lines += ["", "🔎 <b>실패 원인 추정</b>"]
         for reason in _loss_diagnostics(record):
             lines.append(f"   • {escape(reason)}")
@@ -1941,7 +1990,7 @@ def build_trade_close_notification(record: dict) -> str:
         ]
 
     lines.append("")
-    lines.append("🧾 이 결과는 trade_history + execution_journal에 저장됨")
+    lines.append("🧾 trade_history + journal + <b>trade_postmortem.jsonl</b> 저장")
     return "\n".join(lines)
 
 

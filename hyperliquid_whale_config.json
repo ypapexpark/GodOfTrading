@@ -1,0 +1,16 @@
+{
+  "note": "HL 고래 paper 카피용. seed_wallets를 채우거나 tools/hl_whale_screen.py로 후보를 갱신.",
+  "generated_at": "2026-07-11",
+  "params": {
+    "min_fill_notional_usd": 5000,
+    "copy_notional_usd": 25,
+    "max_leverage_copy": 5,
+    "max_open_positions": 8,
+    "slippage_bps": 15,
+    "poll_fills_limit": 50
+  },
+  "seed_wallets": [
+  ],
+  "whales": [
+  ]
+}

@@ -152,10 +152,11 @@ TP_BY_STRENGTH = {
 # 15분봉 추가전략(EMA눌림목/마이크로돌파/BB스퀴즈)은 방향은 맞아도 짧게 되돌리는 경우가 많다.
 # TP1을 빠르게 당겨 수익을 잠그고, 이후 잔량만 추세 연장에 맡긴다.
 FAST_TP_TF = {"15m"}
+# 2026-07-11: TP1 비중 소폭 축소·러너 확대 (15m 얕은 승리 개선)
 FAST_TP_BY_STRENGTH = {
-    "STRONG":      [{"pct": 50, "atr_mult": 1.0}, {"pct": 30, "atr_mult": 1.6}, {"pct": 20, "atr_mult": 2.4}],
-    "VERY STRONG": [{"pct": 45, "atr_mult": 1.0}, {"pct": 35, "atr_mult": 1.8}, {"pct": 20, "atr_mult": 2.8}],
-    "ELITE":       [{"pct": 40, "atr_mult": 1.1}, {"pct": 40, "atr_mult": 2.0}, {"pct": 20, "atr_mult": 3.0}],
+    "STRONG":      [{"pct": 45, "atr_mult": 1.0}, {"pct": 30, "atr_mult": 1.6}, {"pct": 25, "atr_mult": 2.4}],
+    "VERY STRONG": [{"pct": 40, "atr_mult": 1.0}, {"pct": 35, "atr_mult": 1.8}, {"pct": 25, "atr_mult": 2.8}],
+    "ELITE":       [{"pct": 35, "atr_mult": 1.1}, {"pct": 40, "atr_mult": 2.0}, {"pct": 25, "atr_mult": 3.0}],
 }
 FAST_TP1_MIN_RR = 0.65
 FAST_EXIT_MIN_BEST_RR = 0.70
@@ -210,21 +211,18 @@ MIN_TRADE_MARGIN_MAX_BALANCE_PCT = 0.12  # 2026-07-06: 0.25 → 0.12 (2026-07-07
 # 실제 거래소 최소수량은 주문 직전 calc_qty()가 다시 확인한다.
 MIN_FALLBACK_TRADE_MARGIN_USD = 1.0
 
-# ─── Binance 고정 증거금 모드 (2026-07-06 사용자 지시, 2026-07-07 원복) ─────
-# Binance 실계좌가 2일 -17.9% DD를 본 뒤, 사용자가 "절대손실 안정화"를 위해
-# Binance venue는 %기반/위험기반 사이징 결과와 무관하게 항상 고정 증거금으로
-# 진입하라고 지시. 계좌 잔고가 더 빠져도 이 값을 더 줄이지 않는다(잔고 대비 %가
-# 아니라 절대 달러 고정). Bybit은 기존 %/위험기반 사이징 그대로 유지.
-# 참고 기준점: 이 $100 유닛이 실현손익 누적으로 BINANCE_FIXED_MARGIN_DOUBLE_AT
-# ($200)에 도달하면 사용자가 유닛 사이즈를 재조정할 예정(자동 이스컬레이션은
-# 과설계 방지를 위해 지금 구현하지 않음 — 수동 재조정 트리거용 참고값).
-# 안전장치: 포트폴리오 상관캡(방향쏠림/마진사용/동시포지션/총SL위험)과
-# 레버리지 압축(INITIAL_SL_MARGIN_ROI_CAP_PCT=35)은 그대로 적용된다. 즉
-# $100 고정이라도 넓은 SL은 레버리지가 압축돼 단건 최악손실이 ~증거금의 35%
-# (=$35)로 bounded되고, 롱 알트 동시보유는 방향쏠림캡이 막는다.
-# 0 또는 None으로 두면 Binance도 기존 사이징 사용(고정모드 해제).
-BINANCE_FIXED_MARGIN_USD = 100.0
-BINANCE_FIXED_MARGIN_DOUBLE_AT = 200.0  # 참고값(자동동작 없음): 유닛 2배 도달 시 수동 재조정 신호
+# ─── Binance 사이징 (2026-07-11 개정) ───────────────────────────────────────
+# 구버전: BINANCE_FIXED_MARGIN_USD=$100 이 위험기반 사이징을 통째로 덮어씀.
+# 실측(07/10): DD 16.9% + risk×0.25 상태에서도 BTC SHORT에 $100×19x 강제 →
+# 단건 -$34. 알트 와이드SL(20~37%)도 고정 $100과 겹쳐 한 방 -$60~.
+# 개정: 고정 override 비활성(0). 위험기반 사이징 유지 + 단건 증거금/최악손실 상한만.
+# 0 또는 None = 고정 override 없음.
+BINANCE_FIXED_MARGIN_USD = 0.0
+BINANCE_FIXED_MARGIN_DOUBLE_AT = 200.0  # 레거시 참고값(자동 동작 없음)
+# 단건 증거금 상한(위험기반 결과와 min). 소액 재가동 단계 보수값.
+BINANCE_MAX_MARGIN_USD = 40.0
+# 단건 최악손실(est SL) ≤ equity × 이 비율. 넘으면 사이즈 축소, 최소마진 이하면 차단.
+BINANCE_MAX_TRADE_SL_LOSS_PCT = 0.010  # 1.0%
 
 # 확신도 높은 자리는 "맞췄는데 수익금이 너무 작음"을 막기 위해 증거금 하한을 따로 둔다.
 # 목표 증거금 = max(고정 USD, 잔고 비율). 단, 일손실/DD 하드스톱은 그대로 유지한다.
@@ -477,6 +475,27 @@ ASYMMETRIC_TIMING_OVERRIDE_MULT = 0.70
 # 스캔하므로 건강한 초입 눌림목은 놓치지 않고 곧 다시 잡힌다.
 EXTENSION_HARD_BLOCK_PCT = 8.0
 
+# ─── 진입 품질 하드 게이트 (2026-07-11) ─────────────────────────────────────
+# 와이드 SL + 고정/고증거금 조합이 Binance에서 대형 단건 손실(HMSTR -67, CHIP -66,
+# US -21 등)을 반복. SL% 가 이 한도를 넘으면 타이트SL 예외 없이 진입 차단.
+MAX_ENTRY_SL_PCT = 10.0
+# 히든 다이버전스 신선도: 5봉 전 진입(BTC 07/10 -$34) 재발 방지.
+HIDDEN_LIVE_MAX_BARS_AGO = 3
+# TradFi/특수 상품 — 계정 agreement 미서명 시 -4411, 일반 선물 전략과 분리.
+ENTRY_SYMBOL_BLOCKLIST = {
+    "XAU/USDT", "XAG/USDT", "XPT/USDT", "XPD/USDT",
+}
+# 스캘핑/RSI2: 하위TF 보조봉 "강한 역방향" 또는 타이밍 실패 시 soft×0.70 금지.
+# 07/10 XRP RSI2: 5m 강한역방향인데 soft override 로 진입 → SL.
+SCALP_TIMING_HARD_BLOCK_SIGNAL_TYPES = {
+    "rsi2_reversion_long", "rsi2_reversion_short",
+    "vwap_reversion_long", "vwap_reversion_short",
+    "micro_breakout_long", "micro_breakout_short",
+}
+# 관찰모드(다이버전스 일반/파라볼릭/스캘핑3종) 라이브 사이즈 0 = paper_only.
+# 표본 축적은 후보로그로, 실주문은 EV 검증 후 OBSERVATION_MODE_PAPER_ONLY=False 로 해제.
+OBSERVATION_MODE_PAPER_ONLY = True
+
 # ─── 스캘핑 복리 모드 ────────────────────────────────────────────────────────
 # 2026-07-07 사용자 요청: 방향판단은 가장 신뢰도 높은 신호(EMA눌림목+거래량급등 계열,
 # 오늘 검증 승률 63.6%+)에 맡기고, 포지션은 길게 안 들고 빠르게 TP1 위주로 확정해서
@@ -488,7 +507,9 @@ SCALP_COMPOUND_TF = {"15m"}
 SCALP_COMPOUND_STRATEGIES = {
     "EMA눌림목+거래량급등", "EMA눌림목+돌파", "EMA눌림목+거래량급등+돌파",
 }
-SCALP_COMPOUND_TP1_PCT = 70  # 기존 TP1 가격에 물량 70%를 확정, 나머지 30%만 다음 목표가로
+# 2026-07-11: 70→55. TP1에 너무 많이 실어 잔량 BE 청산 시 전체 승리가 얕아짐
+# (실측 부분익절 후 잔량 보호청산 다수). 55% 확정 + 45% 러너로 기대값 개선.
+SCALP_COMPOUND_TP1_PCT = 55
 
 ASYMMETRIC_TF = {"15m", "1h", "4h", "1d"}
 ASYMMETRIC_TP_BY_STRENGTH = {
@@ -579,6 +600,58 @@ BLOCK_SHORT_AUTO_TRADE = False
 # 장세게이트 배율에 곱해져 최종 SHORT 리스크를 추가로 낮춘다. 1.0=강등해제.
 SHORT_NON_EMA_RISK_MULT = 0.40
 
+# ─── SHORT 기대값 방어 (2026-07-11) ──────────────────────────────────────────
+# Bybit 체결 실측: SHORT n=46 WR 45.7% 이지만 평균익 +0.57 / 평균손 -1.50
+# → 실현 R:R 0.38, 누적 -$25.6 (LONG은 WR 58%·순익 거의 0). 승률 문제가 아니라
+# 숏 구조(조기익절 vs 풀SL) + 느슨한 진입이 기대값을 깎음.
+# 전면 SHORT 금지는 하지 않고(BLOCK_SHORT=False), 품질 게이트 + 전역 사이즈 감액.
+SHORT_STRICT_GATES_ENABLED = True
+SHORT_REQUIRE_MTF_ALIGNED = True   # mtf_boost > 1.0 (상위봉 전정렬) 필수
+SHORT_REQUIRE_EMA_ALIGNED = True   # EMA 방향 일치 필수
+SHORT_GLOBAL_RISK_MULT = 0.50      # 라이브 SHORT 전역 리스크 배율 (2026-07-11: 0.55→0.50)
+# 15m SHORT는 EMA 확인 조합만 (히든/역추세 15m 숏 제외)
+SHORT_15M_STRATEGY_WHITELIST = {
+    "EMA눌림목+돌파",
+    "EMA눌림목+거래량급등",
+    "EMA눌림목+거래량급등+돌파",
+}
+
+# ─── 15m 실거래 전략 제한 (2026-07-11) ───────────────────────────────────────
+# 15m n=80 WR 52.5% 인데 누적 -$12.8 — 빈도 높은 노이즈 TF. 양의 엣지가 확인된
+# EMA 계열만 라이브, 히든/다이버전스/기타는 1h+ 또는 paper.
+LIVE_15M_STRATEGIES = {
+    "EMA눌림목+거래량급등",
+    "EMA눌림목+돌파",
+    "EMA눌림목+거래량급등+돌파",
+}
+
+# ─── EMA 전략 MACD 히스토그램 soft 필터 (2026-07-11) ─────────────────────────
+# 다이버전스 경로에는 MACD가 이미 포함. EMA 단타(_base_signal)는 macd ok=False 고정
+# 이었음. 크로스 필수(후행·신호급감) 대신 히스토그램 부호/기울기 정렬을 soft 적용.
+# HARD_BLOCK=False: 미정렬 시 리스크×SOFT_MULT 만. True면 진입 차단.
+EMA_MACD_FILTER_ENABLED = True
+EMA_MACD_SOFT_RISK_MULT = 0.70
+EMA_MACD_HARD_BLOCK = False
+
+# ─── 레짐 라우터 (Principles P1, 2026-07-11) ─────────────────────────────────
+# 시장 국면(trend/range/high_vol/mixed)에 따라 전략 허용·사이즈를 분기한다.
+# 새 오실레이터 추가 없이 고수 공통 원칙("국면이 다르다")을 시스템화.
+REGIME_ROUTER_ENABLED = True
+REGIME_ADX_TREND = 22.0          # ADX ≥ 이 값 + EMA 기울기 → trend
+REGIME_ADX_RANGE = 18.0          # ADX ≤ 이 값 + 낮은 ATR%ile → range
+REGIME_ATR_PCTILE_HIGH = 85.0    # ATR% 백분위 ≥ → high_vol
+REGIME_ATR_PCTILE_RANGE_MAX = 50.0
+REGIME_EMA_SLOPE_TREND_PCT = 0.15  # EMA20 5봉 기울기 |%| 하한
+REGIME_RANGE_EMA_RISK_MULT = 0.50  # 횡보에서 EMA 휩쏘 방어
+REGIME_HIGH_VOL_RISK_MULT = 0.65
+REGIME_MIXED_RISK_MULT = 0.85
+REGIME_RANGE_BLOCK_HIDDEN = True   # 횡보에서 hidden continuation paper
+REGIME_HIGH_VOL_BLOCK_MEANREV = True
+
+# 실거래 A/B 귀속 태그 (journal/history에 남겨 "기존 vs 신규 스택" 구분)
+# 2026-07-11 이후 진입은 이 버전 문자열로 묶어서 복기한다.
+LOGIC_STACK_VERSION = "2026-07-11-v2"
+
 # ─── 일반 다이버전스 관찰모드 사이징 ────────────────────────────────────────
 # 2026-07-07: 일반(non-hidden) bullish/bearish 다이버전스를 화이트리스트에 편입하되,
 # 실거래 표본이 없어 EV 미검증이므로 검증된 전략처럼 정상 사이징하지 않고 소액으로
@@ -640,6 +713,8 @@ MICRO_BREAKOUT_OBSERVATION_RISK_MULT = 0.30
 # VWAP회귀/RSI2반전: 실거래 반사실 표본 0건(문헌 격차 신규 구현) → 더 보수적 0.25.
 VWAP_REVERSION_OBSERVATION_RISK_MULT = 0.25
 RSI2_REVERSION_OBSERVATION_RISK_MULT = 0.25
+# 2026-07-11: OBSERVATION_MODE_PAPER_ONLY=True 이면 위 mult 적용 전에 paper_only 차단.
+# mult 값은 paper 해제 후 소액 재가동용으로 유지.
 
 # ─── VWAP 소폭이격 평균회귀 스캘핑 (신규, 2026-07-08) ────────────────────────
 # 문헌: 가격이 세션 VWAP에서 일상적 소폭 이탈했다 되돌아오는 것을 노리는 고빈도 스캘핑.
