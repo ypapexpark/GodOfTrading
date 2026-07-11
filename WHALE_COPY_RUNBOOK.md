@@ -17,13 +17,16 @@
 | LIVE 플래그 기본 | **off (dry-run)** |
 
 ### LIVE 켜기 전 체크
-0. **Python >= 3.9.10** 필요 (시스템 3.9.6 이면 py-clob-client 설치 불가)
+0. **Python >= 3.9.10** 필요 (시스템 3.9.6 이면 CLOB 클라이언트 설치 불가)
    ```bash
    brew install python@3.12
-   /opt/homebrew/bin/python3.12 -m pip install py-clob-client
-   # plist ProgramArguments 의 python 경로를 3.12 로 바꾸는 것 권장
+   # 반드시 v2 (2026 CLOB 마이그레이션 이후 v1 주문은 invalid order version)
+   /Users/ghp/Projects/GodOfTrading/.venv-poly/bin/pip install -U py-clob-client-v2
    ```
-1. `pip install py-clob-client` (또는 `py-clob-client-v2`) — **3.12 파이썬으로**
+1. `pip install py-clob-client-v2` — **3.12 + .venv-poly** (LaunchAgent 가 이 venv 사용)
+1b. **서명 지갑에 USDC 잔고** 필요. CLOB `get_balance_allowance` 가 $0 이면 주문 안 나감.  
+    Magic/email 프록시 지갑이면 `POLYMARKET_FUNDER=0x...` + `POLYMARKET_SIGNATURE_TYPE=1` (또는 2).  
+    점검: ` .venv-poly/bin/python polymarket_whale_live_bot.py --smoke `
 2. `.env`:
    ```bash
    POLYMARKET_PRIVATE_KEY=0x...
