@@ -10,11 +10,11 @@
 ### 기본 리스크 (초소액)
 | 항목 | 기본 |
 |------|------|
-| bankroll 기준 | $200 (`POLYMARKET_LIVE_BANKROLL`) |
-| 단건 | min(1% bankroll, **$5**) |
-| 동시 포지션 | 5 |
-| 일손실 | $25 |
-| LIVE 플래그 기본 | **off (dry-run)** |
+| bankroll 기준 | $200 (`POLYMARKET_LIVE_BANKROLL`) — 시드 추적 |
+| 단건 | min(**10%** bankroll, **$20**) ≈ paper `$1000×2%` |
+| 동시 포지션 | 5 (최대 동시 노출 ≈ $100) |
+| 일손실 | $50 |
+| LIVE 플래그 기본 | **off (dry-run)** 권장 문서; 로컬 `.env` 로 킴 |
 
 ### LIVE 켜기 전 체크
 0. **Python >= 3.9.10** 필요 (시스템 3.9.6 이면 CLOB 클라이언트 설치 불가)
@@ -41,9 +41,10 @@
    # POLYMARKET_FUNDER=0x...   # proxy 쓰면
    POLYMARKET_LIVE_TRADING_ENABLED=false   # 먼저 false로 dry-run
    POLYMARKET_LIVE_BANKROLL=200
-   POLYMARKET_LIVE_BET_USD_CAP=5
+   POLYMARKET_LIVE_BET_FRACTION=0.10   # paper 단건 $20 맞춤 ($200×10%)
+   POLYMARKET_LIVE_BET_USD_CAP=20
    POLYMARKET_LIVE_MAX_OPEN=5
-   POLYMARKET_LIVE_MAX_DAILY_LOSS=25
+   POLYMARKET_LIVE_MAX_DAILY_LOSS=50
    ```
 3. 점검 스크립트:
    ```bash

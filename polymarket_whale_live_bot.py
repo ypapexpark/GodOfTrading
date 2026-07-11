@@ -39,13 +39,16 @@ load_dotenv(ROOT / ".env")
 STATE_FILE = ROOT / "polymarket_whale_live_state.json"
 JOURNAL_FILE = ROOT / "polymarket_whale_live_journal.jsonl"
 
-# paper와 동일 비율: bankroll × 2% (2026-07-11)
-# paper: $1000×2%=$20 / live: $200×2%=$4 (cap으로 상한만 둠)
+# 2026-07-12: paper 와 동일 절대 사이즈 목표.
+# paper: INITIAL $1000 × 2% = $20 고정. live 시드 ~$200 이면 2%만 쓰면 $4로 과소.
+# → fraction 10% × bank~$200 ≈ $20, cap $20 으로 paper 단건과 맞춤.
+# 동시 5개 × $20 = $100 (시드 절반) — paper max open 무제한 대비 live 는 한도 유지.
 INITIAL_BANKROLL = float(os.getenv("POLYMARKET_LIVE_BANKROLL", "200") or 200)
-BET_FRACTION = float(os.getenv("POLYMARKET_LIVE_BET_FRACTION", "0.02") or 0.02)
-BET_USD_CAP = float(os.getenv("POLYMARKET_LIVE_BET_USD_CAP", "10") or 10)
+BET_FRACTION = float(os.getenv("POLYMARKET_LIVE_BET_FRACTION", "0.10") or 0.10)
+BET_USD_CAP = float(os.getenv("POLYMARKET_LIVE_BET_USD_CAP", "20") or 20)
 MAX_OPEN = int(os.getenv("POLYMARKET_LIVE_MAX_OPEN", "5") or 5)
-MAX_DAILY_LOSS = float(os.getenv("POLYMARKET_LIVE_MAX_DAILY_LOSS", "25") or 25)
+# 단건 $20 기준 일손실: 예전 $25(≈6×$4) → $50(≈2.5×$20) 로 스케일
+MAX_DAILY_LOSS = float(os.getenv("POLYMARKET_LIVE_MAX_DAILY_LOSS", "50") or 50)
 COPY_SLIPPAGE = float(os.getenv("POLYMARKET_WHALE_COPY_SLIPPAGE", "0.03") or 0.03)
 MIN_NET_USDC = float(os.getenv("POLYMARKET_WHALE_MIN_NET_USDC", "1000") or 1000)
 # 텔레그램: paper와 동일 — 건당 즉시 알림 없이 주기 리포트만 (부담 방지)
