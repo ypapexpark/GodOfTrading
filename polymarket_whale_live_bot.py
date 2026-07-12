@@ -79,6 +79,13 @@ def _load_state() -> dict[str, Any]:
             if st.get("last_reset") != _today():
                 st["daily_loss"] = 0.0
                 st["last_reset"] = _today()
+            # 시드 증액(예: 200→800) 시 내부 bankroll 상향 1회 — 단건이 $4로 줄어들던 문제 방지
+            seeded = str(st.get("bankroll_env_seed") or "")
+            if seeded != str(INITIAL_BANKROLL):
+                cur = float(st.get("bankroll") or 0)
+                if INITIAL_BANKROLL > cur:
+                    st["bankroll"] = INITIAL_BANKROLL
+                st["bankroll_env_seed"] = INITIAL_BANKROLL
             return st
         except Exception:
             pass
@@ -89,12 +96,18 @@ def _load_state() -> dict[str, Any]:
         "wallets": paper_state.get("wallets") or {},
         "open_positions": [],
         "bankroll": INITIAL_BANKROLL,
+        "bankroll_env_seed": INITIAL_BANKROLL,
         "daily_loss": 0.0,
         "last_reset": _today(),
         "last_report_time": 0.0,
         "last_scan": {},
         "orders_blocked": 0,
     }
+
+
+def _ticket_usd(state: dict[str, Any] | None = None) -> float:
+    """paper와 같이 고정 티켓: min(시드×비율, cap). state bankroll로 줄이지 않음."""
+    return round(min(INITIAL_BANKROLL * BET_FRACTION, BET_USD_CAP), 4)
 
 
 def _save_state(state: dict[str, Any]) -> None:
@@ -125,17 +138,17 @@ def _risk_ok(state: dict[str, Any], bet: float) -> tuple[bool, str]:
     # MAX_OPEN<=0 → paper와 동일하게 동시 한도 없음
     if MAX_OPEN > 0 and open_n >= MAX_OPEN:
         return False, f"동시 실포지션 {open_n}>={MAX_OPEN}"
-    bank = float(state.get("bankroll") or INITIAL_BANKROLL)
-    if bet > bank * 0.2:
-        return False, "단건이 bankroll 20% 초과"
+    # 리스크 한도는 시드(INITIAL)와 추적 bankroll 중 큰 쪽 기준
+    bank = max(float(state.get("bankroll") or 0), INITIAL_BANKROLL)
+    if bet > bank * 0.25:
+        return False, "단건이 bankroll 25% 초과"
     return True, ""
 
 
 def open_live_positions(signals: list[dict], state: dict[str, Any]) -> int:
     opened = 0
-    # 성장 bankroll 기준 2% (paper의 INITIAL×fraction 고정과 달리 복리 반영; 비율은 동일 2%)
-    bank = float(state.get("bankroll") or INITIAL_BANKROLL)
-    bet = min(bank * BET_FRACTION, BET_USD_CAP)
+    # paper 동일: 고정 티켓 (시드×2% cap) — 내부 bankroll 변동으로 단건이 $4로 쪼그라들지 않음
+    bet = _ticket_usd(state)
     dry = not live_enabled()
 
     for sig in signals:
@@ -296,7 +309,7 @@ def build_report(state: dict[str, Any]) -> str:
     pnl = sum(float(r.get("pnl_usd") or 0) for r in settled)
     wr = len(wins) / len(settled) if settled else 0.0
     bank = float(state.get("bankroll") or INITIAL_BANKROLL)
-    bet = min(bank * BET_FRACTION, BET_USD_CAP)
+    bet = _ticket_usd(state)
 
     # 지갑별 한 줄 (live journal 기준)
     by_w: dict[str, list] = {}
@@ -305,11 +318,12 @@ def build_report(state: dict[str, Any]) -> str:
 
     lines = [
         f"🐋 <b>[Polymarket 고래 카피 {mode}]</b> — {datetime.now(KST).strftime('%m/%d %H:%M KST')}",
-        f"bankroll ${bank:.2f} | 일손실 ${float(state.get('daily_loss') or 0):.2f}/${MAX_DAILY_LOSS:.0f}",
+        f"bankroll ${bank:.2f} (시드 ${INITIAL_BANKROLL:.0f}) | "
+        f"일손실 ${float(state.get('daily_loss') or 0):.2f}/${MAX_DAILY_LOSS:.0f}",
         f"정산 {len(settled)} | 승률 {wr:.1%} | PnL ${pnl:+.2f}",
         f"오픈 {len(state.get('open_positions') or [])}/"
         f"{'∞' if MAX_OPEN <= 0 else MAX_OPEN} | "
-        f"단건 ~${bet:.2f} ({BET_FRACTION*100:.0f}%, cap ${BET_USD_CAP:.0f})",
+        f"단건 고정 ~${bet:.2f} (paper 패리티)",
         f"live_flag={live_enabled()} | blocked={state.get('orders_blocked', 0)} | "
         f"order_fail={len(fails)}",
     ]
@@ -407,7 +421,7 @@ def run_once(report_now: bool = False) -> dict[str, Any]:
         "open_positions": len(state.get("open_positions") or []),
         "bankroll": state.get("bankroll"),
         "live_enabled": live_enabled(),
-        "bet_usd": min(float(state.get("bankroll") or INITIAL_BANKROLL) * BET_FRACTION, BET_USD_CAP),
+        "bet_usd": _ticket_usd(state),
         "bet_fraction": BET_FRACTION,
     }
 
