@@ -39,16 +39,17 @@ load_dotenv(ROOT / ".env")
 STATE_FILE = ROOT / "polymarket_whale_live_state.json"
 JOURNAL_FILE = ROOT / "polymarket_whale_live_journal.jsonl"
 
-# 2026-07-12: paper 와 동일 절대 사이즈 목표.
-# paper: INITIAL $1000 × 2% = $20 고정. live 시드 ~$200 이면 2%만 쓰면 $4로 과소.
-# → fraction 10% × bank~$200 ≈ $20, cap $20 으로 paper 단건과 맞춤.
-# 동시 5개 × $20 = $100 (시드 절반) — paper max open 무제한 대비 live 는 한도 유지.
+# 2026-07-12: paper 패리티
+# - 단건: paper $1000×2%=$20 → live cap $20 / frac 10% on $200
+# - 동시 포지션: paper 무제한(실측 피크 100+ / 현재 ~40대).
+#   live 기본 40 (0=무제한). 전량 패배 시 이론 최대 손실 ≈ MAX_OPEN×$20.
 INITIAL_BANKROLL = float(os.getenv("POLYMARKET_LIVE_BANKROLL", "200") or 200)
 BET_FRACTION = float(os.getenv("POLYMARKET_LIVE_BET_FRACTION", "0.10") or 0.10)
 BET_USD_CAP = float(os.getenv("POLYMARKET_LIVE_BET_USD_CAP", "20") or 20)
-MAX_OPEN = int(os.getenv("POLYMARKET_LIVE_MAX_OPEN", "5") or 5)
-# 단건 $20 기준 일손실: 예전 $25(≈6×$4) → $50(≈2.5×$20) 로 스케일
-MAX_DAILY_LOSS = float(os.getenv("POLYMARKET_LIVE_MAX_DAILY_LOSS", "50") or 50)
+# 0 = paper처럼 한도 없음
+MAX_OPEN = int(os.getenv("POLYMARKET_LIVE_MAX_OPEN", "40") or 40)
+# 동시 포지션 확대에 맞춰 일손실 softcap 여유 (전면 정지는 생존용)
+MAX_DAILY_LOSS = float(os.getenv("POLYMARKET_LIVE_MAX_DAILY_LOSS", "100") or 100)
 COPY_SLIPPAGE = float(os.getenv("POLYMARKET_WHALE_COPY_SLIPPAGE", "0.03") or 0.03)
 MIN_NET_USDC = float(os.getenv("POLYMARKET_WHALE_MIN_NET_USDC", "1000") or 1000)
 # 텔레그램: paper와 동일 — 건당 즉시 알림 없이 주기 리포트만 (부담 방지)
@@ -122,7 +123,8 @@ def _risk_ok(state: dict[str, Any], bet: float) -> tuple[bool, str]:
         p for p in state.get("open_positions") or []
         if not p.get("is_shadow") and p.get("live") is True and not p.get("dry_run")
     ])
-    if open_n >= MAX_OPEN:
+    # MAX_OPEN<=0 → paper와 동일하게 동시 한도 없음
+    if MAX_OPEN > 0 and open_n >= MAX_OPEN:
         return False, f"동시 실포지션 {open_n}>={MAX_OPEN}"
     bank = float(state.get("bankroll") or INITIAL_BANKROLL)
     if bet > bank * 0.2:
@@ -306,7 +308,8 @@ def build_report(state: dict[str, Any]) -> str:
         f"🐋 <b>[Polymarket 고래 카피 {mode}]</b> — {datetime.now(KST).strftime('%m/%d %H:%M KST')}",
         f"bankroll ${bank:.2f} | 일손실 ${float(state.get('daily_loss') or 0):.2f}/${MAX_DAILY_LOSS:.0f}",
         f"정산 {len(settled)} | 승률 {wr:.1%} | PnL ${pnl:+.2f}",
-        f"오픈 {len(state.get('open_positions') or [])}/{MAX_OPEN} | "
+        f"오픈 {len(state.get('open_positions') or [])}/"
+        f"{'∞' if MAX_OPEN <= 0 else MAX_OPEN} | "
         f"단건 ~${bet:.2f} ({BET_FRACTION*100:.0f}%, cap ${BET_USD_CAP:.0f})",
         f"live_flag={live_enabled()} | blocked={state.get('orders_blocked', 0)} | "
         f"order_fail={len(fails)}",

@@ -12,8 +12,8 @@
 |------|------|
 | bankroll 기준 | $200 (`POLYMARKET_LIVE_BANKROLL`) — 시드 추적 |
 | 단건 | min(**10%** bankroll, **$20**) ≈ paper `$1000×2%` |
-| 동시 포지션 | 5 (최대 동시 노출 ≈ $100) |
-| 일손실 | $50 |
+| 동시 포지션 | **40** (paper 무제한·현재 오픈 ~40대 맞춤; `0`=무제한) |
+| 일손실 | $100 |
 | LIVE 플래그 기본 | **off (dry-run)** 권장 문서; 로컬 `.env` 로 킴 |
 
 ### LIVE 켜기 전 체크
@@ -43,8 +43,8 @@
    POLYMARKET_LIVE_BANKROLL=200
    POLYMARKET_LIVE_BET_FRACTION=0.10   # paper 단건 $20 맞춤 ($200×10%)
    POLYMARKET_LIVE_BET_USD_CAP=20
-   POLYMARKET_LIVE_MAX_OPEN=5
-   POLYMARKET_LIVE_MAX_DAILY_LOSS=50
+   POLYMARKET_LIVE_MAX_OPEN=40          # paper 피크 맞춤; 0=무제한
+   POLYMARKET_LIVE_MAX_DAILY_LOSS=100
    ```
 3. 점검 스크립트:
    ```bash
