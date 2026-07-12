@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +88,11 @@ def _funder() -> str | None:
         return f
     # 자동: 웹 계정 proxyWallet (deposit 잔고 위치)
     return resolve_proxy_wallet()
+
+
+def get_wallet_address() -> str | None:
+    """Public wallet that owns collateral/outcome tokens (never returns a key)."""
+    return _funder() or _eoa_address()
 
 
 def _signature_type() -> int | None:
@@ -168,6 +174,102 @@ def _build_client():
     client = ClobClient(CLOB_HOST, **kwargs)
     client.set_api_creds(client.create_or_derive_api_creds())
     return client, "v1"
+
+
+def _matched_fill(resp: Any, *, side: str) -> dict[str, Any] | None:
+    """CLOB 응답이 실제 MATCHED 체결일 때만 체결 금액/수량을 반환한다.
+
+    `success=true`와 orderID만 있는 delayed/live 응답은 실제 체결이 아니다.
+    이를 성공으로 기록하면 지갑에 없는 유령 포지션이 생긴다.
+    """
+    if not isinstance(resp, dict):
+        return None
+    if resp.get("success") is False or str(resp.get("errorMsg") or resp.get("error") or ""):
+        return None
+    status = str(resp.get("status") or "").strip().lower()
+    if status not in {"matched", "order_status_matched"}:
+        return None
+    # GET /order 응답은 making/taking 대신 size_matched + price를 준다.
+    if resp.get("makingAmount") is None or resp.get("takingAmount") is None:
+        try:
+            size = float(resp.get("size_matched") or 0)
+            price = float(resp.get("price") or 0)
+        except (TypeError, ValueError):
+            return None
+        if size >= 10_000:
+            size /= 1_000_000.0
+        if size <= 0 or price <= 0:
+            return None
+        return {
+            "fill_status": "matched",
+            "filled_usd": size * price,
+            "filled_shares": size,
+            "fill_price": price,
+            "transaction_hashes": [],
+            "trade_ids": resp.get("associate_trades") or [],
+        }
+    try:
+        making = float(resp.get("makingAmount") or 0)
+        taking = float(resp.get("takingAmount") or 0)
+    except (TypeError, ValueError):
+        return None
+    if making <= 0 or taking <= 0:
+        return None
+
+    # API 버전에 따라 사람 단위 또는 1e6 fixed-math 문자열이 올 수 있다.
+    scale = 1_000_000.0 if max(making, taking) >= 10_000 else 1.0
+    making /= scale
+    taking /= scale
+    if side.upper() == "BUY":
+        filled_usd, filled_shares = making, taking
+    else:
+        filled_shares, filled_usd = making, taking
+    if filled_usd <= 0 or filled_shares <= 0:
+        return None
+    return {
+        "fill_status": "matched",
+        "filled_usd": filled_usd,
+        "filled_shares": filled_shares,
+        "fill_price": filled_usd / filled_shares,
+        "transaction_hashes": resp.get("transactionsHashes") or [],
+        "trade_ids": resp.get("tradeIDs") or [],
+    }
+
+
+def _confirm_delayed_fill(
+    client: Any,
+    resp: Any,
+    *,
+    side: str,
+    timeout_seconds: float = 8.0,
+) -> tuple[dict[str, Any] | None, Any]:
+    """V2 delayed 응답을 짧게 폴링해 MATCHED terminal 상태만 승인한다."""
+    fill = _matched_fill(resp, side=side)
+    if fill:
+        return fill, resp
+    if not isinstance(resp, dict) or str(resp.get("status") or "").lower() != "delayed":
+        return None, resp
+    order_id = resp.get("orderID") or resp.get("id") or resp.get("order_id")
+    if not order_id or not hasattr(client, "get_order"):
+        return None, resp
+
+    deadline = time.monotonic() + max(timeout_seconds, 0.0)
+    last = resp
+    while time.monotonic() < deadline:
+        time.sleep(0.5)
+        try:
+            checked = client.get_order(str(order_id))
+        except Exception:
+            continue
+        if isinstance(checked, dict):
+            last = checked
+            fill = _matched_fill(checked, side=side)
+            if fill:
+                return fill, checked
+            status = str(checked.get("status") or "").lower()
+            if status in {"unmatched", "cancelled", "canceled", "failed", "rejected"}:
+                return None, checked
+    return None, last
 
 
 def get_usdc_balance_approx() -> float:
@@ -299,7 +401,8 @@ def place_buy_usd(
             signed = client.create_market_order(mo)
             resp = client.post_order(signed, OrderType.FOK)
 
-        plan["raw"] = resp if isinstance(resp, dict) else {"resp": str(resp)}
+        fill, terminal_resp = _confirm_delayed_fill(client, resp, side="BUY")
+        plan["raw"] = terminal_resp if isinstance(terminal_resp, dict) else {"resp": str(terminal_resp)}
         if isinstance(resp, dict):
             err = resp.get("error") or resp.get("errorMsg") or ""
             # 일부 응답은 ok 필드 / success
@@ -319,6 +422,14 @@ def place_buy_usd(
                 or resp.get("order_id")
                 or resp.get("orderIds")
             )
+        if not fill:
+            plan["error"] = (
+                f"order not confirmed matched: status={str((terminal_resp or {}).get('status') or 'unknown')}"
+                if isinstance(terminal_resp, dict)
+                else "order not confirmed matched"
+            )
+            return plan
+        plan.update(fill)
         plan["ok"] = True
         return plan
     except Exception as e:
@@ -398,7 +509,8 @@ def place_sell_shares(
             signed = client.create_market_order(mo)
             resp = client.post_order(signed, OrderType.FOK)
 
-        plan["raw"] = resp if isinstance(resp, dict) else {"resp": str(resp)}
+        fill, terminal_resp = _confirm_delayed_fill(client, resp, side="SELL")
+        plan["raw"] = terminal_resp if isinstance(terminal_resp, dict) else {"resp": str(terminal_resp)}
         if isinstance(resp, dict):
             err = resp.get("error") or resp.get("errorMsg") or ""
             if resp.get("success") is False or (
@@ -409,6 +521,14 @@ def place_sell_shares(
             plan["order_id"] = (
                 resp.get("orderID") or resp.get("id") or resp.get("order_id")
             )
+        if not fill:
+            plan["error"] = (
+                f"order not confirmed matched: status={str((terminal_resp or {}).get('status') or 'unknown')}"
+                if isinstance(terminal_resp, dict)
+                else "order not confirmed matched"
+            )
+            return plan
+        plan.update(fill)
         plan["ok"] = True
         return plan
     except Exception as e:

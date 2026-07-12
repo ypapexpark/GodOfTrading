@@ -68,7 +68,8 @@ def build_insight_comments(
             continue
         if st["wr"] >= 0.65 and st["pnl"] > 0:
             strong.append((w, st))
-        if st["wr"] <= 0.45 and st["pnl"] < 0:
+        # 승률이 높아도 고가 진입으로 평균손익이 나쁘면 약한 지갑이다.
+        if st["pnl"] < 0 and (st["wr"] <= 0.45 or st["pnl"] / st["n"] <= -0.50):
             weak.append((w, st))
     strong.sort(key=lambda x: (-x[1]["wr"], -x[1]["pnl"]))
     weak.sort(key=lambda x: (x[1]["pnl"], x[1]["wr"]))
@@ -129,15 +130,15 @@ def build_insight_comments(
             )
         if bet_fraction is not None:
             tips.append(
-                f"[설정] live 베팅 비율 {bet_fraction*100:.0f}% "
-                f"(paper와 동일 목표 2%). 시드 성장 시 단건 금액 자동 확대."
+                f"[설정] live 베팅 비율 {bet_fraction*100:.0f}% 기준. "
+                f"실제 단건은 live USD cap을 적용하며 리포트 운영 상태에 표시."
             )
         if max_open is not None:
             open_n = len([
                 p for p in (state.get("open_positions") or [])
                 if not p.get("is_shadow") and not p.get("dry_run")
             ])
-            if open_n >= max_open * 0.8:
+            if max_open > 0 and open_n >= max_open * 0.8:
                 tips.append(
                     f"[관찰] 오픈 {open_n}/{max_open} — 한도 근접. "
                     f"신호 많을 때 기회 손실 가능, 한도 상향은 리스크와 트레이드오프."

@@ -10,10 +10,11 @@
 ### 기본 리스크 (초소액)
 | 항목 | 기본 |
 |------|------|
-| bankroll 기준 | **$800** 권장 (`POLYMARKET_LIVE_BANKROLL`) |
-| 단건 | min(2% bankroll, **$15**) — paper $20의 ~75% |
-| 동시 포지션 | **0=무제한** (paper와 동일; 평소 ~4, 피크 ~44) |
-| 일손실 | $120 |
+| bankroll 기준 | **$1100** (`POLYMARKET_LIVE_BANKROLL`) |
+| 시장별 합의 티어 | 1번째 고래 **$10**, 같은 방향 2번째 **+$15**, 3번째 **+$20** |
+| 시장별 최대 | **$45**; 동일 고래 반복·4번째 이후·반대 방향 증액 차단 |
+| 전체 투입 | 확정 bankroll의 **40% 이하** |
+| 일손실 | $120 초과 시 신규 티어 금액 50% 소프트캡 |
 | LIVE 플래그 기본 | **off (dry-run)** 권장 문서; 로컬 `.env` 로 킴 |
 
 ### LIVE 켜기 전 체크
@@ -40,9 +41,12 @@
    POLYMARKET_PRIVATE_KEY=0x...
    # POLYMARKET_FUNDER=0x...   # proxy 쓰면
    POLYMARKET_LIVE_TRADING_ENABLED=false   # 먼저 false로 dry-run
-   POLYMARKET_LIVE_BANKROLL=800
-   POLYMARKET_LIVE_BET_FRACTION=0.02   # paper와 동일 2%
-   POLYMARKET_LIVE_BET_USD_CAP=15      # paper $20보다 약간 보수
+   POLYMARKET_LIVE_BANKROLL=1100
+   POLYMARKET_LIVE_BET_FRACTION=0.02   # 자산 감소 시 티어 비례축소 기준
+   POLYMARKET_LIVE_BET_USD_CAP=15      # 정상 티어 배율 기준
+   POLYMARKET_WHALE_TIER1_USD=10
+   POLYMARKET_WHALE_TIER2_USD=15
+   POLYMARKET_WHALE_TIER3_USD=20
    POLYMARKET_LIVE_MAX_OPEN=0          # 무제한 (paper와 동일)
    POLYMARKET_LIVE_MAX_DAILY_LOSS=120
    ```
@@ -63,6 +67,7 @@
 
 ### 주의
 - Paper +45% ≠ 실거래 수익. 슬리피지·지연·동시 포지션 검증 필수.
+- 최초 고래 포지션은 결과까지 보유하고, 이후 같은 고래의 축소·플립은 따라가지 않는다.
 - paper 봇은 계속 돌려 A/B 비교 권장.
 
 ---

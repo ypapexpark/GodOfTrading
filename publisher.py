@@ -13,7 +13,11 @@
 예전 TELEGRAM_*, REVIEW_*, POSITION_ANALYSIS_* 키는 더 이상 사용하지 않는다.
 새 라우팅을 추가할 때는 먼저 이 파일의 채널 역할을 갱신한 뒤 env 키를 늘린다.
 """
+import hashlib
+import json
 import os
+import time
+import fcntl
 from pathlib import Path
 import requests
 from dotenv import load_dotenv
@@ -21,6 +25,49 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 _optional_route_reported = set()
+_backoff_route_reported = set()
+_BACKOFF_PATH = Path(
+    os.getenv("TELEGRAM_BACKOFF_PATH", "/tmp/godoftrading_telegram_backoff.json")
+)
+
+
+def _token_key(token: str) -> str:
+    """Persist a stable route key without ever writing the bot token to disk."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:20]
+
+
+def _read_backoffs() -> dict[str, float]:
+    try:
+        raw = json.loads(_BACKOFF_PATH.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            return {str(k): float(v) for k, v in raw.items()}
+    except (FileNotFoundError, ValueError, TypeError, OSError):
+        pass
+    return {}
+
+
+def _backoff_remaining(token: str) -> int:
+    until = _read_backoffs().get(_token_key(token), 0.0)
+    return max(0, int(until - time.time() + 0.999))
+
+
+def _set_backoff(token: str, retry_after: int) -> None:
+    """Share Telegram flood-control state across the 3m/5m bot processes."""
+    seconds = max(1, int(retry_after))
+    _BACKOFF_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = Path(f"{_BACKOFF_PATH}.lock")
+    try:
+        with lock_path.open("a+", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            state = _read_backoffs()
+            key = _token_key(token)
+            state[key] = max(state.get(key, 0.0), time.time() + seconds)
+            tmp_path = Path(f"{_BACKOFF_PATH}.{os.getpid()}.tmp")
+            tmp_path.write_text(json.dumps(state), encoding="utf-8")
+            os.replace(tmp_path, _BACKOFF_PATH)
+    except OSError as exc:
+        # Telegram failure handling must never stop the trading loop.
+        print(f"[Telegram] 쿨다운 상태 저장 실패: {exc}")
 
 
 def _post(token: str, chat_id: str, text: str) -> bool:
@@ -29,6 +76,14 @@ def _post(token: str, chat_id: str, text: str) -> bool:
     여기서는 토큰/채팅방 값의 존재 여부를 판단하지 않는다. 어떤 채널로 보낼지는
     `_send_env()`에서 env 키 단위로 결정하고, 이 함수는 전송 성공/실패만 책임진다.
     """
+    remaining = _backoff_remaining(token)
+    route_key = _token_key(token)
+    if remaining > 0:
+        if route_key not in _backoff_route_reported:
+            print(f"[Telegram] 429 쿨다운 중 — {remaining}초간 발송 스킵")
+            _backoff_route_reported.add(route_key)
+        return False
+
     try:
         resp = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
@@ -37,7 +92,16 @@ def _post(token: str, chat_id: str, text: str) -> bool:
         )
         result = resp.json()
         if not result.get("ok"):
-            print(f"[Telegram] API 오류: {result.get('description', result)}")
+            params = result.get("parameters") or {}
+            retry_after = int(params.get("retry_after", 0) or 0)
+            if retry_after > 0:
+                _set_backoff(token, retry_after)
+                print(
+                    f"[Telegram] API 429: {retry_after}초 쿨다운 저장 — "
+                    "그동안 발송 스킵"
+                )
+            else:
+                print(f"[Telegram] API 오류: {result.get('description', result)}")
         return result.get("ok", False)
     except Exception as e:
         print(f"[Telegram] 전송 실패: {e}")
