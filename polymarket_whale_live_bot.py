@@ -30,7 +30,12 @@ warnings.filterwarnings("ignore", message=r"urllib3 v2 only supports OpenSSL.*",
 from dotenv import load_dotenv
 
 import polymarket_whale_paper_bot as paper
-from polymarket_clob_exec import live_enabled, place_buy_usd, smoke_test as clob_smoke
+from polymarket_clob_exec import (
+    live_enabled,
+    place_buy_usd,
+    place_sell_shares,
+    smoke_test as clob_smoke,
+)
 from publisher import send_review
 
 ROOT = Path(__file__).parent
@@ -145,6 +150,102 @@ def _risk_ok(state: dict[str, Any], bet: float) -> tuple[bool, str]:
     return True, ""
 
 
+def _live_early_exit(
+    pos: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    reason: str,
+    market: dict[str, Any] | None = None,
+) -> bool:
+    """고래 축소/플립 시 실매도(또는 dry) 후 로컬 정산."""
+    dry = not live_enabled() or bool(pos.get("dry_run")) or bool(pos.get("is_shadow"))
+    if market is None:
+        market = paper._fetch_market_state(gamma_market_id=pos.get("gamma_market_id"))
+    oidx = int(pos.get("outcome_index") or 0)
+    price = paper._current_price(market, oidx) if market else None
+    if price is None or price <= 0:
+        price = float(pos.get("entry_price") or 0.5)
+    exit_price = max(min(price * (1 - COPY_SLIPPAGE), 0.999), 0.001)
+    entry = max(float(pos.get("entry_price") or 0.5), 1e-6)
+    bet = float(pos.get("bet_usd") or _ticket_usd(state))
+    shares = bet / entry
+
+    token_id = pos.get("token_id") or (
+        _token_id_for_outcome(market, oidx) if market else None
+    )
+    if not dry and not pos.get("is_shadow"):
+        if not token_id:
+            _append({
+                "event": "order_failed", "error": "exit no token_id",
+                "reason": reason, "at": _now_kst(), "title": pos.get("title"),
+            })
+            return False
+        sell = place_sell_shares(
+            str(token_id), shares, price_hint=exit_price, dry_run=False,
+        )
+        if not sell.get("ok"):
+            _append({
+                "event": "order_failed",
+                "error": f"exit:{sell.get('error')}",
+                "reason": reason,
+                "at": _now_kst(),
+                "title": pos.get("title"),
+            })
+            print(f"  [live-exit-fail] {sell.get('error')}")
+            return False
+
+    proceeds = shares * exit_price
+    pnl = proceeds - bet
+    result = {
+        **pos,
+        "event": "settled",
+        "settled_at": _now_kst(),
+        "settled_ts": _now(),
+        "won": pnl > 0,
+        "pnl_usd": round(pnl, 2),
+        "pnl_pct": round(pnl / bet, 4) if bet else 0,
+        "exit_price": round(exit_price, 4),
+        "settle_reason": reason,
+        "early_exit": True,
+    }
+    _append(result)
+    if not pos.get("is_shadow"):
+        state["bankroll"] = float(state.get("bankroll") or INITIAL_BANKROLL) + pnl
+        if pnl < 0:
+            state["daily_loss"] = float(state.get("daily_loss") or 0) + abs(pnl)
+    wstate = state.get("wallets", {}).get(pos.get("wallet") or "")
+    if isinstance(wstate, dict):
+        key = f"{pos.get('condition_id')}:{pos.get('outcome_index')}"
+        wstate.setdefault("signaled", {})[key] = False
+        wstate["live_n"] = int(wstate.get("live_n") or 0) + 1
+        if pnl > 0:
+            wstate["live_wins"] = int(wstate.get("live_wins") or 0) + 1
+        _update_wallet_status_live(str(pos.get("wallet")), wstate)
+    print(f"  [live-exit] {reason} {(pos.get('title') or '')[:36]} pnl={pnl:+.2f}")
+    return True
+
+
+def follow_whale_exits_live(state: dict[str, Any]) -> int:
+    """고래 net 축소 → 매도 추종."""
+    remaining: list[dict] = []
+    closed = 0
+    thresh = paper.MIN_NET_USDC * paper.EXIT_NET_FRAC
+    for pos in state.get("open_positions") or []:
+        wstate = state.get("wallets", {}).get(pos.get("wallet") or "") or {}
+        key = f"{pos.get('condition_id')}:{pos.get('outcome_index')}"
+        net = float((wstate.get("net_usdc") or {}).get(key, 0.0))
+        if net < thresh:
+            ok = _live_early_exit(pos, state, reason="whale_exit_reduce")
+            if ok:
+                closed += 1
+            else:
+                remaining.append(pos)  # 매도 실패 시 유지 후 재시도
+            continue
+        remaining.append(pos)
+    state["open_positions"] = remaining
+    return closed
+
+
 def open_live_positions(signals: list[dict], state: dict[str, Any]) -> int:
     opened = 0
     # paper 동일: 고정 티켓 (시드×2% cap) — 내부 bankroll 변동으로 단건이 $4로 쪼그라들지 않음
@@ -165,6 +266,28 @@ def open_live_positions(signals: list[dict], state: dict[str, Any]) -> int:
         market = paper._gamma_market_by_condition(sig["condition_id"])
         if not market or market.get("closed"):
             continue
+
+        # 플립: 같은 지갑·마켓 반대 outcome 보유 시 먼저 청산
+        still: list[dict] = []
+        for pos in state.get("open_positions") or []:
+            if (
+                pos.get("wallet") == sig.get("wallet")
+                and pos.get("condition_id") == sig.get("condition_id")
+                and int(pos.get("outcome_index")) != int(sig.get("outcome_index"))
+            ):
+                _live_early_exit(pos, state, reason="whale_flip_opposite", market=market)
+            else:
+                still.append(pos)
+        state["open_positions"] = still
+
+        if any(
+            p.get("wallet") == sig.get("wallet")
+            and p.get("condition_id") == sig.get("condition_id")
+            and int(p.get("outcome_index")) == int(sig.get("outcome_index"))
+            for p in state.get("open_positions") or []
+        ):
+            continue
+
         price = paper._current_price(market, sig["outcome_index"])
         if price is None or price <= 0 or price >= 1:
             continue
@@ -397,6 +520,7 @@ def run_once(report_now: bool = False) -> dict[str, Any]:
 
     settled = settle_positions(state)
     signals = paper.scan_wallets(state)
+    whale_exits = follow_whale_exits_live(state)
     opened = open_live_positions(signals, state)
 
     state["last_scan"] = {
@@ -404,6 +528,7 @@ def run_once(report_now: bool = False) -> dict[str, Any]:
         "signals": len(signals),
         "opened": opened,
         "settled": settled,
+        "whale_exits": whale_exits,
         "mode": state["mode"],
         "wallets": len(state.get("wallets") or {}),
         "live_flag": live_enabled(),

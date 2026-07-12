@@ -332,6 +332,90 @@ def place_buy_usd(
         return plan
 
 
+def place_sell_shares(
+    token_id: str,
+    shares: float,
+    *,
+    price_hint: float | None = None,
+    dry_run: bool | None = None,
+) -> dict[str, Any]:
+    """outcome 토큰 매도 (고래 청산/플립 추종용). amount = shares."""
+    if dry_run is None:
+        dry_run = not live_enabled()
+
+    plan: dict[str, Any] = {
+        "ok": False,
+        "dry_run": dry_run,
+        "token_id": str(token_id),
+        "shares": float(shares),
+        "price_hint": price_hint,
+        "order_id": None,
+        "error": "",
+        "raw": None,
+        "client_ver": None,
+    }
+    if shares <= 0 or not token_id:
+        plan["error"] = "invalid token_id/shares"
+        return plan
+    if dry_run or not live_enabled():
+        plan["ok"] = True
+        plan["raw"] = {"note": "dry-run sell — no order"}
+        return plan
+    if not _private_key():
+        plan["error"] = "POLYMARKET_PRIVATE_KEY 미설정"
+        return plan
+    try:
+        client, ver = _build_client()
+        plan["client_ver"] = ver
+        if ver == "v2":
+            from py_clob_client_v2.clob_types import MarketOrderArgs, OrderType
+            from py_clob_client_v2.order_builder.constants import SELL
+
+            mo_kwargs: dict[str, Any] = {
+                "token_id": str(token_id),
+                "amount": float(shares),
+                "side": SELL,
+                "order_type": OrderType.FOK,
+            }
+            if price_hint and 0 < float(price_hint) < 1:
+                mo_kwargs["price"] = float(price_hint)
+            mo = MarketOrderArgs(**mo_kwargs)
+            if hasattr(client, "create_and_post_market_order"):
+                resp = client.create_and_post_market_order(mo, order_type=OrderType.FOK)
+            else:
+                signed = client.create_market_order(mo)
+                resp = client.post_order(signed, OrderType.FOK)
+        else:
+            from py_clob_client.clob_types import MarketOrderArgs, OrderType
+            from py_clob_client.order_builder.constants import SELL
+
+            mo = MarketOrderArgs(
+                token_id=str(token_id),
+                amount=float(shares),
+                side=SELL,
+                order_type=OrderType.FOK,
+            )
+            signed = client.create_market_order(mo)
+            resp = client.post_order(signed, OrderType.FOK)
+
+        plan["raw"] = resp if isinstance(resp, dict) else {"resp": str(resp)}
+        if isinstance(resp, dict):
+            err = resp.get("error") or resp.get("errorMsg") or ""
+            if resp.get("success") is False or (
+                resp.get("status") in ("failed", "error", "rejected")
+            ):
+                plan["error"] = str(err or resp)[:400]
+                return plan
+            plan["order_id"] = (
+                resp.get("orderID") or resp.get("id") or resp.get("order_id")
+            )
+        plan["ok"] = True
+        return plan
+    except Exception as e:
+        plan["error"] = str(e)[:400]
+        return plan
+
+
 def smoke_test() -> dict[str, Any]:
     ok_pkg, which = client_available()
     eoa = _eoa_address()

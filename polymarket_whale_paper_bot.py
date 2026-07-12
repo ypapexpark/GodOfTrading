@@ -69,6 +69,8 @@ INITIAL_BANKROLL = _env_float("POLYMARKET_WHALE_INITIAL_BANKROLL", 1000.0)
 BET_FRACTION = _env_float("POLYMARKET_WHALE_BET_FRACTION", 0.02)
 COPY_SLIPPAGE = _env_float("POLYMARKET_WHALE_COPY_SLIPPAGE", 0.03)
 MIN_NET_USDC = _env_float("POLYMARKET_WHALE_MIN_NET_USDC", 1000.0)
+# 고래 순매수가 이 비율×MIN 미만이면 청산 추종 (줄이거나 손절/플립 후 잔량)
+EXIT_NET_FRAC = _env_float("POLYMARKET_WHALE_EXIT_NET_FRAC", 0.35)
 REPORT_INTERVAL_SECONDS = _env_int("POLYMARKET_WHALE_REPORT_INTERVAL", 4 * 3600)
 ACTIVITY_POLL_LIMIT = _env_int("POLYMARKET_WHALE_ACTIVITY_LIMIT", 100)
 SUSPEND_MIN_SETTLED = _env_int("POLYMARKET_WHALE_SUSPEND_MIN_SETTLED", 8)
@@ -192,7 +194,8 @@ def scan_wallets(state: dict[str, Any]) -> list[dict[str, Any]]:
             wstate["net_usdc"][key] = net
             wstate["last_seen_ts"] = max(wstate["last_seen_ts"], int(r.get("timestamp", 0)))
 
-            if abs(net) >= MIN_NET_USDC and not wstate["signaled"].get(key):
+            # 순매수(BUY 우세)만 진입 — 순매도 큰 쪽은 롱 카피 안 함
+            if net >= MIN_NET_USDC and not wstate["signaled"].get(key):
                 wstate["signaled"][key] = True
                 signals.append({
                     "wallet": wallet,
@@ -204,6 +207,7 @@ def scan_wallets(state: dict[str, Any]) -> list[dict[str, Any]]:
                     "slug": r.get("slug", ""),
                     "detected_at": _now_kst(),
                     "detected_ts": _now(),
+                    "kind": "enter",
                 })
     return signals
 
@@ -216,12 +220,113 @@ def _gamma_market_by_condition(condition_id: str) -> dict[str, Any] | None:
         return None
 
 
+def _pos_key(pos: dict[str, Any]) -> str:
+    return f"{pos.get('condition_id')}:{pos.get('outcome_index')}"
+
+
+def early_exit_position(
+    pos: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    reason: str,
+    market: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """해소 전 조기 청산 (고래 축소/플립 추종). 시세 매도 가정."""
+    if market is None:
+        market = _fetch_market_state(gamma_market_id=pos.get("gamma_market_id"))
+    price = _current_price(market, int(pos["outcome_index"])) if market else None
+    if price is None or price <= 0:
+        price = float(pos.get("entry_price") or 0.5)
+    exit_price = max(min(price * (1 - COPY_SLIPPAGE), 0.999), 0.001)
+    entry = max(float(pos.get("entry_price") or 0.5), 1e-6)
+    bet = float(pos.get("bet_usd") or BET_USD)
+    shares = bet / entry
+    proceeds = shares * exit_price
+    pnl = proceeds - bet
+    won = pnl > 0
+    result = {
+        **pos,
+        "event": "settled",
+        "settled_at": _now_kst(),
+        "settled_ts": _now(),
+        "won": won,
+        "pnl_usd": round(pnl, 2),
+        "pnl_pct": round(pnl / bet, 4) if bet else 0.0,
+        "exit_price": round(exit_price, 4),
+        "settle_reason": reason,
+        "early_exit": True,
+    }
+    _append_jsonl(JOURNAL_FILE, result)
+    if not pos.get("is_shadow"):
+        state["bankroll"] = float(state.get("bankroll") or INITIAL_BANKROLL) + pnl
+    # 재진입 가능하도록 signaled 해제
+    wstate = state.get("wallets", {}).get(pos.get("wallet") or "")
+    if isinstance(wstate, dict):
+        wstate.setdefault("signaled", {})[_pos_key(pos)] = False
+    print(
+        f"  [paper-exit] {reason} {(pos.get('title') or '')[:36]} "
+        f"pnl={pnl:+.2f} @ {exit_price:.3f}"
+    )
+    return result
+
+
+def follow_whale_exits(state: dict[str, Any]) -> int:
+    """고래가 해당 outcome 순매수를 크게 줄이면 우리도 조기 청산."""
+    remaining: list[dict] = []
+    closed = 0
+    thresh = MIN_NET_USDC * EXIT_NET_FRAC
+    for pos in state.get("open_positions") or []:
+        wstate = state.get("wallets", {}).get(pos.get("wallet") or "") or {}
+        net = float((wstate.get("net_usdc") or {}).get(_pos_key(pos), 0.0))
+        # 순매수가 임계 미만 = 고래가 대부분 정리/매도
+        if net < thresh:
+            early_exit_position(pos, state, reason="whale_exit_reduce")
+            closed += 1
+            # 지갑 통계 (해소와 동일하게 live_n 갱신은 settle_positions 경로만 — 여기선 paper 간단)
+            if not pos.get("is_shadow"):
+                ws = state.get("wallets", {}).get(pos.get("wallet") or "")
+                if isinstance(ws, dict):
+                    ws["live_n"] = int(ws.get("live_n") or 0) + 1
+                    if float(pos.get("bet_usd") or 0) and True:
+                        # won flag set in early_exit via journal only; recompute from last
+                        pass
+            continue
+        remaining.append(pos)
+    state["open_positions"] = remaining
+    return closed
+
+
 def open_paper_positions(signals: list[dict[str, Any]], state: dict[str, Any]) -> int:
     opened = 0
     for sig in signals:
         market = _gamma_market_by_condition(sig["condition_id"])
         if not market or market.get("closed"):
             continue  # 이미 종료됐으면 카피 의미 없음
+
+        # 같은 지갑·같은 마켓 반대 outcome 보유 중이면 먼저 청산 (플립 추종)
+        still_open: list[dict] = []
+        for pos in state.get("open_positions") or []:
+            if (
+                pos.get("wallet") == sig["wallet"]
+                and pos.get("condition_id") == sig["condition_id"]
+                and int(pos.get("outcome_index")) != int(sig["outcome_index"])
+            ):
+                early_exit_position(
+                    pos, state, reason="whale_flip_opposite", market=market,
+                )
+            else:
+                still_open.append(pos)
+        state["open_positions"] = still_open
+
+        # 이미 같은 키 오픈이면 스킵
+        if any(
+            p.get("wallet") == sig["wallet"]
+            and p.get("condition_id") == sig["condition_id"]
+            and int(p.get("outcome_index")) == int(sig["outcome_index"])
+            for p in state.get("open_positions") or []
+        ):
+            continue
+
         price = _current_price(market, sig["outcome_index"])
         if price is None or price <= 0 or price >= 1:
             continue
@@ -426,6 +531,8 @@ def run_once(report_now: bool = False) -> dict[str, Any]:
 
     settled = settle_positions(state)
     signals = scan_wallets(state)
+    # 고래 축소 청산 추종 → 그다음 신규/플립 진입
+    exited = follow_whale_exits(state)
     opened = open_paper_positions(signals, state)
 
     state["last_scan"] = {
@@ -433,6 +540,7 @@ def run_once(report_now: bool = False) -> dict[str, Any]:
         "signals": len(signals),
         "opened": opened,
         "settled": settled,
+        "whale_exits": exited,
     }
 
     reported = _maybe_send_report(state, force=report_now)
