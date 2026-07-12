@@ -39,17 +39,16 @@ load_dotenv(ROOT / ".env")
 STATE_FILE = ROOT / "polymarket_whale_live_state.json"
 JOURNAL_FILE = ROOT / "polymarket_whale_live_journal.jsonl"
 
-# 2026-07-12: paper 패리티
-# - 단건: paper $1000×2%=$20 → live cap $20 / frac 10% on $200
-# - 동시 포지션: paper 무제한(실측 피크 100+ / 현재 ~40대).
-#   live 기본 40 (0=무제한). 전량 패배 시 이론 최대 손실 ≈ MAX_OPEN×$20.
-INITIAL_BANKROLL = float(os.getenv("POLYMARKET_LIVE_BANKROLL", "200") or 200)
-BET_FRACTION = float(os.getenv("POLYMARKET_LIVE_BET_FRACTION", "0.10") or 0.10)
-BET_USD_CAP = float(os.getenv("POLYMARKET_LIVE_BET_USD_CAP", "20") or 20)
-# 0 = paper처럼 한도 없음
-MAX_OPEN = int(os.getenv("POLYMARKET_LIVE_MAX_OPEN", "40") or 40)
-# 동시 포지션 확대에 맞춰 일손실 softcap 여유 (전면 정지는 생존용)
-MAX_DAILY_LOSS = float(os.getenv("POLYMARKET_LIVE_MAX_DAILY_LOSS", "100") or 100)
+# 2026-07-12: paper 수준 운용 (시드 ~$800 전제)
+# - paper: $1000×2%=$20, 동시 한도 없음 (평소 동시 ~4, 피크 ~44)
+# - live: 단건 $15 (paper의 75%, 시드 여유) + MAX_OPEN=0 무제한
+# - 피크 44×$15≈$660 ≤ $800 시드. 극단 동시 60+ 시 잔고/FOK 주의.
+INITIAL_BANKROLL = float(os.getenv("POLYMARKET_LIVE_BANKROLL", "800") or 800)
+BET_FRACTION = float(os.getenv("POLYMARKET_LIVE_BET_FRACTION", "0.02") or 0.02)
+BET_USD_CAP = float(os.getenv("POLYMARKET_LIVE_BET_USD_CAP", "15") or 15)
+# 0 = paper와 동일 무제한
+MAX_OPEN = int(os.getenv("POLYMARKET_LIVE_MAX_OPEN", "0") or 0)
+MAX_DAILY_LOSS = float(os.getenv("POLYMARKET_LIVE_MAX_DAILY_LOSS", "120") or 120)
 COPY_SLIPPAGE = float(os.getenv("POLYMARKET_WHALE_COPY_SLIPPAGE", "0.03") or 0.03)
 MIN_NET_USDC = float(os.getenv("POLYMARKET_WHALE_MIN_NET_USDC", "1000") or 1000)
 # 텔레그램: paper와 동일 — 건당 즉시 알림 없이 주기 리포트만 (부담 방지)
