@@ -845,7 +845,9 @@ def build_report(state: dict[str, Any]) -> str:
     display_wr = display_wins / display_n if display_n else 0.0
     accounting = state.get("actual_accounting") or {}
     cash_est = float(accounting.get("cash") or (bank - float(port.get("value") or 0)))
-    equity_est = float(accounting.get("equity") or (cash_est + float(port.get("value") or 0)))
+    # 메시지 안의 현금 + 방금 조회한 평가액이 총자산과 항상 일치해야 한다.
+    # accounting.equity는 직전 스캔 값이라 가격 변동 뒤에는 몇 달러 어긋날 수 있다.
+    equity_est = cash_est + float(port.get("value") or 0)
     all_time_pnl = equity_est - INITIAL_BANKROLL
     sync_note = ""
     if actual_port.get("ok") and int(actual_port.get("count") or 0) != int(local_port["count"]):
@@ -887,7 +889,7 @@ def build_report(state: dict[str, Any]) -> str:
         f"그 1건 제외 전체 ${paper_cmp['all_without_largest']:+.2f}",
         "",
         "⚙️ <b>운영 상태</b>",
-        f"• 단건 ${bet:.2f} | 로컬 오픈 {int(local_port['count'])}건 | "
+        f"• 로컬 오픈 {int(local_port['count'])}건 | "
         f"수정 후 차단 {max(len(blocked) - int((state.get('execution_baseline') or {}).get('blocked', 0)), 0)} | "
         f"주문실패 {max(len(fails) - int((state.get('execution_baseline') or {}).get('fails', 0)), 0)}",
         "• 청산정책: "
@@ -1019,6 +1021,13 @@ def run_once(report_now: bool = False) -> dict[str, Any]:
     whale_exits = follow_whale_exits_live(state)
     opened = open_live_positions(signals, state)
 
+    report_due = report_now or (
+        _now() - float(state.get("last_report_time") or 0) >= REPORT_INTERVAL_SECONDS
+    )
+    # 주문 뒤 현금이 달라질 수 있으므로 텔레그램 직전에 실지갑을 한 번 더 동기화한다.
+    if report_due:
+        actual_accounting = _sync_actual_accounting(state)
+
     state["last_scan"] = {
         "time": _now_kst(),
         "signals": len(signals),
@@ -1034,7 +1043,7 @@ def run_once(report_now: bool = False) -> dict[str, Any]:
         "live_flag": live_enabled(),
     }
     # paper와 동일: 건당 TG 없이 주기 리포트만 (기본 4h)
-    if report_now or (_now() - float(state.get("last_report_time") or 0) >= REPORT_INTERVAL_SECONDS):
+    if report_due:
         if send_review(build_report(state)):
             state["last_report_time"] = _now()
     _save_state(state)

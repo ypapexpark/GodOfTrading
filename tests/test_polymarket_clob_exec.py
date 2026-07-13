@@ -26,6 +26,15 @@ class PolymarketClobExecutionTest(unittest.TestCase):
         self.assertEqual(fill["filled_shares"], 30)
         self.assertEqual(fill["fill_price"], 0.5)
 
+    def test_fok_buy_uses_requested_usd_not_signed_price_limit(self):
+        normalized = clob._normalize_fok_buy_fill({
+            "filled_usd": 11.578947,
+            "filled_shares": 52.631577,
+            "fill_price": 0.22,
+        }, requested_usd=10.0)
+        self.assertEqual(normalized["filled_usd"], 10.0)
+        self.assertAlmostEqual(normalized["fill_price"], 0.19, places=3)
+
     def test_get_order_matched_schema_is_supported(self):
         fill = clob._matched_fill({
             "status": "ORDER_STATUS_MATCHED",

@@ -75,6 +75,40 @@ class PolymarketWhaleLiveTest(unittest.TestCase):
         self.assertEqual(state["actual_accounting"]["all_time_pnl"], -160)
         self.assertEqual(state["daily_loss"], 5)
 
+    def test_report_equity_uses_same_current_position_value_it_displays(self):
+        state = {
+            "bankroll": 979.25,
+            "daily_loss": 0,
+            "wallets": {},
+            "open_positions": [],
+            "actual_accounting": {"cash": 912.67, "equity": 979.25},
+        }
+        portfolio = {
+            "ok": True, "count": 3, "invested": 30, "value": 68.34,
+            "unrealized": 38.34, "profit": 43.49, "loss": -5.15,
+            "profit_count": 2, "loss_count": 1, "flat_count": 0,
+            "positions": [],
+        }
+        closed = {
+            "ok": True, "count": 0, "wins": 0, "losses": 0, "flat": 0,
+            "realized": 0, "profit": 0, "loss": 0, "today_loss": 0,
+            "positions": [],
+        }
+        with (
+            patch.object(live, "INITIAL_BANKROLL", 1100),
+            patch.object(live, "_journal_rows", return_value=[]),
+            patch.object(live, "_fetch_actual_portfolio", return_value=portfolio),
+            patch.object(live, "_fetch_actual_closed", return_value=closed),
+            patch.object(live, "_paper_comparison", return_value={
+                "all_count": 0, "all_pnl": 0, "same_count": 0, "same_pnl": 0,
+                "same_roi": 0, "largest_win": 0, "all_without_largest": 0,
+            }),
+            patch("polymarket_whale_insights.build_insight_comments", return_value=[]),
+        ):
+            report = live.build_report(state)
+        self.assertIn("현재 총자산 <b>$981.01</b>", report)
+        self.assertIn("총손익 <b>$-118.99</b>", report)
+
     def test_failed_flip_keeps_position_and_blocks_opposite_buy(self):
         old = {
             "wallet": "w", "condition_id": "c", "outcome_index": 0,

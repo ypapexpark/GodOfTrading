@@ -272,6 +272,21 @@ def _confirm_delayed_fill(
     return None, last
 
 
+def _normalize_fok_buy_fill(fill: dict[str, Any], requested_usd: float) -> dict[str, Any]:
+    """FOK BUY는 요청 USDC 전액 체결이다; 응답 amount는 서명 한도일 수 있다.
+
+    CLOB V2의 making/takingAmount를 실제 지출로 오인하면 싼 가격에 체결될수록
+    로컬 원가가 부풀려진다. 실제 지출은 요청 amount, 실제 수량은 응답 수량이다.
+    """
+    normalized = dict(fill)
+    shares = float(normalized.get("filled_shares") or 0)
+    usd = max(float(requested_usd), 0.0)
+    if shares > 0 and usd > 0:
+        normalized["filled_usd"] = usd
+        normalized["fill_price"] = usd / shares
+    return normalized
+
+
 def get_usdc_balance_approx() -> float:
     """가능하면 CLOB balance, 실패 시 -1."""
     if not live_enabled() or not _private_key():
@@ -429,7 +444,7 @@ def place_buy_usd(
                 else "order not confirmed matched"
             )
             return plan
-        plan.update(fill)
+        plan.update(_normalize_fok_buy_fill(fill, usd_amount))
         plan["ok"] = True
         return plan
     except Exception as e:
