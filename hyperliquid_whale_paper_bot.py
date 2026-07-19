@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
 import json
 import math
 import sys
@@ -39,6 +40,8 @@ CONFIG_FILE = ROOT / "hyperliquid_whale_config.json"
 STATE_FILE = ROOT / "hyperliquid_whale_paper_state.json"
 JOURNAL_FILE = ROOT / "hyperliquid_whale_paper_journal.jsonl"
 API = "https://api.hyperliquid.xyz/info"
+POLICY = "2026-07-19-hl-position-delta-taker-v2"
+LEGACY_POLICY = "2026-07-11-hl-fill-copy-v1"
 
 from bot_util import (  # noqa: E402
     KST,
@@ -63,13 +66,29 @@ def _params(cfg: dict) -> dict:
         # 2026-07-12: 5000→3000. Open 레그의 ~72%가 $5k 미만이지만 $2k는
         # 분할/시드 노이즈 비중이 큼. $3k는 7d 후보 ~1.25×, 품질 타협점.
         "min_fill_notional_usd": float(p.get("min_fill_notional_usd", 3000)),
+        # V2는 개별 fill이 아니라 같은 폴링 구간의 taker open fill을 합산한 뒤,
+        # 실제 clearinghouse 순포지션 증가가 이 금액 이상 남아 있을 때만 복사한다.
+        "min_aggregate_open_notional_usd": float(
+            p.get("min_aggregate_open_notional_usd", 50_000)
+        ),
+        "min_confirmed_position_notional_usd": float(
+            p.get("min_confirmed_position_notional_usd", 50_000)
+        ),
+        "min_position_equity_pct": float(p.get("min_position_equity_pct", 0.005)),
+        "max_signal_lag_seconds": float(p.get("max_signal_lag_seconds", 75)),
+        "require_taker_open": bool(p.get("require_taker_open", True)),
         "copy_notional_usd": float(p.get("copy_notional_usd", 25)),
         "max_leverage_copy": float(p.get("max_leverage_copy", 5)),
         "max_open_positions": int(p.get("max_open_positions", 8)),
         "slippage_bps": float(p.get("slippage_bps", 15)),
+        "taker_fee_bps": float(p.get("taker_fee_bps", 5)),
         "report_interval_seconds": int(p.get("report_interval_seconds", 4 * 3600)),
         "max_hold_hours": float(p.get("max_hold_hours", 48)),
+        "max_hold_hours_v2": float(p.get("max_hold_hours_v2", 168)),
         "min_whale_flat_age_sec": float(p.get("min_whale_flat_age_sec", 180)),
+        "min_whale_flat_age_sec_v2": float(
+            p.get("min_whale_flat_age_sec_v2", 30)
+        ),
     }
 
 
@@ -102,6 +121,10 @@ def _load_state(cfg: dict) -> dict:
     data = load_json(STATE_FILE, default=None)
     if isinstance(data, dict):
         data.setdefault("sample_milestones_sent", {})
+        data.setdefault("policy", POLICY)
+        data.setdefault("policy_bankrolls", {})
+        data["policy_bankrolls"].setdefault(POLICY, 1000.0)
+        data.setdefault("policy_diagnostics", {})
         return data
     return {
         "wallets": {
@@ -110,6 +133,9 @@ def _load_state(cfg: dict) -> dict:
         },
         "open_positions": [],
         "bankroll": 1000.0,
+        "policy": POLICY,
+        "policy_bankrolls": {POLICY: 1000.0},
+        "policy_diagnostics": {},
         "last_report_time": 0.0,
         "last_scan": {},
         "sample_milestones_sent": {},
@@ -163,7 +189,19 @@ def _coins_match(a: str, b: str) -> bool:
 
 
 def _user_fills(addr: str) -> list[dict]:
-    data = _post({"type": "userFills", "user": addr})
+    data = _post({"type": "userFills", "user": addr, "aggregateByTime": True})
+    return data if isinstance(data, list) else []
+
+
+def _user_fills_since(addr: str, start_time_ms: int) -> list[dict]:
+    """Incremental aggregated fills; avoids downloading 2,000 rows every poll."""
+    data = _post({
+        "type": "userFillsByTime",
+        "user": addr,
+        "startTime": max(int(start_time_ms), 0),
+        "endTime": int(_now() * 1000),
+        "aggregateByTime": True,
+    })
     return data if isinstance(data, list) else []
 
 
@@ -182,26 +220,27 @@ def _perp_dex_names() -> list[str]:
         return ["xyz"]  # 폴백: 주식 perp 등
 
 
-def _mids() -> dict[str, float]:
-    """coin -> mid. 메인 + 모든 perp dex allMids 병합."""
+def _mids(coins: list[str] | None = None) -> dict[str, float]:
+    """coin -> mid. 필요한 perp dex만 조회하고 HIP-3 접두사를 보존한다."""
     out: dict[str, float] = {}
-    try:
-        data = _post({"type": "allMids"})
-        if isinstance(data, dict):
-            for k, v in data.items():
-                try:
-                    out[str(k)] = float(v)
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    for dex in _perp_dex_names():
+    requested = list(coins or [])
+    dexes = {""}
+    if requested:
+        dexes.update(_coin_dex(coin) for coin in requested if _coin_dex(coin))
+    else:
+        dexes.update(_perp_dex_names())
+    for dex in sorted(dexes):
         try:
-            data = _post({"type": "allMids", "dex": dex})
+            body = {"type": "allMids"}
+            if dex:
+                body["dex"] = dex
+            data = _post(body)
             if isinstance(data, dict):
                 for k, v in data.items():
                     try:
-                        out[str(k)] = float(v)
+                        raw = str(k)
+                        canonical = raw if not dex or ":" in raw else f"{dex}:{raw}"
+                        out[canonical] = float(v)
                     except Exception:
                         pass
         except Exception:
@@ -243,6 +282,38 @@ def _position_szi(ch: dict, coin: str) -> float | None:
             return 0.0
     return 0.0
 
+
+def _position_snapshot(ch: dict, coin: str) -> dict[str, float] | None:
+    """Return the whale's current signed size and conviction for one market."""
+    account_value = 0.0
+    try:
+        account_value = float((ch.get("marginSummary") or {}).get("accountValue") or 0)
+    except Exception:
+        pass
+    for ap in ch.get("assetPositions") or []:
+        if not isinstance(ap, dict):
+            continue
+        position = ap.get("position") if isinstance(ap.get("position"), dict) else ap
+        if not _coins_match(str(position.get("coin") or ""), coin):
+            continue
+        try:
+            szi = float(position.get("szi") or 0)
+            value = abs(float(position.get("positionValue") or 0))
+        except Exception:
+            return None
+        return {
+            "szi": szi,
+            "position_notional": value,
+            "account_value": account_value,
+            "position_equity_pct": value / account_value if account_value > 0 else 0.0,
+        }
+    return {
+        "szi": 0.0,
+        "position_notional": 0.0,
+        "account_value": account_value,
+        "position_equity_pct": 0.0,
+    }
+
 def _fill_direction(f: dict) -> str:
     """HL side: B=buy/bid, A=sell/ask. dir 필드가 있으면 우선."""
     d = str(f.get("dir") or "").lower()
@@ -261,56 +332,142 @@ def _fill_direction(f: dict) -> str:
     return "SHORT"
 
 
+def _explicit_open_direction(fill: dict) -> str:
+    direction = " ".join(str(fill.get("dir") or "").lower().split())
+    if direction == "open long":
+        return "LONG"
+    if direction == "open short":
+        return "SHORT"
+    return ""
+
+
+def _record_policy_diagnostics(state: dict, counters: dict[str, int]) -> None:
+    root = state.setdefault("policy_diagnostics", {})
+    row = root.setdefault(POLICY, {"cumulative": {}})
+    cumulative = row.setdefault("cumulative", {})
+    for key, value in counters.items():
+        cumulative[key] = int(cumulative.get(key) or 0) + int(value)
+    row["last"] = dict(counters)
+    row["last_at"] = _now_kst()
+
+
 def scan_signals(state: dict, cfg: dict) -> list[dict]:
     p = _params(cfg)
-    signals = []
+    signals: list[dict] = []
+    diagnostics: dict[str, int] = defaultdict(int)
     for wallet in _wallets(cfg):
         wstate = state["wallets"].setdefault(
             wallet, {"last_fill_time": 0, "status": "active", "copied_keys": {}, "seeded": False}
         )
         if wstate.get("status") == "suspended":
             continue
+        last_t = int(wstate.get("last_fill_time") or 0)
         try:
-            fills = _user_fills(wallet)
+            if not wstate.get("seeded") and last_t <= 0:
+                fills = _user_fills(wallet)
+            else:
+                fills = _user_fills_since(wallet, last_t + 1)
             wstate.pop("last_error", None)
         except Exception as e:
             wstate["last_error"] = str(e)[:200]
+            diagnostics["api_error"] += 1
             continue
-        fills = sorted(fills, key=lambda f: int(f.get("time") or 0))
+        fills = sorted(fills, key=lambda fill: int(fill.get("time") or 0))
         if not fills:
+            wstate["seeded"] = True
             continue
-
-        # 콜드스타트: 과거 전량 카피 금지 — 커서만 최신 체결로 시드
-        last_t = int(wstate.get("last_fill_time") or 0)
         if not wstate.get("seeded") and last_t <= 0:
-            newest = max(int(f.get("time") or 0) for f in fills)
-            wstate["last_fill_time"] = newest
+            wstate["last_fill_time"] = max(int(fill.get("time") or 0) for fill in fills)
             wstate["seeded"] = True
             wstate["seeded_at"] = _now_kst()
+            diagnostics["cold_seed"] += 1
             continue
-
         wstate["seeded"] = True
-        for f in fills:
+        fresh = [fill for fill in fills if int(fill.get("time") or 0) > last_t]
+        if fresh:
+            wstate["last_fill_time"] = max(int(fill.get("time") or 0) for fill in fresh)
+
+        groups: dict[tuple[str, str], dict[str, Any]] = {}
+        for f in fresh:
             t = int(f.get("time") or 0)
-            if t <= last_t:
-                continue
             try:
                 px = float(f.get("px") or 0)
                 sz = float(f.get("sz") or 0)
                 notional = abs(px * sz)
             except Exception:
-                continue
-            wstate["last_fill_time"] = max(int(wstate.get("last_fill_time") or 0), t)
-            if notional < p["min_fill_notional_usd"]:
+                diagnostics["invalid_fill"] += 1
                 continue
             coin = str(f.get("coin") or "")
             if not coin or coin.startswith("@"):
+                diagnostics["unsupported_coin"] += 1
                 continue
-            direction = _fill_direction(f)
-            if direction == "CLOSE":
-                continue  # 청산 체결은 별도 settle 로직이 처리
-            key = f"{wallet}:{coin}:{t}:{direction}"
+            direction = _explicit_open_direction(f)
+            if not direction:
+                diagnostics["not_open"] += 1
+                continue
+            if p["require_taker_open"] and not bool(f.get("crossed")):
+                diagnostics["maker_open"] += 1
+                continue
+            group = groups.setdefault((coin, direction), {
+                "wallet": wallet,
+                "coin": coin,
+                "direction": direction,
+                "notional": 0.0,
+                "size": 0.0,
+                "weighted_price": 0.0,
+                "fill_time": t,
+                "first_time": t,
+                "start_position": float(f.get("startPosition") or 0),
+                "fills": 0,
+            })
+            group["notional"] += notional
+            group["size"] += abs(sz)
+            group["weighted_price"] += notional * px
+            group["fill_time"] = max(int(group["fill_time"]), t)
+            group["first_time"] = min(int(group["first_time"]), t)
+            group["fills"] += 1
+
+        ch_cache: dict[str, dict | None] = {}
+        for (coin, direction), group in groups.items():
+            aggregate_notional = float(group["notional"])
+            if aggregate_notional < p["min_aggregate_open_notional_usd"]:
+                diagnostics["aggregate_too_small"] += 1
+                continue
+            lag_seconds = max(_now() - int(group["fill_time"]) / 1000.0, 0.0)
+            if lag_seconds > p["max_signal_lag_seconds"]:
+                diagnostics["stale_signal"] += 1
+                continue
+            dex = _coin_dex(coin)
+            if dex not in ch_cache:
+                ch_cache[dex] = _clearinghouse(wallet, dex=dex)
+            ch = ch_cache[dex]
+            if ch is None:
+                diagnostics["position_api_error"] += 1
+                continue
+            snapshot = _position_snapshot(ch, coin)
+            if not snapshot:
+                diagnostics["position_missing"] += 1
+                continue
+            sign = 1.0 if direction == "LONG" else -1.0
+            current_directional_size = sign * float(snapshot["szi"])
+            start_directional_size = max(sign * float(group["start_position"]), 0.0)
+            if current_directional_size <= 0:
+                diagnostics["position_not_same_direction"] += 1
+                continue
+            vwap = float(group["weighted_price"]) / max(aggregate_notional, 1e-12)
+            confirmed_increase = max(current_directional_size - start_directional_size, 0.0) * vwap
+            if confirmed_increase < p["min_aggregate_open_notional_usd"]:
+                diagnostics["position_increase_too_small"] += 1
+                continue
+            if snapshot["position_notional"] < p["min_confirmed_position_notional_usd"]:
+                diagnostics["position_too_small"] += 1
+                continue
+            if snapshot["position_equity_pct"] < p["min_position_equity_pct"]:
+                diagnostics["conviction_too_small"] += 1
+                continue
+            key = f"{POLICY}:{wallet}:{coin}:{int(group['fill_time'])}:{direction}"
             if wstate.setdefault("copied_keys", {}).get(key):
+                diagnostics["duplicate"] += 1
                 continue
             wstate["copied_keys"][key] = True
             if len(wstate["copied_keys"]) > 500:
@@ -320,19 +477,29 @@ def scan_signals(state: dict, cfg: dict) -> list[dict]:
                 "wallet": wallet,
                 "coin": coin,
                 "direction": direction,
-                "px": px,
-                "sz": sz,
-                "notional": notional,
-                "fill_time": t,
+                "px": vwap,
+                "sz": float(group["size"]),
+                "notional": aggregate_notional,
+                "fill_time": int(group["fill_time"]),
                 "key": key,
-                "dir_raw": f.get("dir"),
+                "policy": POLICY,
+                "aggregate_fills": int(group["fills"]),
+                "signal_lag_seconds": lag_seconds,
+                "start_position": float(group["start_position"]),
+                "confirmed_szi": float(snapshot["szi"]),
+                "confirmed_position_notional": float(snapshot["position_notional"]),
+                "confirmed_position_equity_pct": float(snapshot["position_equity_pct"]),
+                "confirmed_increase_notional": confirmed_increase,
+                "crossed_taker": True,
             })
+            diagnostics["accepted"] += 1
+    _record_policy_diagnostics(state, diagnostics)
     return signals
 
 
 def open_paper(signals: list[dict], state: dict, cfg: dict) -> int:
     p = _params(cfg)
-    mids = _mids()
+    mids = _mids([str(signal.get("coin") or "") for signal in signals])
     opened = 0
     for sig in signals:
         open_n = len(state.get("open_positions") or [])
@@ -347,7 +514,9 @@ def open_paper(signals: list[dict], state: dict, cfg: dict) -> int:
         slip = p["slippage_bps"] / 10000.0
         entry = mid * (1 + slip) if sig["direction"] == "LONG" else mid * (1 - slip)
         notional = p["copy_notional_usd"]
+        entry_fee = notional * p["taker_fee_bps"] / 10_000.0
         pos = {
+            "policy": str(sig.get("policy") or POLICY),
             "wallet": sig["wallet"],
             "coin": sig["coin"],
             "direction": sig["direction"],
@@ -359,6 +528,22 @@ def open_paper(signals: list[dict], state: dict, cfg: dict) -> int:
             "opened_at": _now_kst(),
             "opened_ts": _now(),
             "source_fill_time": sig["fill_time"],
+            "source_vwap": round(float(sig.get("px") or 0), 8),
+            "signal_lag_seconds": round(float(sig.get("signal_lag_seconds") or 0), 3),
+            "aggregate_fills": int(sig.get("aggregate_fills") or 1),
+            "confirmed_position_notional": round(
+                float(sig.get("confirmed_position_notional") or 0), 2
+            ),
+            "confirmed_position_equity_pct": round(
+                float(sig.get("confirmed_position_equity_pct") or 0), 8
+            ),
+            "confirmed_increase_notional": round(
+                float(sig.get("confirmed_increase_notional") or 0), 2
+            ),
+            "crossed_taker": bool(sig.get("crossed_taker")),
+            "entry_fee_usd": round(entry_fee, 6),
+            "slippage_bps": p["slippage_bps"],
+            "taker_fee_bps": p["taker_fee_bps"],
         }
         state.setdefault("open_positions", []).append(pos)
         _append({**pos, "event": "opened"})
@@ -382,27 +567,57 @@ def mark_and_settle(state: dict, cfg: dict) -> int:
     CH 조회 실패 시에는 정산하지 않고 유지.
     """
     p = _params(cfg)
-    max_hold = float(p.get("max_hold_hours") or 48) * 3600
-    # 오픈 직후 너무 이른 flat 판정 방지 (API 지연·부분체결)
-    min_flat_age = float(p.get("min_whale_flat_age_sec") or 180)
     settled = 0
     remaining = []
-    mids = _mids()
+    positions = state.get("open_positions") or []
+    mids = _mids([str(position.get("coin") or "") for position in positions])
     # (wallet, dex) -> clearinghouse | None(실패)
     ch_cache: dict[tuple[str, str], dict | None] = {}
 
     for pos in state.get("open_positions") or []:
+        policy = str(pos.get("policy") or LEGACY_POLICY)
+        max_hold_hours = (
+            p["max_hold_hours_v2"] if policy == POLICY else p["max_hold_hours"]
+        )
+        max_hold = float(max_hold_hours) * 3600
+        min_flat_age = (
+            p["min_whale_flat_age_sec_v2"]
+            if policy == POLICY else p["min_whale_flat_age_sec"]
+        )
         coin = pos["coin"]
         dex = _coin_dex(coin)
         mid = float(mids.get(coin) or pos.get("mark") or pos["entry_price"])
         entry = float(pos["entry_price"])
         qty = float(pos["qty"])
-        if pos["direction"] == "LONG":
-            upnl = (mid - entry) * qty
+        if policy == POLICY:
+            slip = float(pos.get("slippage_bps") or p["slippage_bps"]) / 10_000.0
+            executable_exit = (
+                mid * (1 - slip) if pos["direction"] == "LONG" else mid * (1 + slip)
+            )
+            gross_upnl = (
+                (executable_exit - entry) * qty
+                if pos["direction"] == "LONG"
+                else (entry - executable_exit) * qty
+            )
+            exit_fee = abs(executable_exit * qty) * (
+                float(pos.get("taker_fee_bps") or p["taker_fee_bps"]) / 10_000.0
+            )
+            fees = float(pos.get("entry_fee_usd") or 0) + exit_fee
+            upnl = gross_upnl - fees
+        elif pos["direction"] == "LONG":
+            executable_exit = mid
+            gross_upnl = (mid - entry) * qty
+            fees = 0.0
+            upnl = gross_upnl
         else:
-            upnl = (entry - mid) * qty
+            executable_exit = mid
+            gross_upnl = (entry - mid) * qty
+            fees = 0.0
+            upnl = gross_upnl
         pos["mark"] = mid
         pos["unrealized_pnl"] = round(upnl, 4)
+        pos["estimated_gross_pnl"] = round(gross_upnl, 4)
+        pos["estimated_fees_usd"] = round(fees, 4)
         pos["dex"] = dex or "main"
 
         closed = False
@@ -412,7 +627,7 @@ def mark_and_settle(state: dict, cfg: dict) -> int:
         # 1) max hold
         if age >= max_hold:
             closed = True
-            reason = f"max_hold_{p.get('max_hold_hours')}h"
+            reason = f"emergency_max_hold_{max_hold_hours}h"
 
         # 2) whale flat — 올바른 dex CH 필수
         if not closed and age >= min_flat_age:
@@ -447,11 +662,17 @@ def mark_and_settle(state: dict, cfg: dict) -> int:
                 "settled_at": _now_kst(),
                 "settled_ts": _now(),
                 "pnl_usd": round(pnl, 4),
-                "exit_price": mid,
+                "gross_pnl_usd": round(gross_upnl, 4),
+                "fees_usd": round(fees, 4),
+                "exit_price": round(executable_exit, 8),
+                "mark_price": mid,
                 "settle_reason": reason,
             }
             _append(row)
             state["bankroll"] = float(state.get("bankroll") or 1000) + pnl
+            if policy == POLICY:
+                bankrolls = state.setdefault("policy_bankrolls", {})
+                bankrolls[POLICY] = float(bankrolls.get(POLICY) or 1000) + pnl
             settled += 1
             print(f"  [HL-paper] settle {pos['direction']} {coin} pnl={pnl:+.2f} ({reason})")
         else:
@@ -468,8 +689,15 @@ def build_report(state: dict, cfg: dict) -> str:
                 rows.append(json.loads(line))
             except Exception:
                 pass
-    settled = [r for r in rows if r.get("event") == "settled"]
-    opened = [r for r in rows if r.get("event") == "opened"]
+    all_settled = [r for r in rows if r.get("event") == "settled"]
+    settled = [r for r in all_settled if str(r.get("policy") or LEGACY_POLICY) == POLICY]
+    legacy_settled = [
+        r for r in all_settled if str(r.get("policy") or LEGACY_POLICY) == LEGACY_POLICY
+    ]
+    opened = [
+        r for r in rows
+        if r.get("event") == "opened" and str(r.get("policy") or LEGACY_POLICY) == POLICY
+    ]
     wins = [r for r in settled if float(r.get("pnl_usd") or 0) > 0]
     pnl = sum(float(r.get("pnl_usd") or 0) for r in settled)
     wr = len(wins) / len(settled) if settled else 0.0
@@ -482,16 +710,19 @@ def build_report(state: dict, cfg: dict) -> str:
         by_w[w] = by_w.get(w, 0.0) + float(r.get("pnl_usd") or 0)
 
     lines = [
-        f"🌊 <b>[Hyperliquid 고래 Paper 카피]</b> — "
+        f"🌊 <b>[Hyperliquid 고래 Paper v2]</b> — "
         f"{datetime.now(KST).strftime('%m/%d %H:%M KST')}",
         "",
         "🏷 계좌: <b>hl_whale_paper</b> (Poly/Bybit 과 분리)",
-        f"bankroll ${float(state.get('bankroll') or 1000):.2f} | "
+        f"v2 bankroll ${float((state.get('policy_bankrolls') or {}).get(POLICY) or 1000):.2f} | "
         f"정산 {len(settled)}건 | 승(PnL&gt;0) {wr:.0%} | 누적 PnL ${pnl:+.2f}",
         f"오픈 {len(state.get('open_positions') or [])}/{p['max_open_positions']} | "
-        f"카피 ${p['copy_notional_usd']:.0f}/건 | min fill ${p['min_fill_notional_usd']:.0f} | "
-        f"max hold {p['max_hold_hours']:.0f}h",
-        f"추적 지갑 {wallets_n}개 | 누적 진입 기록 {len(opened)}건",
+        f"카피 ${p['copy_notional_usd']:.0f}/건 | taker open 합산 "
+        f"${p['min_aggregate_open_notional_usd']:,.0f}+ | "
+        f"emergency hold {p['max_hold_hours_v2']:.0f}h",
+        f"추적 지갑 {wallets_n}개 | v2 진입 기록 {len(opened)}건",
+        f"비교 v1 정산 {len(legacy_settled)}건 | "
+        f"누적 ${sum(float(r.get('pnl_usd') or 0) for r in legacy_settled):+.2f}",
     ]
     if state.get("open_positions"):
         lines.append("")
@@ -539,12 +770,12 @@ def build_report(state: dict, cfg: dict) -> str:
         )
     lines += [
         "",
-        "※ 실주문 없음 · 콜드스타트 시 과거 체결 미카피 · 폴리 고래와 계좌 분리.",
+        "※ 실주문 없음 · taker open + 실제 순포지션 증가만 추종 · 폴리 고래와 계좌 분리.",
     ]
     return "\n".join(lines)
 
 
-def _read_journal_settled() -> list[dict]:
+def _read_journal_settled(policy: str | None = None) -> list[dict]:
     rows: list[dict] = []
     if not JOURNAL_FILE.exists():
         return rows
@@ -555,7 +786,8 @@ def _read_journal_settled() -> list[dict]:
             r = json.loads(line)
         except Exception:
             continue
-        if r.get("event") == "settled":
+        row_policy = str(r.get("policy") or LEGACY_POLICY)
+        if r.get("event") == "settled" and (policy is None or row_policy == policy):
             rows.append(r)
     return rows
 
@@ -563,7 +795,7 @@ def _read_journal_settled() -> list[dict]:
 def build_sample_milestone_report(state: dict, cfg: dict, milestone: int) -> str:
     """표본 충분 마일스톤 전용 리포트 (4h 정기 리포트와 별도 1회 발송)."""
     p = _params(cfg)
-    settled = _read_journal_settled()
+    settled = _read_journal_settled(POLICY)
     n = len(settled)
     pnls = [float(r.get("pnl_usd") or 0) for r in settled]
     wins = sum(1 for x in pnls if x > 0)
@@ -602,10 +834,10 @@ def build_sample_milestone_report(state: dict, cfg: dict, milestone: int) -> str
         "⏰ 까먹지 말라고 보내는 <b>1회성</b> 리마인드입니다.",
         f"정산 <b>{n}</b>건 도달 (목표 게이트 {milestone})",
         "",
-        f"bankroll ${float(state.get('bankroll') or 1000):.2f} | "
+        f"v2 bankroll ${float((state.get('policy_bankrolls') or {}).get(POLICY) or 1000):.2f} | "
         f"WR {wr:.0%} ({wins}W/{losses}L) | 누적 PnL <b>${total:+.2f}</b>",
         f"건당 기댓값 ${avg:+.3f} | avgW ${avg_w:+.2f} | avgL ${avg_l:+.2f}",
-        f"설정: min fill ${p['min_fill_notional_usd']:.0f} | "
+        f"설정: taker open 합산 ${p['min_aggregate_open_notional_usd']:,.0f}+ | "
         f"카피 ${p['copy_notional_usd']:.0f} | 지갑 {len(_wallets(cfg))}개",
         "",
         f"📌 {escape(verdict)}",
@@ -640,12 +872,12 @@ def build_sample_milestone_report(state: dict, cfg: dict, milestone: int) -> str
 
 def _maybe_send_sample_milestones(state: dict, cfg: dict) -> list[int]:
     """정산 건수가 마일스톤에 도달하면 1회씩 TG 발송. 발송된 milestone 리스트 반환."""
-    settled = _read_journal_settled()
+    settled = _read_journal_settled(POLICY)
     n = len(settled)
     sent_map = state.setdefault("sample_milestones_sent", {})
     fired: list[int] = []
     for m in SAMPLE_MILESTONES:
-        key = f"n{m}"
+        key = f"{POLICY}:n{m}"
         if n < m:
             continue
         if sent_map.get(key):
@@ -687,7 +919,7 @@ def run_once(report_now: bool = False) -> dict:
     opened = open_paper(signals, state, cfg)
     # 정산 누적 후 표본 마일스톤 (20/30/50) 1회 리마인드
     milestones = _maybe_send_sample_milestones(state, cfg)
-    n_settled = len(_read_journal_settled())
+    n_settled = len(_read_journal_settled(POLICY))
     state["last_scan"] = {
         "time": _now_kst(),
         "signals": len(signals),

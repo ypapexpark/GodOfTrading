@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.godoftrading.binance.copy.intel</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/ghp/Projects/GodOfTrading/binance_copy_intel.py</string>
+        <string>--daemon</string>
+        <string>--interval</string>
+        <string>60</string>
+    </array>
+    <!-- 공개 리드 체결은 60초마다, 무거운 전체 discovery는 내부 TTL 6시간마다 수행. -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>WorkingDirectory</key>
+    <string>/Users/ghp/Projects/GodOfTrading</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/ghp</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+        <key>PYTHONPYCACHEPREFIX</key>
+        <string>/tmp/godoftrading-pycache</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/tmp/godoftrading_binance_copy_intel.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/godoftrading_binance_copy_intel_err.log</string>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

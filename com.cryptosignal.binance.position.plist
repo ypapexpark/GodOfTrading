@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cryptosignal.binance.position</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/ghp/Projects/GodOfTrading/binance_position_manager.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/ghp/Projects/GodOfTrading</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key><string>/Users/ghp</string>
+        <key>PYTHONUNBUFFERED</key><string>1</string>
+        <key>AUTO_TRADE_EXCHANGE</key><string>binance</string>
+        <key>GOT_MARKET_DATA_EXCHANGE</key><string>binance</string>
+        <key>GOT_STATE_NAMESPACE</key><string>binance</string>
+        <key>BINANCE_POSITION_MANAGER_INTERVAL_SECONDS</key><string>5</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/tmp/godoftrading_binance_position.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/godoftrading_binance_position_err.log</string>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ThrottleInterval</key><integer>10</integer>
+</dict>
+</plist>

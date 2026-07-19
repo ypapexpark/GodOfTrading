@@ -5,6 +5,36 @@ import polymarket_clob_exec as clob
 
 
 class PolymarketClobExecutionTest(unittest.TestCase):
+    def test_buy_prequote_consumes_asks_and_returns_vwap(self):
+        response = Mock()
+        response.json.return_value = {
+            "asks": [
+                {"price": "0.60", "size": "20"},
+                {"price": "0.50", "size": "10"},
+            ]
+        }
+        with patch.object(clob.requests, "get", return_value=response):
+            quote = clob.quote_buy_usd("token", 10.0, max_price=0.60)
+        self.assertTrue(quote["ok"])
+        self.assertEqual(quote["best_ask"], 0.5)
+        self.assertEqual(quote["worst_ask"], 0.6)
+        self.assertAlmostEqual(quote["shares"], 10 + 5 / 0.6)
+        self.assertAlmostEqual(quote["vwap"], 10 / (10 + 5 / 0.6))
+
+    def test_buy_prequote_rejects_partial_depth_inside_price_limit(self):
+        response = Mock()
+        response.json.return_value = {
+            "asks": [
+                {"price": "0.50", "size": "10"},
+                {"price": "0.60", "size": "20"},
+            ]
+        }
+        with patch.object(clob.requests, "get", return_value=response):
+            quote = clob.quote_buy_usd("token", 10.0, max_price=0.55)
+        self.assertFalse(quote["ok"])
+        self.assertEqual(quote["fillable_usd"], 5.0)
+        self.assertIn("insufficient", quote["error"])
+
     def test_success_with_delayed_status_is_not_a_fill(self):
         self.assertIsNone(clob._matched_fill({
             "success": True,

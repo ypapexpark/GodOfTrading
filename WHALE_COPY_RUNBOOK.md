@@ -75,7 +75,7 @@
 ## B. Hyperliquid 고래 paper
 
 ### 파일
-- `hyperliquid_whale_paper_bot.py` — 3분 폴링, 4h TG, **실주문 없음**
+- `hyperliquid_whale_paper_bot.py` — 30초 증분 폴링, 4h TG, **실주문 없음**
 - `hyperliquid_whale_config.json` — whales[] 모수 (2026-07-11 리더보드 12지갑 시드)
 - `tools/hl_whale_screen.py` — 활동 검증 / 리더보드 재스크리닝
 - state/journal: `hyperliquid_whale_paper_state.json`, `*_journal.jsonl`
@@ -85,7 +85,7 @@
 |------|------|
 | 봇 코드 | 동작 (콜드스타트 과거 전량 카피 버그 수정) |
 | 모수 지갑 | **12개** 리더보드 스크리닝 (월수익+거래량+최근활동) |
-| LaunchAgent | `com.hyperliquid.whale.paper` (180s) |
+| LaunchAgent | `com.hyperliquid.whale.paper` (30s) |
 | LIVE | **없음** (paper only — 폴리 insight 와 동일 원칙) |
 
 ### 시작 / 재스크리닝
@@ -103,7 +103,11 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hyperliquid.whale.pa
 ```
 
 ### 파라미터 (`hyperliquid_whale_config.json` params)
-- `min_fill_notional_usd`: 고래 체결 최소 (기본 5000)
+- `min_aggregate_open_notional_usd`: 같은 구간 taker open 합산 최소 (기본 50000)
+- `min_confirmed_position_notional_usd`: clearinghouse 현재 포지션 최소 (기본 50000)
+- `min_position_equity_pct`: dex account value 대비 최소 포지션 비중 (기본 0.5%)
+- `max_signal_lag_seconds`: follower 허용 지연 (기본 75초)
+- `max_hold_hours_v2`: whale-flat 우선, 비상 장기보유 상한 (기본 168h)
 - `copy_notional_usd`: paper 카피 크기 (기본 25)
 - `max_leverage_copy`: 기록용 캡 (기본 5)
 - `max_hold_hours`: paper 최대 보유 (기본 48) — 고래 flat 또는 시간초과 시 정산

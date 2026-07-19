@@ -1,0 +1,3886 @@
+{
+  "generated_at_utc": "2026-07-16T23:29:52.935104+00:00",
+  "method": {
+    "source": "/Users/ghp/Projects/GodOfTrading/binance_pump_study_latest.json",
+    "bar": "1h public Binance futures aggregates",
+    "point_in_time": "last fully closed hourly bucket before pre-onset 15m bar",
+    "control": "up to 3 same-symbol/same-time prior non-pump days",
+    "fetch_start_utc": "2026-06-17T23:28:59.276000+00:00"
+  },
+  "eligible_event_n": 155,
+  "symbol_n": 95,
+  "matched_event_n": 133,
+  "failures": [],
+  "summary": {
+    "oi_value_change_1h_pct": {
+      "event_n": 133,
+      "event_median": 0.5171653135172649,
+      "event_p25": -0.8807106609840853,
+      "event_p75": 1.658067327716961,
+      "control_n": 131,
+      "control_median": 0.0355441883259866,
+      "matched_n": 131,
+      "median_event_minus_control": 0.3766309912922372,
+      "event_above_control_pct": 58.01526717557252,
+      "sign_test_p": 0.08016994071057768
+    },
+    "oi_value_change_6h_pct": {
+      "event_n": 133,
+      "event_median": 0.5038222087732969,
+      "event_p25": -2.3821992598978436,
+      "event_p75": 3.6410871861851435,
+      "control_n": 129,
+      "control_median": -0.5760505259371773,
+      "matched_n": 129,
+      "median_event_minus_control": 1.8879624769822856,
+      "event_above_control_pct": 62.01550387596899,
+      "sign_test_p": 0.008007673208090862
+    },
+    "oi_value_change_24h_pct": {
+      "event_n": 133,
+      "event_median": 3.0109506780196194,
+      "event_p25": -9.096230422362094,
+      "event_p75": 17.494243139377332,
+      "control_n": 128,
+      "control_median": -2.5288132144178856,
+      "matched_n": 128,
+      "median_event_minus_control": 6.360300065531538,
+      "event_above_control_pct": 64.0625,
+      "sign_test_p": 0.001862468524299045
+    },
+    "taker_buy_sell_ratio": {
+      "event_n": 133,
+      "event_median": 1.0328,
+      "event_p25": 0.9487,
+      "event_p75": 1.16,
+      "control_n": 133,
+      "control_median": 0.9571,
+      "matched_n": 133,
+      "median_event_minus_control": 0.06769999999999987,
+      "event_above_control_pct": 65.41353383458647,
+      "sign_test_p": 0.0004772225240720683
+    },
+    "global_long_short_ratio": {
+      "event_n": 133,
+      "event_median": 1.1,
+      "event_p25": 0.6829,
+      "event_p75": 1.5661,
+      "control_n": 133,
+      "control_median": 1.0855,
+      "matched_n": 133,
+      "median_event_minus_control": -0.010399999999999965,
+      "event_above_control_pct": 48.87218045112782,
+      "sign_test_p": 0.8624034912671916
+    },
+    "top_long_short_ratio": {
+      "event_n": 133,
+      "event_median": 1.1608,
+      "event_p25": 0.7584,
+      "event_p75": 1.6015,
+      "control_n": 133,
+      "control_median": 1.192,
+      "matched_n": 133,
+      "median_event_minus_control": -0.017299999999999982,
+      "event_above_control_pct": 44.3609022556391,
+      "sign_test_p": 0.22462992985836266
+    },
+    "top_minus_global_ratio": {
+      "event_n": 133,
+      "event_median": 0.06989999999999985,
+      "event_p25": -0.05149999999999999,
+      "event_p75": 0.1724000000000001,
+      "control_n": 133,
+      "control_median": 0.0817,
+      "matched_n": 133,
+      "median_event_minus_control": -0.009300000000000086,
+      "event_above_control_pct": 45.86466165413533,
+      "sign_test_p": 0.38595875434107846
+    }
+  },
+  "candidate_gate_backtest": {
+    "base_train": {
+      "n": 29,
+      "win_rate_pct": 34.48275862068966,
+      "avg_net_pct": -0.04183393103448277,
+      "sum_net_pct": -1.2131839999999996,
+      "profit_factor": 0.9677649447866431
+    },
+    "base_test": {
+      "n": 14,
+      "win_rate_pct": 28.57142857142857,
+      "avg_net_pct": -1.1986855,
+      "sum_net_pct": -16.781596999999998,
+      "profit_factor": 0.4260886947154228
+    },
+    "candidate_rows_n": 43,
+    "rules_tested": 3,
+    "best_train_selected_rule": {
+      "rule": {
+        "oi_6h_min_pct": 0.0,
+        "oi_24h_min_pct": 0.0,
+        "taker_buy_sell_min": 1.0
+      },
+      "train": {
+        "n": 8,
+        "win_rate_pct": 37.5,
+        "avg_net_pct": 0.2555365,
+        "sum_net_pct": 2.044292,
+        "profit_factor": 1.194376531720733
+      },
+      "test": {
+        "n": 1,
+        "win_rate_pct": 0.0,
+        "avg_net_pct": -2.898019,
+        "sum_net_pct": -2.898019,
+        "profit_factor": 0.0
+      },
+      "train_rows": [
+        {
+          "symbol": "ORDI/USDT:USDT",
+          "signal_ts": 1781874900000,
+          "split": "train",
+          "net_pct": 5.771467,
+          "oi_value_change_1h_pct": 0.4849175991081589,
+          "oi_value_change_6h_pct": 0.8053474744559974,
+          "oi_value_change_24h_pct": 3.536284655107824,
+          "taker_buy_sell_ratio": 1.259,
+          "global_long_short_ratio": 0.6722,
+          "top_long_short_ratio": 0.9627,
+          "top_minus_global_ratio": 0.2905
+        },
+        {
+          "symbol": "MEME/USDT:USDT",
+          "signal_ts": 1781914500000,
+          "split": "train",
+          "net_pct": -2.121284,
+          "oi_value_change_1h_pct": 0.36141437593688597,
+          "oi_value_change_6h_pct": 0.5129282139413549,
+          "oi_value_change_24h_pct": 9.546334094100706,
+          "taker_buy_sell_ratio": 1.4975,
+          "global_long_short_ratio": 0.8911,
+          "top_long_short_ratio": 1.1231,
+          "top_minus_global_ratio": 0.23199999999999998
+        },
+        {
+          "symbol": "WLD/USDT:USDT",
+          "signal_ts": 1782054900000,
+          "split": "train",
+          "net_pct": -2.24426,
+          "oi_value_change_1h_pct": 0.28376594421750667,
+          "oi_value_change_6h_pct": 1.7027399703415824,
+          "oi_value_change_24h_pct": 3.6009640901113693,
+          "taker_buy_sell_ratio": 1.1459,
+          "global_long_short_ratio": 1.209,
+          "top_long_short_ratio": 1.2472,
+          "top_minus_global_ratio": 0.03820000000000001
+        },
+        {
+          "symbol": "TAIKO/USDT:USDT",
+          "signal_ts": 1782274500000,
+          "split": "train",
+          "net_pct": -2.635147,
+          "oi_value_change_1h_pct": 2.0924264327765174,
+          "oi_value_change_6h_pct": 4.311071297074309,
+          "oi_value_change_24h_pct": 3.243935119078256,
+          "taker_buy_sell_ratio": 1.1983,
+          "global_long_short_ratio": 2.8551,
+          "top_long_short_ratio": 2.6697,
+          "top_minus_global_ratio": -0.1854
+        },
+        {
+          "symbol": "PUMP/USDT:USDT",
+          "signal_ts": 1782571500000,
+          "split": "train",
+          "net_pct": 1.75,
+          "oi_value_change_1h_pct": 1.5858567458072237,
+          "oi_value_change_6h_pct": 1.7554175971633557,
+          "oi_value_change_24h_pct": 6.250644798291205,
+          "taker_buy_sell_ratio": 1.1814,
+          "global_long_short_ratio": 0.5632,
+          "top_long_short_ratio": 0.7232,
+          "top_minus_global_ratio": 0.15999999999999992
+        },
+        {
+          "symbol": "CHIP/USDT:USDT",
+          "signal_ts": 1782573300000,
+          "split": "train",
+          "net_pct": -0.356484,
+          "oi_value_change_1h_pct": -0.8164560999840531,
+          "oi_value_change_6h_pct": 1.9951971740651553,
+          "oi_value_change_24h_pct": 2.713834613391053,
+          "taker_buy_sell_ratio": 1.1862,
+          "global_long_short_ratio": 0.5911,
+          "top_long_short_ratio": 0.807,
+          "top_minus_global_ratio": 0.2159000000000001
+        },
+        {
+          "symbol": "ORCA/USDT:USDT",
+          "signal_ts": 1782706500000,
+          "split": "train",
+          "net_pct": -3.16,
+          "oi_value_change_1h_pct": 0.764176108420922,
+          "oi_value_change_6h_pct": 0.4988582780958595,
+          "oi_value_change_24h_pct": 1.449404164283341,
+          "taker_buy_sell_ratio": 1.134,
+          "global_long_short_ratio": 1.4802,
+          "top_long_short_ratio": 1.517,
+          "top_minus_global_ratio": 0.036799999999999944
+        },
+        {
+          "symbol": "BTW/USDT:USDT",
+          "signal_ts": 1783231200000,
+          "split": "train",
+          "net_pct": 5.04,
+          "oi_value_change_1h_pct": -0.8807106609840853,
+          "oi_value_change_6h_pct": 0.40967483612723843,
+          "oi_value_change_24h_pct": 7.889947793799368,
+          "taker_buy_sell_ratio": 1.1963,
+          "global_long_short_ratio": 0.9616,
+          "top_long_short_ratio": 1.1678,
+          "top_minus_global_ratio": 0.20619999999999994
+        }
+      ],
+      "test_rows": [
+        {
+          "symbol": "BILL/USDT:USDT",
+          "signal_ts": 1783699200000,
+          "split": "test",
+          "net_pct": -2.898019,
+          "oi_value_change_1h_pct": -2.6618902685598966,
+          "oi_value_change_6h_pct": 1.178687420891511,
+          "oi_value_change_24h_pct": 2.157505790610781,
+          "taker_buy_sell_ratio": 1.2712,
+          "global_long_short_ratio": 1.2543,
+          "top_long_short_ratio": 1.3793,
+          "top_minus_global_ratio": 0.125
+        }
+      ],
+      "score": 0.9019228477208149
+    },
+    "top_rules": [
+      {
+        "rule": {
+          "oi_6h_min_pct": 0.0,
+          "oi_24h_min_pct": 0.0,
+          "taker_buy_sell_min": 1.0
+        },
+        "train": {
+          "n": 8,
+          "win_rate_pct": 37.5,
+          "avg_net_pct": 0.2555365,
+          "sum_net_pct": 2.044292,
+          "profit_factor": 1.194376531720733
+        },
+        "test": {
+          "n": 1,
+          "win_rate_pct": 0.0,
+          "avg_net_pct": -2.898019,
+          "sum_net_pct": -2.898019,
+          "profit_factor": 0.0
+        },
+        "train_rows": [
+          {
+            "symbol": "ORDI/USDT:USDT",
+            "signal_ts": 1781874900000,
+            "split": "train",
+            "net_pct": 5.771467,
+            "oi_value_change_1h_pct": 0.4849175991081589,
+            "oi_value_change_6h_pct": 0.8053474744559974,
+            "oi_value_change_24h_pct": 3.536284655107824,
+            "taker_buy_sell_ratio": 1.259,
+            "global_long_short_ratio": 0.6722,
+            "top_long_short_ratio": 0.9627,
+            "top_minus_global_ratio": 0.2905
+          },
+          {
+            "symbol": "MEME/USDT:USDT",
+            "signal_ts": 1781914500000,
+            "split": "train",
+            "net_pct": -2.121284,
+            "oi_value_change_1h_pct": 0.36141437593688597,
+            "oi_value_change_6h_pct": 0.5129282139413549,
+            "oi_value_change_24h_pct": 9.546334094100706,
+            "taker_buy_sell_ratio": 1.4975,
+            "global_long_short_ratio": 0.8911,
+            "top_long_short_ratio": 1.1231,
+            "top_minus_global_ratio": 0.23199999999999998
+          },
+          {
+            "symbol": "WLD/USDT:USDT",
+            "signal_ts": 1782054900000,
+            "split": "train",
+            "net_pct": -2.24426,
+            "oi_value_change_1h_pct": 0.28376594421750667,
+            "oi_value_change_6h_pct": 1.7027399703415824,
+            "oi_value_change_24h_pct": 3.6009640901113693,
+            "taker_buy_sell_ratio": 1.1459,
+            "global_long_short_ratio": 1.209,
+            "top_long_short_ratio": 1.2472,
+            "top_minus_global_ratio": 0.03820000000000001
+          },
+          {
+            "symbol": "TAIKO/USDT:USDT",
+            "signal_ts": 1782274500000,
+            "split": "train",
+            "net_pct": -2.635147,
+            "oi_value_change_1h_pct": 2.0924264327765174,
+            "oi_value_change_6h_pct": 4.311071297074309,
+            "oi_value_change_24h_pct": 3.243935119078256,
+            "taker_buy_sell_ratio": 1.1983,
+            "global_long_short_ratio": 2.8551,
+            "top_long_short_ratio": 2.6697,
+            "top_minus_global_ratio": -0.1854
+          },
+          {
+            "symbol": "PUMP/USDT:USDT",
+            "signal_ts": 1782571500000,
+            "split": "train",
+            "net_pct": 1.75,
+            "oi_value_change_1h_pct": 1.5858567458072237,
+            "oi_value_change_6h_pct": 1.7554175971633557,
+            "oi_value_change_24h_pct": 6.250644798291205,
+            "taker_buy_sell_ratio": 1.1814,
+            "global_long_short_ratio": 0.5632,
+            "top_long_short_ratio": 0.7232,
+            "top_minus_global_ratio": 0.15999999999999992
+          },
+          {
+            "symbol": "CHIP/USDT:USDT",
+            "signal_ts": 1782573300000,
+            "split": "train",
+            "net_pct": -0.356484,
+            "oi_value_change_1h_pct": -0.8164560999840531,
+            "oi_value_change_6h_pct": 1.9951971740651553,
+            "oi_value_change_24h_pct": 2.713834613391053,
+            "taker_buy_sell_ratio": 1.1862,
+            "global_long_short_ratio": 0.5911,
+            "top_long_short_ratio": 0.807,
+            "top_minus_global_ratio": 0.2159000000000001
+          },
+          {
+            "symbol": "ORCA/USDT:USDT",
+            "signal_ts": 1782706500000,
+            "split": "train",
+            "net_pct": -3.16,
+            "oi_value_change_1h_pct": 0.764176108420922,
+            "oi_value_change_6h_pct": 0.4988582780958595,
+            "oi_value_change_24h_pct": 1.449404164283341,
+            "taker_buy_sell_ratio": 1.134,
+            "global_long_short_ratio": 1.4802,
+            "top_long_short_ratio": 1.517,
+            "top_minus_global_ratio": 0.036799999999999944
+          },
+          {
+            "symbol": "BTW/USDT:USDT",
+            "signal_ts": 1783231200000,
+            "split": "train",
+            "net_pct": 5.04,
+            "oi_value_change_1h_pct": -0.8807106609840853,
+            "oi_value_change_6h_pct": 0.40967483612723843,
+            "oi_value_change_24h_pct": 7.889947793799368,
+            "taker_buy_sell_ratio": 1.1963,
+            "global_long_short_ratio": 0.9616,
+            "top_long_short_ratio": 1.1678,
+            "top_minus_global_ratio": 0.20619999999999994
+          }
+        ],
+        "test_rows": [
+          {
+            "symbol": "BILL/USDT:USDT",
+            "signal_ts": 1783699200000,
+            "split": "test",
+            "net_pct": -2.898019,
+            "oi_value_change_1h_pct": -2.6618902685598966,
+            "oi_value_change_6h_pct": 1.178687420891511,
+            "oi_value_change_24h_pct": 2.157505790610781,
+            "taker_buy_sell_ratio": 1.2712,
+            "global_long_short_ratio": 1.2543,
+            "top_long_short_ratio": 1.3793,
+            "top_minus_global_ratio": 0.125
+          }
+        ],
+        "score": 0.9019228477208149
+      },
+      {
+        "rule": {
+          "oi_6h_min_pct": 0.0,
+          "oi_24h_min_pct": 0.0,
+          "taker_buy_sell_min": 1.03
+        },
+        "train": {
+          "n": 8,
+          "win_rate_pct": 37.5,
+          "avg_net_pct": 0.2555365,
+          "sum_net_pct": 2.044292,
+          "profit_factor": 1.194376531720733
+        },
+        "test": {
+          "n": 1,
+          "win_rate_pct": 0.0,
+          "avg_net_pct": -2.898019,
+          "sum_net_pct": -2.898019,
+          "profit_factor": 0.0
+        },
+        "train_rows": [
+          {
+            "symbol": "ORDI/USDT:USDT",
+            "signal_ts": 1781874900000,
+            "split": "train",
+            "net_pct": 5.771467,
+            "oi_value_change_1h_pct": 0.4849175991081589,
+            "oi_value_change_6h_pct": 0.8053474744559974,
+            "oi_value_change_24h_pct": 3.536284655107824,
+            "taker_buy_sell_ratio": 1.259,
+            "global_long_short_ratio": 0.6722,
+            "top_long_short_ratio": 0.9627,
+            "top_minus_global_ratio": 0.2905
+          },
+          {
+            "symbol": "MEME/USDT:USDT",
+            "signal_ts": 1781914500000,
+            "split": "train",
+            "net_pct": -2.121284,
+            "oi_value_change_1h_pct": 0.36141437593688597,
+            "oi_value_change_6h_pct": 0.5129282139413549,
+            "oi_value_change_24h_pct": 9.546334094100706,
+            "taker_buy_sell_ratio": 1.4975,
+            "global_long_short_ratio": 0.8911,
+            "top_long_short_ratio": 1.1231,
+            "top_minus_global_ratio": 0.23199999999999998
+          },
+          {
+            "symbol": "WLD/USDT:USDT",
+            "signal_ts": 1782054900000,
+            "split": "train",
+            "net_pct": -2.24426,
+            "oi_value_change_1h_pct": 0.28376594421750667,
+            "oi_value_change_6h_pct": 1.7027399703415824,
+            "oi_value_change_24h_pct": 3.6009640901113693,
+            "taker_buy_sell_ratio": 1.1459,
+            "global_long_short_ratio": 1.209,
+            "top_long_short_ratio": 1.2472,
+            "top_minus_global_ratio": 0.03820000000000001
+          },
+          {
+            "symbol": "TAIKO/USDT:USDT",
+            "signal_ts": 1782274500000,
+            "split": "train",
+            "net_pct": -2.635147,
+            "oi_value_change_1h_pct": 2.0924264327765174,
+            "oi_value_change_6h_pct": 4.311071297074309,
+            "oi_value_change_24h_pct": 3.243935119078256,
+            "taker_buy_sell_ratio": 1.1983,
+            "global_long_short_ratio": 2.8551,
+            "top_long_short_ratio": 2.6697,
+            "top_minus_global_ratio": -0.1854
+          },
+          {
+            "symbol": "PUMP/USDT:USDT",
+            "signal_ts": 1782571500000,
+            "split": "train",
+            "net_pct": 1.75,
+            "oi_value_change_1h_pct": 1.5858567458072237,
+            "oi_value_change_6h_pct": 1.7554175971633557,
+            "oi_value_change_24h_pct": 6.250644798291205,
+            "taker_buy_sell_ratio": 1.1814,
+            "global_long_short_ratio": 0.5632,
+            "top_long_short_ratio": 0.7232,
+            "top_minus_global_ratio": 0.15999999999999992
+          },
+          {
+            "symbol": "CHIP/USDT:USDT",
+            "signal_ts": 1782573300000,
+            "split": "train",
+            "net_pct": -0.356484,
+            "oi_value_change_1h_pct": -0.8164560999840531,
+            "oi_value_change_6h_pct": 1.9951971740651553,
+            "oi_value_change_24h_pct": 2.713834613391053,
+            "taker_buy_sell_ratio": 1.1862,
+            "global_long_short_ratio": 0.5911,
+            "top_long_short_ratio": 0.807,
+            "top_minus_global_ratio": 0.2159000000000001
+          },
+          {
+            "symbol": "ORCA/USDT:USDT",
+            "signal_ts": 1782706500000,
+            "split": "train",
+            "net_pct": -3.16,
+            "oi_value_change_1h_pct": 0.764176108420922,
+            "oi_value_change_6h_pct": 0.4988582780958595,
+            "oi_value_change_24h_pct": 1.449404164283341,
+            "taker_buy_sell_ratio": 1.134,
+            "global_long_short_ratio": 1.4802,
+            "top_long_short_ratio": 1.517,
+            "top_minus_global_ratio": 0.036799999999999944
+          },
+          {
+            "symbol": "BTW/USDT:USDT",
+            "signal_ts": 1783231200000,
+            "split": "train",
+            "net_pct": 5.04,
+            "oi_value_change_1h_pct": -0.8807106609840853,
+            "oi_value_change_6h_pct": 0.40967483612723843,
+            "oi_value_change_24h_pct": 7.889947793799368,
+            "taker_buy_sell_ratio": 1.1963,
+            "global_long_short_ratio": 0.9616,
+            "top_long_short_ratio": 1.1678,
+            "top_minus_global_ratio": 0.20619999999999994
+          }
+        ],
+        "test_rows": [
+          {
+            "symbol": "BILL/USDT:USDT",
+            "signal_ts": 1783699200000,
+            "split": "test",
+            "net_pct": -2.898019,
+            "oi_value_change_1h_pct": -2.6618902685598966,
+            "oi_value_change_6h_pct": 1.178687420891511,
+            "oi_value_change_24h_pct": 2.157505790610781,
+            "taker_buy_sell_ratio": 1.2712,
+            "global_long_short_ratio": 1.2543,
+            "top_long_short_ratio": 1.3793,
+            "top_minus_global_ratio": 0.125
+          }
+        ],
+        "score": 0.9019228477208149
+      },
+      {
+        "rule": {
+          "oi_6h_min_pct": 0.0,
+          "oi_24h_min_pct": 0.0,
+          "taker_buy_sell_min": 1.08
+        },
+        "train": {
+          "n": 8,
+          "win_rate_pct": 37.5,
+          "avg_net_pct": 0.2555365,
+          "sum_net_pct": 2.044292,
+          "profit_factor": 1.194376531720733
+        },
+        "test": {
+          "n": 1,
+          "win_rate_pct": 0.0,
+          "avg_net_pct": -2.898019,
+          "sum_net_pct": -2.898019,
+          "profit_factor": 0.0
+        },
+        "train_rows": [
+          {
+            "symbol": "ORDI/USDT:USDT",
+            "signal_ts": 1781874900000,
+            "split": "train",
+            "net_pct": 5.771467,
+            "oi_value_change_1h_pct": 0.4849175991081589,
+            "oi_value_change_6h_pct": 0.8053474744559974,
+            "oi_value_change_24h_pct": 3.536284655107824,
+            "taker_buy_sell_ratio": 1.259,
+            "global_long_short_ratio": 0.6722,
+            "top_long_short_ratio": 0.9627,
+            "top_minus_global_ratio": 0.2905
+          },
+          {
+            "symbol": "MEME/USDT:USDT",
+            "signal_ts": 1781914500000,
+            "split": "train",
+            "net_pct": -2.121284,
+            "oi_value_change_1h_pct": 0.36141437593688597,
+            "oi_value_change_6h_pct": 0.5129282139413549,
+            "oi_value_change_24h_pct": 9.546334094100706,
+            "taker_buy_sell_ratio": 1.4975,
+            "global_long_short_ratio": 0.8911,
+            "top_long_short_ratio": 1.1231,
+            "top_minus_global_ratio": 0.23199999999999998
+          },
+          {
+            "symbol": "WLD/USDT:USDT",
+            "signal_ts": 1782054900000,
+            "split": "train",
+            "net_pct": -2.24426,
+            "oi_value_change_1h_pct": 0.28376594421750667,
+            "oi_value_change_6h_pct": 1.7027399703415824,
+            "oi_value_change_24h_pct": 3.6009640901113693,
+            "taker_buy_sell_ratio": 1.1459,
+            "global_long_short_ratio": 1.209,
+            "top_long_short_ratio": 1.2472,
+            "top_minus_global_ratio": 0.03820000000000001
+          },
+          {
+            "symbol": "TAIKO/USDT:USDT",
+            "signal_ts": 1782274500000,
+            "split": "train",
+            "net_pct": -2.635147,
+            "oi_value_change_1h_pct": 2.0924264327765174,
+            "oi_value_change_6h_pct": 4.311071297074309,
+            "oi_value_change_24h_pct": 3.243935119078256,
+            "taker_buy_sell_ratio": 1.1983,
+            "global_long_short_ratio": 2.8551,
+            "top_long_short_ratio": 2.6697,
+            "top_minus_global_ratio": -0.1854
+          },
+          {
+            "symbol": "PUMP/USDT:USDT",
+            "signal_ts": 1782571500000,
+            "split": "train",
+            "net_pct": 1.75,
+            "oi_value_change_1h_pct": 1.5858567458072237,
+            "oi_value_change_6h_pct": 1.7554175971633557,
+            "oi_value_change_24h_pct": 6.250644798291205,
+            "taker_buy_sell_ratio": 1.1814,
+            "global_long_short_ratio": 0.5632,
+            "top_long_short_ratio": 0.7232,
+            "top_minus_global_ratio": 0.15999999999999992
+          },
+          {
+            "symbol": "CHIP/USDT:USDT",
+            "signal_ts": 1782573300000,
+            "split": "train",
+            "net_pct": -0.356484,
+            "oi_value_change_1h_pct": -0.8164560999840531,
+            "oi_value_change_6h_pct": 1.9951971740651553,
+            "oi_value_change_24h_pct": 2.713834613391053,
+            "taker_buy_sell_ratio": 1.1862,
+            "global_long_short_ratio": 0.5911,
+            "top_long_short_ratio": 0.807,
+            "top_minus_global_ratio": 0.2159000000000001
+          },
+          {
+            "symbol": "ORCA/USDT:USDT",
+            "signal_ts": 1782706500000,
+            "split": "train",
+            "net_pct": -3.16,
+            "oi_value_change_1h_pct": 0.764176108420922,
+            "oi_value_change_6h_pct": 0.4988582780958595,
+            "oi_value_change_24h_pct": 1.449404164283341,
+            "taker_buy_sell_ratio": 1.134,
+            "global_long_short_ratio": 1.4802,
+            "top_long_short_ratio": 1.517,
+            "top_minus_global_ratio": 0.036799999999999944
+          },
+          {
+            "symbol": "BTW/USDT:USDT",
+            "signal_ts": 1783231200000,
+            "split": "train",
+            "net_pct": 5.04,
+            "oi_value_change_1h_pct": -0.8807106609840853,
+            "oi_value_change_6h_pct": 0.40967483612723843,
+            "oi_value_change_24h_pct": 7.889947793799368,
+            "taker_buy_sell_ratio": 1.1963,
+            "global_long_short_ratio": 0.9616,
+            "top_long_short_ratio": 1.1678,
+            "top_minus_global_ratio": 0.20619999999999994
+          }
+        ],
+        "test_rows": [
+          {
+            "symbol": "BILL/USDT:USDT",
+            "signal_ts": 1783699200000,
+            "split": "test",
+            "net_pct": -2.898019,
+            "oi_value_change_1h_pct": -2.6618902685598966,
+            "oi_value_change_6h_pct": 1.178687420891511,
+            "oi_value_change_24h_pct": 2.157505790610781,
+            "taker_buy_sell_ratio": 1.2712,
+            "global_long_short_ratio": 1.2543,
+            "top_long_short_ratio": 1.3793,
+            "top_minus_global_ratio": 0.125
+          }
+        ],
+        "score": 0.9019228477208149
+      }
+    ]
+  },
+  "events": [
+    {
+      "symbol": "BEAT/USDT:USDT",
+      "date_utc": "2026-06-19",
+      "anchor_utc": "2026-06-19T02:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 3.1145817705019896,
+        "oi_value_change_6h_pct": -6.189253211106005,
+        "oi_value_change_24h_pct": -18.919136585855856,
+        "taker_buy_sell_ratio": 0.9629,
+        "global_long_short_ratio": 1.3359,
+        "top_long_short_ratio": 1.4643,
+        "top_minus_global_ratio": 0.12839999999999985
+      },
+      "control_n": 1,
+      "control_median": {
+        "oi_value_change_1h_pct": -3.813120211838239,
+        "oi_value_change_6h_pct": null,
+        "oi_value_change_24h_pct": null,
+        "taker_buy_sell_ratio": 0.9735,
+        "global_long_short_ratio": 1.2287,
+        "top_long_short_ratio": 1.3452,
+        "top_minus_global_ratio": 0.11650000000000005
+      }
+    },
+    {
+      "symbol": "BSB/USDT:USDT",
+      "date_utc": "2026-06-19",
+      "anchor_utc": "2026-06-19T00:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.8976112333960895,
+        "oi_value_change_6h_pct": -23.253580019275823,
+        "oi_value_change_24h_pct": -31.73782180869994,
+        "taker_buy_sell_ratio": 0.8414,
+        "global_long_short_ratio": 1.5661,
+        "top_long_short_ratio": 1.635,
+        "top_minus_global_ratio": 0.06889999999999996
+      },
+      "control_n": 1,
+      "control_median": {
+        "oi_value_change_1h_pct": null,
+        "oi_value_change_6h_pct": null,
+        "oi_value_change_24h_pct": null,
+        "taker_buy_sell_ratio": 1.0126,
+        "global_long_short_ratio": 1.3781,
+        "top_long_short_ratio": 1.3305,
+        "top_minus_global_ratio": -0.04760000000000009
+      }
+    },
+    {
+      "symbol": "HEI/USDT:USDT",
+      "date_utc": "2026-06-19",
+      "anchor_utc": "2026-06-19T03:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.10966907020217853,
+        "oi_value_change_6h_pct": 0.20111636022293045,
+        "oi_value_change_24h_pct": 5.797618941748062,
+        "taker_buy_sell_ratio": 1.2282,
+        "global_long_short_ratio": 0.5415,
+        "top_long_short_ratio": 0.6678,
+        "top_minus_global_ratio": 0.12629999999999997
+      },
+      "control_n": 1,
+      "control_median": {
+        "oi_value_change_1h_pct": 1.5416659823760392,
+        "oi_value_change_6h_pct": null,
+        "oi_value_change_24h_pct": null,
+        "taker_buy_sell_ratio": 1.1959,
+        "global_long_short_ratio": 0.487,
+        "top_long_short_ratio": 0.6474,
+        "top_minus_global_ratio": 0.1604
+      }
+    },
+    {
+      "symbol": "LUMIA/USDT:USDT",
+      "date_utc": "2026-06-19",
+      "anchor_utc": "2026-06-19T11:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 2.1659668050993286,
+        "oi_value_change_6h_pct": 1.0023415106538813,
+        "oi_value_change_24h_pct": 4.245738366154095,
+        "taker_buy_sell_ratio": 0.983,
+        "global_long_short_ratio": 1.1964,
+        "top_long_short_ratio": 1.5316,
+        "top_minus_global_ratio": 0.33520000000000016
+      },
+      "control_n": 1,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.5603693216835626,
+        "oi_value_change_6h_pct": 0.12221235920995,
+        "oi_value_change_24h_pct": null,
+        "taker_buy_sell_ratio": 1.3272,
+        "global_long_short_ratio": 1.3321,
+        "top_long_short_ratio": 1.6846,
+        "top_minus_global_ratio": 0.35250000000000004
+      }
+    },
+    {
+      "symbol": "RIF/USDT:USDT",
+      "date_utc": "2026-06-19",
+      "anchor_utc": "2026-06-19T00:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.7273333275367166,
+        "oi_value_change_6h_pct": -8.858927851198006,
+        "oi_value_change_24h_pct": -6.41467292652419,
+        "taker_buy_sell_ratio": 1.5295,
+        "global_long_short_ratio": 0.5058,
+        "top_long_short_ratio": 0.648,
+        "top_minus_global_ratio": 0.1422
+      },
+      "control_n": 1,
+      "control_median": {
+        "oi_value_change_1h_pct": null,
+        "oi_value_change_6h_pct": null,
+        "oi_value_change_24h_pct": null,
+        "taker_buy_sell_ratio": 0.8221,
+        "global_long_short_ratio": 0.5526,
+        "top_long_short_ratio": 0.6534,
+        "top_minus_global_ratio": 0.1008
+      }
+    },
+    {
+      "symbol": "AGT/USDT:USDT",
+      "date_utc": "2026-06-20",
+      "anchor_utc": "2026-06-20T09:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -7.055656855524683,
+        "oi_value_change_6h_pct": -9.101693533642308,
+        "oi_value_change_24h_pct": -10.159749885064917,
+        "taker_buy_sell_ratio": 0.9173,
+        "global_long_short_ratio": 0.343,
+        "top_long_short_ratio": 0.3106,
+        "top_minus_global_ratio": -0.03240000000000004
+      },
+      "control_n": 2,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.7652596260922906,
+        "oi_value_change_6h_pct": -2.2083869500186646,
+        "oi_value_change_24h_pct": -5.149912335144824,
+        "taker_buy_sell_ratio": 1.2686,
+        "global_long_short_ratio": 0.32445,
+        "top_long_short_ratio": 0.31345,
+        "top_minus_global_ratio": -0.01100000000000001
+      }
+    },
+    {
+      "symbol": "CLO/USDT:USDT",
+      "date_utc": "2026-06-20",
+      "anchor_utc": "2026-06-20T02:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -1.5192067692553768,
+        "oi_value_change_6h_pct": 0.6093200578980218,
+        "oi_value_change_24h_pct": -6.845644431269193,
+        "taker_buy_sell_ratio": 1.103,
+        "global_long_short_ratio": 1.5556,
+        "top_long_short_ratio": 1.6096,
+        "top_minus_global_ratio": 0.053999999999999826
+      },
+      "control_n": 2,
+      "control_median": {
+        "oi_value_change_1h_pct": 5.063610411367547,
+        "oi_value_change_6h_pct": 5.798682840046054,
+        "oi_value_change_24h_pct": 30.277234101618888,
+        "taker_buy_sell_ratio": 0.9520500000000001,
+        "global_long_short_ratio": 1.28565,
+        "top_long_short_ratio": 1.3721999999999999,
+        "top_minus_global_ratio": 0.08655000000000002
+      }
+    },
+    {
+      "symbol": "GUA/USDT:USDT",
+      "date_utc": "2026-06-20",
+      "anchor_utc": "2026-06-20T06:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -1.465835115941183,
+        "oi_value_change_6h_pct": -3.796078041959272,
+        "oi_value_change_24h_pct": -21.308589792725265,
+        "taker_buy_sell_ratio": 1.0446,
+        "global_long_short_ratio": 1.6406,
+        "top_long_short_ratio": 1.2129,
+        "top_minus_global_ratio": -0.42769999999999997
+      },
+      "control_n": 2,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.6567063274787732,
+        "oi_value_change_6h_pct": -14.039596248512353,
+        "oi_value_change_24h_pct": 1.281430157644814,
+        "taker_buy_sell_ratio": 1.24425,
+        "global_long_short_ratio": 1.3395000000000001,
+        "top_long_short_ratio": 1.07555,
+        "top_minus_global_ratio": -0.26395
+      }
+    },
+    {
+      "symbol": "SYN/USDT:USDT",
+      "date_utc": "2026-06-20",
+      "anchor_utc": "2026-06-20T00:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.5725573717645815,
+        "oi_value_change_6h_pct": 6.278698394419302,
+        "oi_value_change_24h_pct": -6.112323666516684,
+        "taker_buy_sell_ratio": 1.0103,
+        "global_long_short_ratio": 0.5302,
+        "top_long_short_ratio": 0.4665,
+        "top_minus_global_ratio": -0.06369999999999998
+      },
+      "control_n": 1,
+      "control_median": {
+        "oi_value_change_1h_pct": 1.4810289315305702,
+        "oi_value_change_6h_pct": 12.194662837873338,
+        "oi_value_change_24h_pct": 165.26484495732657,
+        "taker_buy_sell_ratio": 1.0133,
+        "global_long_short_ratio": 0.5065,
+        "top_long_short_ratio": 0.431,
+        "top_minus_global_ratio": -0.07549999999999996
+      }
+    },
+    {
+      "symbol": "US/USDT:USDT",
+      "date_utc": "2026-06-20",
+      "anchor_utc": "2026-06-20T07:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.041849006761629504,
+        "oi_value_change_6h_pct": 1.3388130635848539,
+        "oi_value_change_24h_pct": -16.907618239764453,
+        "taker_buy_sell_ratio": 1.5697,
+        "global_long_short_ratio": 1.8337,
+        "top_long_short_ratio": 1.5727,
+        "top_minus_global_ratio": -0.2610000000000001
+      },
+      "control_n": 2,
+      "control_median": {
+        "oi_value_change_1h_pct": 1.762662127382153,
+        "oi_value_change_6h_pct": 1.7365100573234038,
+        "oi_value_change_24h_pct": 1.145482211434179,
+        "taker_buy_sell_ratio": 1.1303999999999998,
+        "global_long_short_ratio": 1.6455,
+        "top_long_short_ratio": 1.4819,
+        "top_minus_global_ratio": -0.16359999999999997
+      }
+    },
+    {
+      "symbol": "RESOLV/USDT:USDT",
+      "date_utc": "2026-06-21",
+      "anchor_utc": "2026-06-21T14:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 4.791374141516558,
+        "oi_value_change_6h_pct": 1.371496065438027,
+        "oi_value_change_24h_pct": 73.920537255339,
+        "taker_buy_sell_ratio": 1.0548,
+        "global_long_short_ratio": 2.3944,
+        "top_long_short_ratio": 2.5336,
+        "top_minus_global_ratio": 0.13919999999999977
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.5852429201146148,
+        "oi_value_change_6h_pct": -0.06501332326130926,
+        "oi_value_change_24h_pct": -2.1416387883753387,
+        "taker_buy_sell_ratio": 0.8823,
+        "global_long_short_ratio": 2.4014,
+        "top_long_short_ratio": 3.075,
+        "top_minus_global_ratio": 0.7182000000000004
+      }
+    },
+    {
+      "symbol": "SAGA/USDT:USDT",
+      "date_utc": "2026-06-21",
+      "anchor_utc": "2026-06-21T08:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 3.838801524878188,
+        "oi_value_change_6h_pct": 3.78576530814696,
+        "oi_value_change_24h_pct": 8.728101522826236,
+        "taker_buy_sell_ratio": 0.9852,
+        "global_long_short_ratio": 2.6805,
+        "top_long_short_ratio": 3.3029,
+        "top_minus_global_ratio": 0.6224000000000003
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 1.0501409984504884,
+        "oi_value_change_6h_pct": -0.07361614348451173,
+        "oi_value_change_24h_pct": -3.197273428438047,
+        "taker_buy_sell_ratio": 1.0951,
+        "global_long_short_ratio": 2.1437,
+        "top_long_short_ratio": 2.8081,
+        "top_minus_global_ratio": 0.6622999999999999
+      }
+    },
+    {
+      "symbol": "SYN/USDT:USDT",
+      "date_utc": "2026-06-21",
+      "anchor_utc": "2026-06-21T10:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.741290131370631,
+        "oi_value_change_6h_pct": -2.6863731113969114,
+        "oi_value_change_24h_pct": -29.183129220947677,
+        "taker_buy_sell_ratio": 1.0144,
+        "global_long_short_ratio": 0.5691,
+        "top_long_short_ratio": 0.4784,
+        "top_minus_global_ratio": -0.09070000000000006
+      },
+      "control_n": 1,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.2552008819743934,
+        "oi_value_change_6h_pct": -6.127480913484495,
+        "oi_value_change_24h_pct": 80.57738996651756,
+        "taker_buy_sell_ratio": 1.1432,
+        "global_long_short_ratio": 0.5277,
+        "top_long_short_ratio": 0.4624,
+        "top_minus_global_ratio": -0.06529999999999997
+      }
+    },
+    {
+      "symbol": "UAI/USDT:USDT",
+      "date_utc": "2026-06-21",
+      "anchor_utc": "2026-06-21T06:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.9644853196758008,
+        "oi_value_change_6h_pct": 3.109531627154438,
+        "oi_value_change_24h_pct": 3.011910143457741,
+        "taker_buy_sell_ratio": 0.5591,
+        "global_long_short_ratio": 2.2446,
+        "top_long_short_ratio": 2.3135,
+        "top_minus_global_ratio": 0.06889999999999974
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.09516634898917298,
+        "oi_value_change_6h_pct": -0.29561125810591005,
+        "oi_value_change_24h_pct": -8.705960790461603,
+        "taker_buy_sell_ratio": 0.781,
+        "global_long_short_ratio": 2.2982,
+        "top_long_short_ratio": 2.319,
+        "top_minus_global_ratio": -0.0809000000000002
+      }
+    },
+    {
+      "symbol": "UB/USDT:USDT",
+      "date_utc": "2026-06-21",
+      "anchor_utc": "2026-06-21T02:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.08783089621148266,
+        "oi_value_change_6h_pct": 3.2342396025108133,
+        "oi_value_change_24h_pct": 18.06309254365779,
+        "taker_buy_sell_ratio": 1.302,
+        "global_long_short_ratio": 0.6731,
+        "top_long_short_ratio": 0.7584,
+        "top_minus_global_ratio": 0.08529999999999993
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 1.9436891130870215,
+        "oi_value_change_6h_pct": 0.9613583237255585,
+        "oi_value_change_24h_pct": -18.061040537329177,
+        "taker_buy_sell_ratio": 0.9139,
+        "global_long_short_ratio": 0.6835,
+        "top_long_short_ratio": 0.7513,
+        "top_minus_global_ratio": 0.0817
+      }
+    },
+    {
+      "symbol": "BEL/USDT:USDT",
+      "date_utc": "2026-06-22",
+      "anchor_utc": "2026-06-22T01:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -5.384741412245953,
+        "oi_value_change_6h_pct": 6.426988905318876,
+        "oi_value_change_24h_pct": 7.44638953385699,
+        "taker_buy_sell_ratio": 1.0231,
+        "global_long_short_ratio": 1.3261,
+        "top_long_short_ratio": 1.2457,
+        "top_minus_global_ratio": -0.08040000000000003
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -2.931380309331444,
+        "oi_value_change_6h_pct": -6.082709179465107,
+        "oi_value_change_24h_pct": 30.3281852869723,
+        "taker_buy_sell_ratio": 0.9121,
+        "global_long_short_ratio": 1.7556,
+        "top_long_short_ratio": 1.9472,
+        "top_minus_global_ratio": 0.1916
+      }
+    },
+    {
+      "symbol": "BLESS/USDT:USDT",
+      "date_utc": "2026-06-22",
+      "anchor_utc": "2026-06-22T12:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 3.6770942521077155,
+        "oi_value_change_6h_pct": 2.8406086352489313,
+        "oi_value_change_24h_pct": 2.315909159148788,
+        "taker_buy_sell_ratio": 0.9172,
+        "global_long_short_ratio": 1.9586,
+        "top_long_short_ratio": 1.8852,
+        "top_minus_global_ratio": -0.07339999999999991
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -1.2979040553371624,
+        "oi_value_change_6h_pct": 0.6753687521332319,
+        "oi_value_change_24h_pct": -0.5928471109392208,
+        "taker_buy_sell_ratio": 1.0291,
+        "global_long_short_ratio": 1.9104,
+        "top_long_short_ratio": 1.8885,
+        "top_minus_global_ratio": -0.02190000000000003
+      }
+    },
+    {
+      "symbol": "CLO/USDT:USDT",
+      "date_utc": "2026-06-22",
+      "anchor_utc": "2026-06-22T00:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.5814364450268394,
+        "oi_value_change_6h_pct": -0.936902775278281,
+        "oi_value_change_24h_pct": -36.34427907455537,
+        "taker_buy_sell_ratio": 1.0211,
+        "global_long_short_ratio": 1.6553,
+        "top_long_short_ratio": 1.8074,
+        "top_minus_global_ratio": 0.1520999999999999
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.9825382241970271,
+        "oi_value_change_6h_pct": -5.709414525443135,
+        "oi_value_change_24h_pct": 24.03879488613443,
+        "taker_buy_sell_ratio": 1.0146,
+        "global_long_short_ratio": 1.1863,
+        "top_long_short_ratio": 1.3348,
+        "top_minus_global_ratio": 0.05010000000000003
+      }
+    },
+    {
+      "symbol": "DEXE/USDT:USDT",
+      "date_utc": "2026-06-22",
+      "anchor_utc": "2026-06-22T07:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.47724917465344907,
+        "oi_value_change_6h_pct": -0.5314011864320012,
+        "oi_value_change_24h_pct": -3.371243037595195,
+        "taker_buy_sell_ratio": 1.5764,
+        "global_long_short_ratio": 0.217,
+        "top_long_short_ratio": 0.2736,
+        "top_minus_global_ratio": 0.05660000000000001
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -1.0102995696246286,
+        "oi_value_change_6h_pct": -5.643689604625923,
+        "oi_value_change_24h_pct": -5.704785762777009,
+        "taker_buy_sell_ratio": 0.8947,
+        "global_long_short_ratio": 0.2516,
+        "top_long_short_ratio": 0.3001,
+        "top_minus_global_ratio": 0.04849999999999999
+      }
+    },
+    {
+      "symbol": "FOLKS/USDT:USDT",
+      "date_utc": "2026-06-22",
+      "anchor_utc": "2026-06-22T10:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.9101217502790915,
+        "oi_value_change_6h_pct": -4.259649137795218,
+        "oi_value_change_24h_pct": -10.070491294175133,
+        "taker_buy_sell_ratio": 1.1676,
+        "global_long_short_ratio": 2.012,
+        "top_long_short_ratio": 2.3124,
+        "top_minus_global_ratio": 0.3003999999999998
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.9024145681572282,
+        "oi_value_change_6h_pct": -1.6465154584674568,
+        "oi_value_change_24h_pct": -3.705272181820718,
+        "taker_buy_sell_ratio": 1.0999,
+        "global_long_short_ratio": 2.3738,
+        "top_long_short_ratio": 2.5625,
+        "top_minus_global_ratio": 0.18869999999999987
+      }
+    },
+    {
+      "symbol": "ID/USDT:USDT",
+      "date_utc": "2026-06-22",
+      "anchor_utc": "2026-06-22T02:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 3.6697849530461513,
+        "oi_value_change_6h_pct": -2.637444203697048,
+        "oi_value_change_24h_pct": 21.690441503127445,
+        "taker_buy_sell_ratio": 1.0627,
+        "global_long_short_ratio": 0.6221,
+        "top_long_short_ratio": 0.8152,
+        "top_minus_global_ratio": 0.19310000000000005
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.0791973907732002,
+        "oi_value_change_6h_pct": -3.452876720651399,
+        "oi_value_change_24h_pct": -8.464750589489967,
+        "taker_buy_sell_ratio": 0.7232,
+        "global_long_short_ratio": 0.7712,
+        "top_long_short_ratio": 0.998,
+        "top_minus_global_ratio": 0.20319999999999994
+      }
+    },
+    {
+      "symbol": "LAYER/USDT:USDT",
+      "date_utc": "2026-06-22",
+      "anchor_utc": "2026-06-22T08:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.9998104965919241,
+        "oi_value_change_6h_pct": 1.10995751203109,
+        "oi_value_change_24h_pct": 0.03165068488744094,
+        "taker_buy_sell_ratio": 0.9285,
+        "global_long_short_ratio": 2.0175,
+        "top_long_short_ratio": 2.0257,
+        "top_minus_global_ratio": 0.008199999999999985
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.25291050891556033,
+        "oi_value_change_6h_pct": -1.990095265733216,
+        "oi_value_change_24h_pct": -2.2601195624896153,
+        "taker_buy_sell_ratio": 1.1996,
+        "global_long_short_ratio": 1.7886,
+        "top_long_short_ratio": 1.8769,
+        "top_minus_global_ratio": 0.0815999999999999
+      }
+    },
+    {
+      "symbol": "LUMIA/USDT:USDT",
+      "date_utc": "2026-06-22",
+      "anchor_utc": "2026-06-22T07:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.9208095562387442,
+        "oi_value_change_6h_pct": 1.6432932456258653,
+        "oi_value_change_24h_pct": -3.0975038021305967,
+        "taker_buy_sell_ratio": 0.5155,
+        "global_long_short_ratio": 1.1,
+        "top_long_short_ratio": 1.3663,
+        "top_minus_global_ratio": 0.2663
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 1.5610124674057646,
+        "oi_value_change_6h_pct": -3.7557246505501407,
+        "oi_value_change_24h_pct": 7.115602129846161,
+        "taker_buy_sell_ratio": 1.1542,
+        "global_long_short_ratio": 1.0678,
+        "top_long_short_ratio": 1.2452,
+        "top_minus_global_ratio": 0.18510000000000004
+      }
+    },
+    {
+      "symbol": "SYN/USDT:USDT",
+      "date_utc": "2026-06-22",
+      "anchor_utc": "2026-06-22T00:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 4.9240588799737806,
+        "oi_value_change_6h_pct": 26.099568603257705,
+        "oi_value_change_24h_pct": 35.33274921006144,
+        "taker_buy_sell_ratio": 1.0382,
+        "global_long_short_ratio": 0.6559,
+        "top_long_short_ratio": 0.5444,
+        "top_minus_global_ratio": -0.11150000000000004
+      },
+      "control_n": 1,
+      "control_median": {
+        "oi_value_change_1h_pct": 1.4810289315305702,
+        "oi_value_change_6h_pct": 12.194662837873338,
+        "oi_value_change_24h_pct": 165.26484495732657,
+        "taker_buy_sell_ratio": 1.0133,
+        "global_long_short_ratio": 0.5065,
+        "top_long_short_ratio": 0.431,
+        "top_minus_global_ratio": -0.07549999999999996
+      }
+    },
+    {
+      "symbol": "UB/USDT:USDT",
+      "date_utc": "2026-06-22",
+      "anchor_utc": "2026-06-22T00:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -1.7166223430460814,
+        "oi_value_change_6h_pct": 10.428632507582014,
+        "oi_value_change_24h_pct": 69.95147802738467,
+        "taker_buy_sell_ratio": 1.0387,
+        "global_long_short_ratio": 0.634,
+        "top_long_short_ratio": 0.6504,
+        "top_minus_global_ratio": 0.01639999999999997
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -2.0044125631910936,
+        "oi_value_change_6h_pct": -2.8941782409382943,
+        "oi_value_change_24h_pct": -19.505694366285802,
+        "taker_buy_sell_ratio": 1.092,
+        "global_long_short_ratio": 0.6935,
+        "top_long_short_ratio": 0.7575,
+        "top_minus_global_ratio": 0.07920000000000005
+      }
+    },
+    {
+      "symbol": "龙虾/USDT:USDT",
+      "date_utc": "2026-06-22",
+      "anchor_utc": "2026-06-22T03:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.1510391215611584,
+        "oi_value_change_6h_pct": -4.338159543620302,
+        "oi_value_change_24h_pct": 4.590316726476407,
+        "taker_buy_sell_ratio": 0.7662,
+        "global_long_short_ratio": 1.6589,
+        "top_long_short_ratio": 1.8918,
+        "top_minus_global_ratio": 0.23289999999999988
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.1980955819139929,
+        "oi_value_change_6h_pct": -4.698996024031999,
+        "oi_value_change_24h_pct": -3.2887998099362825,
+        "taker_buy_sell_ratio": 0.5879,
+        "global_long_short_ratio": 1.2904,
+        "top_long_short_ratio": 1.4789,
+        "top_minus_global_ratio": 0.1885000000000001
+      }
+    },
+    {
+      "symbol": "BEAT/USDT:USDT",
+      "date_utc": "2026-06-23",
+      "anchor_utc": "2026-06-23T11:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -1.5157038443361914,
+        "oi_value_change_6h_pct": -2.2371024275443907,
+        "oi_value_change_24h_pct": -7.671254958853058,
+        "taker_buy_sell_ratio": 0.9849,
+        "global_long_short_ratio": 1.4588,
+        "top_long_short_ratio": 1.6624,
+        "top_minus_global_ratio": 0.2036
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.9771332780966202,
+        "oi_value_change_6h_pct": -0.8219637034917238,
+        "oi_value_change_24h_pct": -3.9799228127385233,
+        "taker_buy_sell_ratio": 1.0032,
+        "global_long_short_ratio": 1.5694,
+        "top_long_short_ratio": 1.7071,
+        "top_minus_global_ratio": 0.13770000000000016
+      }
+    },
+    {
+      "symbol": "DEXE/USDT:USDT",
+      "date_utc": "2026-06-23",
+      "anchor_utc": "2026-06-22T23:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.9517356474062488,
+        "oi_value_change_6h_pct": -0.845529133680023,
+        "oi_value_change_24h_pct": 39.56146446806763,
+        "taker_buy_sell_ratio": 1.058,
+        "global_long_short_ratio": 0.2789,
+        "top_long_short_ratio": 0.3087,
+        "top_minus_global_ratio": 0.029799999999999993
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.04449669939217138,
+        "oi_value_change_6h_pct": 2.774705713115222,
+        "oi_value_change_24h_pct": 0.2404734973897371,
+        "taker_buy_sell_ratio": 0.9563,
+        "global_long_short_ratio": 0.2343,
+        "top_long_short_ratio": 0.2887,
+        "top_minus_global_ratio": 0.04520000000000002
+      }
+    },
+    {
+      "symbol": "ESPORTS/USDT:USDT",
+      "date_utc": "2026-06-23",
+      "anchor_utc": "2026-06-23T02:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.3918754575678483,
+        "oi_value_change_6h_pct": 1.4816717134910284,
+        "oi_value_change_24h_pct": -13.416776447445022,
+        "taker_buy_sell_ratio": 1.1843,
+        "global_long_short_ratio": 3.2772,
+        "top_long_short_ratio": 3.6062,
+        "top_minus_global_ratio": 0.32899999999999974
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 3.691191878601452,
+        "oi_value_change_6h_pct": 0.3571821882922155,
+        "oi_value_change_24h_pct": 6.433858196677944,
+        "taker_buy_sell_ratio": 0.8093,
+        "global_long_short_ratio": 4.0025,
+        "top_long_short_ratio": 4.102,
+        "top_minus_global_ratio": 0.09949999999999992
+      }
+    },
+    {
+      "symbol": "HEI/USDT:USDT",
+      "date_utc": "2026-06-23",
+      "anchor_utc": "2026-06-23T07:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 11.941812785192996,
+        "oi_value_change_6h_pct": 14.615182291674556,
+        "oi_value_change_24h_pct": 4.673215402822861,
+        "taker_buy_sell_ratio": 0.8848,
+        "global_long_short_ratio": 0.4418,
+        "top_long_short_ratio": 0.62,
+        "top_minus_global_ratio": 0.17819999999999997
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.8813638330625428,
+        "oi_value_change_6h_pct": -4.124669812426318,
+        "oi_value_change_24h_pct": -19.18238943659203,
+        "taker_buy_sell_ratio": 0.8441,
+        "global_long_short_ratio": 0.7431,
+        "top_long_short_ratio": 0.842,
+        "top_minus_global_ratio": 0.1322000000000001
+      }
+    },
+    {
+      "symbol": "RESOLV/USDT:USDT",
+      "date_utc": "2026-06-23",
+      "anchor_utc": "2026-06-23T00:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.4953725799945694,
+        "oi_value_change_6h_pct": -6.622808736832486,
+        "oi_value_change_24h_pct": -5.5827435992951475,
+        "taker_buy_sell_ratio": 0.9309,
+        "global_long_short_ratio": 1.8531,
+        "top_long_short_ratio": 1.9913,
+        "top_minus_global_ratio": 0.1382000000000001
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.24864434434404004,
+        "oi_value_change_6h_pct": 1.3240407033316082,
+        "oi_value_change_24h_pct": -2.4434751811025834,
+        "taker_buy_sell_ratio": 0.9571,
+        "global_long_short_ratio": 2.3333,
+        "top_long_short_ratio": 2.9573,
+        "top_minus_global_ratio": 0.6240000000000001
+      }
+    },
+    {
+      "symbol": "BAS/USDT:USDT",
+      "date_utc": "2026-06-24",
+      "anchor_utc": "2026-06-24T07:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.7392223663965414,
+        "oi_value_change_6h_pct": -1.88019198326832,
+        "oi_value_change_24h_pct": 9.770071228851362,
+        "taker_buy_sell_ratio": 1.247,
+        "global_long_short_ratio": 1.2758,
+        "top_long_short_ratio": 1.4254,
+        "top_minus_global_ratio": 0.14959999999999996
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.6431534518279602,
+        "oi_value_change_6h_pct": -1.205258163210532,
+        "oi_value_change_24h_pct": 0.29066586874118006,
+        "taker_buy_sell_ratio": 0.8297,
+        "global_long_short_ratio": 1.5316,
+        "top_long_short_ratio": 1.5523,
+        "top_minus_global_ratio": -0.03210000000000002
+      }
+    },
+    {
+      "symbol": "CLO/USDT:USDT",
+      "date_utc": "2026-06-24",
+      "anchor_utc": "2026-06-24T01:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.5663711678787653,
+        "oi_value_change_6h_pct": -1.0446121783111662,
+        "oi_value_change_24h_pct": -16.259661634005685,
+        "taker_buy_sell_ratio": 1.1731,
+        "global_long_short_ratio": 1.9577,
+        "top_long_short_ratio": 1.986,
+        "top_minus_global_ratio": 0.028299999999999992
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.9133000614750975,
+        "oi_value_change_6h_pct": -1.4374209145054162,
+        "oi_value_change_24h_pct": 25.295796243457545,
+        "taker_buy_sell_ratio": 1.0288,
+        "global_long_short_ratio": 1.2978,
+        "top_long_short_ratio": 1.263,
+        "top_minus_global_ratio": -0.10439999999999983
+      }
+    },
+    {
+      "symbol": "LAB/USDT:USDT",
+      "date_utc": "2026-06-24",
+      "anchor_utc": "2026-06-24T05:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.09303983361870216,
+        "oi_value_change_6h_pct": -6.4517541054001875,
+        "oi_value_change_24h_pct": -18.55196808613695,
+        "taker_buy_sell_ratio": 1.2931,
+        "global_long_short_ratio": 0.5765,
+        "top_long_short_ratio": 0.456,
+        "top_minus_global_ratio": -0.1205
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.5044221703018437,
+        "oi_value_change_6h_pct": 3.2418163280047763,
+        "oi_value_change_24h_pct": 10.029717884124633,
+        "taker_buy_sell_ratio": 1.0765,
+        "global_long_short_ratio": 0.5654,
+        "top_long_short_ratio": 0.459,
+        "top_minus_global_ratio": -0.1064
+      }
+    },
+    {
+      "symbol": "SLX/USDT:USDT",
+      "date_utc": "2026-06-24",
+      "anchor_utc": "2026-06-24T00:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 8.907681699886272,
+        "oi_value_change_6h_pct": 23.12007870435002,
+        "oi_value_change_24h_pct": 17.494243139377332,
+        "taker_buy_sell_ratio": 1.1742,
+        "global_long_short_ratio": 1.2356,
+        "top_long_short_ratio": 1.3436,
+        "top_minus_global_ratio": 0.10799999999999987
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -1.3238839609602815,
+        "oi_value_change_6h_pct": 2.9058579121271855,
+        "oi_value_change_24h_pct": 1.4156750013270214,
+        "taker_buy_sell_ratio": 0.942,
+        "global_long_short_ratio": 1.0088,
+        "top_long_short_ratio": 1.1137,
+        "top_minus_global_ratio": 0.09250000000000003
+      }
+    },
+    {
+      "symbol": "SYN/USDT:USDT",
+      "date_utc": "2026-06-24",
+      "anchor_utc": "2026-06-24T00:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -2.621429040370149,
+        "oi_value_change_6h_pct": -3.839258735611273,
+        "oi_value_change_24h_pct": -19.499849510394718,
+        "taker_buy_sell_ratio": 1.009,
+        "global_long_short_ratio": 0.5053,
+        "top_long_short_ratio": 0.4341,
+        "top_minus_global_ratio": -0.07119999999999999
+      },
+      "control_n": 2,
+      "control_median": {
+        "oi_value_change_1h_pct": 6.131159515549323,
+        "oi_value_change_6h_pct": 12.924758244531453,
+        "oi_value_change_24h_pct": 143.2717529442819,
+        "taker_buy_sell_ratio": 0.99655,
+        "global_long_short_ratio": 0.49874999999999997,
+        "top_long_short_ratio": 0.41695,
+        "top_minus_global_ratio": -0.08179999999999998
+      }
+    },
+    {
+      "symbol": "BAS/USDT:USDT",
+      "date_utc": "2026-06-25",
+      "anchor_utc": "2026-06-25T04:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -3.0714902007890177,
+        "oi_value_change_6h_pct": 4.041297060815285,
+        "oi_value_change_24h_pct": 43.305064488543096,
+        "taker_buy_sell_ratio": 1.0652,
+        "global_long_short_ratio": 1.0259,
+        "top_long_short_ratio": 0.9547,
+        "top_minus_global_ratio": -0.07120000000000004
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -1.6231773790256532,
+        "oi_value_change_6h_pct": -0.3749295536501607,
+        "oi_value_change_24h_pct": 0.5618587991550017,
+        "taker_buy_sell_ratio": 0.9447,
+        "global_long_short_ratio": 1.574,
+        "top_long_short_ratio": 1.5681,
+        "top_minus_global_ratio": -0.04079999999999995
+      }
+    },
+    {
+      "symbol": "HEI/USDT:USDT",
+      "date_utc": "2026-06-25",
+      "anchor_utc": "2026-06-25T05:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.3859800996318663,
+        "oi_value_change_6h_pct": -2.7274855471828174,
+        "oi_value_change_24h_pct": -30.27141485018242,
+        "taker_buy_sell_ratio": 0.9191,
+        "global_long_short_ratio": 0.8195,
+        "top_long_short_ratio": 0.8968,
+        "top_minus_global_ratio": 0.07730000000000004
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.22638541040185256,
+        "oi_value_change_6h_pct": -0.42136468823346096,
+        "oi_value_change_24h_pct": -10.554326945848658,
+        "taker_buy_sell_ratio": 1.1502,
+        "global_long_short_ratio": 0.6532,
+        "top_long_short_ratio": 0.7194,
+        "top_minus_global_ratio": 0.13690000000000002
+      }
+    },
+    {
+      "symbol": "IDOL/USDT:USDT",
+      "date_utc": "2026-06-25",
+      "anchor_utc": "2026-06-25T07:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -1.631748003687783,
+        "oi_value_change_6h_pct": -10.140787003057582,
+        "oi_value_change_24h_pct": -27.71989322106364,
+        "taker_buy_sell_ratio": 0.7087,
+        "global_long_short_ratio": 1.6511,
+        "top_long_short_ratio": 1.7579,
+        "top_minus_global_ratio": 0.1068
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.9982482933609704,
+        "oi_value_change_6h_pct": -1.2570519319006546,
+        "oi_value_change_24h_pct": 8.767942700997367,
+        "taker_buy_sell_ratio": 0.954,
+        "global_long_short_ratio": 1.936,
+        "top_long_short_ratio": 2.0395,
+        "top_minus_global_ratio": 0.10349999999999993
+      }
+    },
+    {
+      "symbol": "SLX/USDT:USDT",
+      "date_utc": "2026-06-25",
+      "anchor_utc": "2026-06-25T04:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -1.6743952073713486,
+        "oi_value_change_6h_pct": 53.3123641554444,
+        "oi_value_change_24h_pct": 181.04844563724686,
+        "taker_buy_sell_ratio": 0.9788,
+        "global_long_short_ratio": 0.9701,
+        "top_long_short_ratio": 0.8522,
+        "top_minus_global_ratio": -0.1179
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.7719788198810473,
+        "oi_value_change_6h_pct": -5.929080263953123,
+        "oi_value_change_24h_pct": -2.2883490512014437,
+        "taker_buy_sell_ratio": 0.8491,
+        "global_long_short_ratio": 1.0227,
+        "top_long_short_ratio": 1.082,
+        "top_minus_global_ratio": 0.07610000000000006
+      }
+    },
+    {
+      "symbol": "SYN/USDT:USDT",
+      "date_utc": "2026-06-25",
+      "anchor_utc": "2026-06-25T04:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.6132309560529237,
+        "oi_value_change_6h_pct": -6.426817844738963,
+        "oi_value_change_24h_pct": 8.487456948449479,
+        "taker_buy_sell_ratio": 1.1832,
+        "global_long_short_ratio": 0.4762,
+        "top_long_short_ratio": 0.4,
+        "top_minus_global_ratio": -0.07619999999999999
+      },
+      "control_n": 2,
+      "control_median": {
+        "oi_value_change_1h_pct": 1.8509995369087484,
+        "oi_value_change_6h_pct": -7.937209835653191,
+        "oi_value_change_24h_pct": 107.97461818463441,
+        "taker_buy_sell_ratio": 1.0922,
+        "global_long_short_ratio": 0.44615,
+        "top_long_short_ratio": 0.4095,
+        "top_minus_global_ratio": -0.03664999999999999
+      }
+    },
+    {
+      "symbol": "MAGMA/USDT:USDT",
+      "date_utc": "2026-06-26",
+      "anchor_utc": "2026-06-26T04:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.4402951293025925,
+        "oi_value_change_6h_pct": 1.577382277511541,
+        "oi_value_change_24h_pct": 1.5815166739819864,
+        "taker_buy_sell_ratio": 1.0147,
+        "global_long_short_ratio": 1.2114,
+        "top_long_short_ratio": 1.0619,
+        "top_minus_global_ratio": -0.14949999999999997
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.2291392596075581,
+        "oi_value_change_6h_pct": -1.0958471612873666,
+        "oi_value_change_24h_pct": -5.0873699398913725,
+        "taker_buy_sell_ratio": 0.8594,
+        "global_long_short_ratio": 0.944,
+        "top_long_short_ratio": 0.8584,
+        "top_minus_global_ratio": -0.0855999999999999
+      }
+    },
+    {
+      "symbol": "SKYAI/USDT:USDT",
+      "date_utc": "2026-06-26",
+      "anchor_utc": "2026-06-26T01:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.5538559504515095,
+        "oi_value_change_6h_pct": -0.46541662562700203,
+        "oi_value_change_24h_pct": 11.332749632857752,
+        "taker_buy_sell_ratio": 1.1648,
+        "global_long_short_ratio": 0.9361,
+        "top_long_short_ratio": 0.9451,
+        "top_minus_global_ratio": 0.009000000000000008
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.34591155712069277,
+        "oi_value_change_6h_pct": -2.5440566053270164,
+        "oi_value_change_24h_pct": -13.073719358107272,
+        "taker_buy_sell_ratio": 1.0332,
+        "global_long_short_ratio": 1.0496,
+        "top_long_short_ratio": 1.0317,
+        "top_minus_global_ratio": -0.017900000000000027
+      }
+    },
+    {
+      "symbol": "VELVET/USDT:USDT",
+      "date_utc": "2026-06-26",
+      "anchor_utc": "2026-06-26T12:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.8516955641107993,
+        "oi_value_change_6h_pct": 4.974022622932606,
+        "oi_value_change_24h_pct": 1.965214509268054,
+        "taker_buy_sell_ratio": 1.0328,
+        "global_long_short_ratio": 1.6631,
+        "top_long_short_ratio": 1.5575,
+        "top_minus_global_ratio": -0.10559999999999992
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.42613572770670016,
+        "oi_value_change_6h_pct": 0.640631259159985,
+        "oi_value_change_24h_pct": -1.8150531741263132,
+        "taker_buy_sell_ratio": 0.9149,
+        "global_long_short_ratio": 1.5621,
+        "top_long_short_ratio": 1.5368,
+        "top_minus_global_ratio": -0.054300000000000015
+      }
+    },
+    {
+      "symbol": "MYX/USDT:USDT",
+      "date_utc": "2026-06-27",
+      "anchor_utc": "2026-06-27T01:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.10098572916953374,
+        "oi_value_change_6h_pct": 0.3288187996053571,
+        "oi_value_change_24h_pct": 8.454086253634596,
+        "taker_buy_sell_ratio": 1.1692,
+        "global_long_short_ratio": 2.8551,
+        "top_long_short_ratio": 3.0032,
+        "top_minus_global_ratio": 0.1480999999999999
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.07572767375263467,
+        "oi_value_change_6h_pct": 0.8814211269708716,
+        "oi_value_change_24h_pct": -11.6740595252251,
+        "taker_buy_sell_ratio": 0.7799,
+        "global_long_short_ratio": 3.1771,
+        "top_long_short_ratio": 3.6838,
+        "top_minus_global_ratio": 0.32840000000000025
+      }
+    },
+    {
+      "symbol": "RAVE/USDT:USDT",
+      "date_utc": "2026-06-27",
+      "anchor_utc": "2026-06-27T14:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.2671246399780225,
+        "oi_value_change_6h_pct": 0.2514461530878531,
+        "oi_value_change_24h_pct": 1.4848639362914584,
+        "taker_buy_sell_ratio": 0.7167,
+        "global_long_short_ratio": 4.5897,
+        "top_long_short_ratio": 5.4977,
+        "top_minus_global_ratio": 0.9080000000000004
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 1.3850784636249003,
+        "oi_value_change_6h_pct": -0.12438761192404835,
+        "oi_value_change_24h_pct": -9.19821422948317,
+        "taker_buy_sell_ratio": 0.8207,
+        "global_long_short_ratio": 4.767,
+        "top_long_short_ratio": 5.5359,
+        "top_minus_global_ratio": 0.8401999999999994
+      }
+    },
+    {
+      "symbol": "SLX/USDT:USDT",
+      "date_utc": "2026-06-27",
+      "anchor_utc": "2026-06-27T00:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.15285303061933764,
+        "oi_value_change_6h_pct": -1.2491408273995308,
+        "oi_value_change_24h_pct": 3.3432371027826147,
+        "taker_buy_sell_ratio": 1.1023,
+        "global_long_short_ratio": 0.9448,
+        "top_long_short_ratio": 0.8505,
+        "top_minus_global_ratio": -0.09429999999999994
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -1.3238839609602815,
+        "oi_value_change_6h_pct": 2.9058579121271855,
+        "oi_value_change_24h_pct": 1.4156750013270214,
+        "taker_buy_sell_ratio": 0.8858,
+        "global_long_short_ratio": 1.0088,
+        "top_long_short_ratio": 1.1137,
+        "top_minus_global_ratio": 0.09250000000000003
+      }
+    },
+    {
+      "symbol": "VELVET/USDT:USDT",
+      "date_utc": "2026-06-27",
+      "anchor_utc": "2026-06-27T00:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 2.0455361431644947,
+        "oi_value_change_6h_pct": 20.770162626414688,
+        "oi_value_change_24h_pct": 64.62784310658525,
+        "taker_buy_sell_ratio": 0.8509,
+        "global_long_short_ratio": 1.2925,
+        "top_long_short_ratio": 1.1088,
+        "top_minus_global_ratio": -0.18369999999999997
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.259334715039361,
+        "oi_value_change_6h_pct": -1.9238290784253542,
+        "oi_value_change_24h_pct": -5.600747242835446,
+        "taker_buy_sell_ratio": 1.0366,
+        "global_long_short_ratio": 1.5621,
+        "top_long_short_ratio": 1.4876,
+        "top_minus_global_ratio": -0.03839999999999999
+      }
+    },
+    {
+      "symbol": "JCT/USDT:USDT",
+      "date_utc": "2026-06-28",
+      "anchor_utc": "2026-06-28T09:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.2060941932873215,
+        "oi_value_change_6h_pct": 0.8390805990198702,
+        "oi_value_change_24h_pct": 3.0109506780196194,
+        "taker_buy_sell_ratio": 1.1243,
+        "global_long_short_ratio": 1.5,
+        "top_long_short_ratio": 1.592,
+        "top_minus_global_ratio": 0.09200000000000008
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.7120845640037121,
+        "oi_value_change_6h_pct": -2.8984712430916604,
+        "oi_value_change_24h_pct": -3.005807376179759,
+        "taker_buy_sell_ratio": 0.7562,
+        "global_long_short_ratio": 1.3294,
+        "top_long_short_ratio": 1.4307,
+        "top_minus_global_ratio": 0.10130000000000017
+      }
+    },
+    {
+      "symbol": "MANTA/USDT:USDT",
+      "date_utc": "2026-06-28",
+      "anchor_utc": "2026-06-28T07:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.047951902340037655,
+        "oi_value_change_6h_pct": 6.511923704857403,
+        "oi_value_change_24h_pct": 9.268533970995986,
+        "taker_buy_sell_ratio": 1.2003,
+        "global_long_short_ratio": 1.1501,
+        "top_long_short_ratio": 1.6323,
+        "top_minus_global_ratio": 0.4822000000000002
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -4.023044081811689,
+        "oi_value_change_6h_pct": 0.24564033446095035,
+        "oi_value_change_24h_pct": 11.693679058500827,
+        "taker_buy_sell_ratio": 0.8383,
+        "global_long_short_ratio": 1.5867,
+        "top_long_short_ratio": 2.1027,
+        "top_minus_global_ratio": 0.5888
+      }
+    },
+    {
+      "symbol": "RAVE/USDT:USDT",
+      "date_utc": "2026-06-28",
+      "anchor_utc": "2026-06-28T03:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.3796701347228435,
+        "oi_value_change_6h_pct": -13.161149962405705,
+        "oi_value_change_24h_pct": 30.10451193930006,
+        "taker_buy_sell_ratio": 1.0057,
+        "global_long_short_ratio": 4.6561,
+        "top_long_short_ratio": 5.2228,
+        "top_minus_global_ratio": 0.5667
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.6253221212261462,
+        "oi_value_change_6h_pct": 1.8446644088795372,
+        "oi_value_change_24h_pct": -7.731251646291881,
+        "taker_buy_sell_ratio": 0.7874,
+        "global_long_short_ratio": 5.0096,
+        "top_long_short_ratio": 6.0423,
+        "top_minus_global_ratio": 1.0327000000000002
+      }
+    },
+    {
+      "symbol": "RIF/USDT:USDT",
+      "date_utc": "2026-06-28",
+      "anchor_utc": "2026-06-28T07:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.5056789835449447,
+        "oi_value_change_6h_pct": 2.842418222415599,
+        "oi_value_change_24h_pct": 7.576135082519531,
+        "taker_buy_sell_ratio": 1.4363,
+        "global_long_short_ratio": 0.382,
+        "top_long_short_ratio": 0.4981,
+        "top_minus_global_ratio": 0.11609999999999998
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.401174363191692,
+        "oi_value_change_6h_pct": -1.4441905787708653,
+        "oi_value_change_24h_pct": -6.456875540514506,
+        "taker_buy_sell_ratio": 0.8145,
+        "global_long_short_ratio": 0.5758,
+        "top_long_short_ratio": 0.7569,
+        "top_minus_global_ratio": 0.1694
+      }
+    },
+    {
+      "symbol": "SYN/USDT:USDT",
+      "date_utc": "2026-06-28",
+      "anchor_utc": "2026-06-28T02:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.318606611416051,
+        "oi_value_change_6h_pct": 2.799634558291797,
+        "oi_value_change_24h_pct": -18.78561676578946,
+        "taker_buy_sell_ratio": 1.0678,
+        "global_long_short_ratio": 0.634,
+        "top_long_short_ratio": 0.5394,
+        "top_minus_global_ratio": -0.09460000000000002
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.14833978302459805,
+        "oi_value_change_6h_pct": -5.041573263677435,
+        "oi_value_change_24h_pct": -5.40065184293641,
+        "taker_buy_sell_ratio": 1.0599,
+        "global_long_short_ratio": 0.5423,
+        "top_long_short_ratio": 0.459,
+        "top_minus_global_ratio": -0.08329999999999999
+      }
+    },
+    {
+      "symbol": "AIGENSYN/USDT:USDT",
+      "date_utc": "2026-06-29",
+      "anchor_utc": "2026-06-29T13:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -1.1584142675607256,
+        "oi_value_change_6h_pct": -2.330389923089893,
+        "oi_value_change_24h_pct": -1.9323797146114319,
+        "taker_buy_sell_ratio": 1.0424,
+        "global_long_short_ratio": 0.8454,
+        "top_long_short_ratio": 1.0855,
+        "top_minus_global_ratio": 0.24009999999999987
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.5461868844264473,
+        "oi_value_change_6h_pct": -2.5676679965097593,
+        "oi_value_change_24h_pct": 0.24315251935020932,
+        "taker_buy_sell_ratio": 0.811,
+        "global_long_short_ratio": 0.608,
+        "top_long_short_ratio": 0.8175,
+        "top_minus_global_ratio": 0.20950000000000002
+      }
+    },
+    {
+      "symbol": "BAS/USDT:USDT",
+      "date_utc": "2026-06-29",
+      "anchor_utc": "2026-06-29T01:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.37735888926824224,
+        "oi_value_change_6h_pct": 4.346497947848227,
+        "oi_value_change_24h_pct": 2.361787835614204,
+        "taker_buy_sell_ratio": 1.0228,
+        "global_long_short_ratio": 1.702,
+        "top_long_short_ratio": 1.5793,
+        "top_minus_global_ratio": -0.12270000000000003
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 1.848160769042706,
+        "oi_value_change_6h_pct": 9.427256767997072,
+        "oi_value_change_24h_pct": -1.136066828939486,
+        "taker_buy_sell_ratio": 0.9472,
+        "global_long_short_ratio": 1.4564,
+        "top_long_short_ratio": 1.2769,
+        "top_minus_global_ratio": -0.12549999999999994
+      }
+    },
+    {
+      "symbol": "GWEI/USDT:USDT",
+      "date_utc": "2026-06-29",
+      "anchor_utc": "2026-06-29T07:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.0079789887534663,
+        "oi_value_change_6h_pct": -0.5113846337349237,
+        "oi_value_change_24h_pct": 25.774307391641283,
+        "taker_buy_sell_ratio": 1.2753,
+        "global_long_short_ratio": 0.9585,
+        "top_long_short_ratio": 0.7908,
+        "top_minus_global_ratio": -0.16770000000000007
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.8775799200761325,
+        "oi_value_change_6h_pct": 0.37524861563713596,
+        "oi_value_change_24h_pct": 2.1998246390135368,
+        "taker_buy_sell_ratio": 1.2958,
+        "global_long_short_ratio": 1.1173,
+        "top_long_short_ratio": 0.9728,
+        "top_minus_global_ratio": -0.12759999999999994
+      }
+    },
+    {
+      "symbol": "ORDI/USDT:USDT",
+      "date_utc": "2026-06-29",
+      "anchor_utc": "2026-06-29T07:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.86433411066138,
+        "oi_value_change_6h_pct": 0.15198962277975792,
+        "oi_value_change_24h_pct": 1.2163831366818645,
+        "taker_buy_sell_ratio": 1.0381,
+        "global_long_short_ratio": 1.3838,
+        "top_long_short_ratio": 1.7609,
+        "top_minus_global_ratio": 0.3771
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.19834015000794736,
+        "oi_value_change_6h_pct": -0.5775897961292076,
+        "oi_value_change_24h_pct": -3.987237802435173,
+        "taker_buy_sell_ratio": 0.8663,
+        "global_long_short_ratio": 1.0991,
+        "top_long_short_ratio": 1.4685,
+        "top_minus_global_ratio": 0.3792
+      }
+    },
+    {
+      "symbol": "RAVE/USDT:USDT",
+      "date_utc": "2026-06-29",
+      "anchor_utc": "2026-06-29T02:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -1.61065425540311,
+        "oi_value_change_6h_pct": -4.324691837082872,
+        "oi_value_change_24h_pct": 27.73784032977611,
+        "taker_buy_sell_ratio": 1.1063,
+        "global_long_short_ratio": 4.0891,
+        "top_long_short_ratio": 4.3677,
+        "top_minus_global_ratio": 0.27859999999999996
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.22692243242616872,
+        "oi_value_change_6h_pct": 2.033033146715546,
+        "oi_value_change_24h_pct": -7.25197307117943,
+        "taker_buy_sell_ratio": 0.81,
+        "global_long_short_ratio": 5.006,
+        "top_long_short_ratio": 6.0671,
+        "top_minus_global_ratio": 1.0610999999999997
+      }
+    },
+    {
+      "symbol": "SYN/USDT:USDT",
+      "date_utc": "2026-06-29",
+      "anchor_utc": "2026-06-29T00:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 4.336295668974488,
+        "oi_value_change_6h_pct": -1.7348376296513646,
+        "oi_value_change_24h_pct": 22.17877092017808,
+        "taker_buy_sell_ratio": 1.1193,
+        "global_long_short_ratio": 0.6703,
+        "top_long_short_ratio": 0.538,
+        "top_minus_global_ratio": -0.13229999999999997
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 3.0968724312012252,
+        "oi_value_change_6h_pct": -6.630342095562469,
+        "oi_value_change_24h_pct": -11.311029709389796,
+        "taker_buy_sell_ratio": 0.9251,
+        "global_long_short_ratio": 0.5542,
+        "top_long_short_ratio": 0.455,
+        "top_minus_global_ratio": -0.09920000000000001
+      }
+    },
+    {
+      "symbol": "UB/USDT:USDT",
+      "date_utc": "2026-06-29",
+      "anchor_utc": "2026-06-29T03:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.1746659524672456,
+        "oi_value_change_6h_pct": 1.2430680356972035,
+        "oi_value_change_24h_pct": 1.737328329603005,
+        "taker_buy_sell_ratio": 1.6126,
+        "global_long_short_ratio": 0.8165,
+        "top_long_short_ratio": 0.879,
+        "top_minus_global_ratio": 0.0625
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.552730563562942,
+        "oi_value_change_6h_pct": 0.03056149995941393,
+        "oi_value_change_24h_pct": -10.015837375460201,
+        "taker_buy_sell_ratio": 1.057,
+        "global_long_short_ratio": 0.7578,
+        "top_long_short_ratio": 0.8584,
+        "top_minus_global_ratio": 0.05269999999999997
+      }
+    },
+    {
+      "symbol": "龙虾/USDT:USDT",
+      "date_utc": "2026-06-29",
+      "anchor_utc": "2026-06-29T04:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.236014646411654,
+        "oi_value_change_6h_pct": 0.744706736269829,
+        "oi_value_change_24h_pct": 1.144108431926627,
+        "taker_buy_sell_ratio": 0.8845,
+        "global_long_short_ratio": 1.9727,
+        "top_long_short_ratio": 2.0694,
+        "top_minus_global_ratio": 0.09670000000000001
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -1.2114623252673762,
+        "oi_value_change_6h_pct": 2.911189204850273,
+        "oi_value_change_24h_pct": -0.6054161566988459,
+        "taker_buy_sell_ratio": 0.7232,
+        "global_long_short_ratio": 1.8555,
+        "top_long_short_ratio": 2.1066,
+        "top_minus_global_ratio": 0.2803000000000002
+      }
+    },
+    {
+      "symbol": "AIGENSYN/USDT:USDT",
+      "date_utc": "2026-06-30",
+      "anchor_utc": "2026-06-30T02:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.47651054859963,
+        "oi_value_change_6h_pct": 35.74154130830032,
+        "oi_value_change_24h_pct": 67.65959347300223,
+        "taker_buy_sell_ratio": 0.9699,
+        "global_long_short_ratio": 1.1381,
+        "top_long_short_ratio": 1.1636,
+        "top_minus_global_ratio": 0.025500000000000078
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.10968021213917378,
+        "oi_value_change_6h_pct": -1.6971172079362162,
+        "oi_value_change_24h_pct": -3.341463031210079,
+        "taker_buy_sell_ratio": 0.9085,
+        "global_long_short_ratio": 0.6028,
+        "top_long_short_ratio": 0.8093,
+        "top_minus_global_ratio": 0.20369999999999994
+      }
+    },
+    {
+      "symbol": "BTW/USDT:USDT",
+      "date_utc": "2026-06-30",
+      "anchor_utc": "2026-06-30T03:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 3.245004540803076,
+        "oi_value_change_6h_pct": 2.920447496323897,
+        "oi_value_change_24h_pct": -1.9772569833832132,
+        "taker_buy_sell_ratio": 0.9397,
+        "global_long_short_ratio": 1.1368,
+        "top_long_short_ratio": 1.2645,
+        "top_minus_global_ratio": 0.12769999999999992
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -1.5516633010554837,
+        "oi_value_change_6h_pct": -3.959735343896431,
+        "oi_value_change_24h_pct": -36.64694413482966,
+        "taker_buy_sell_ratio": 0.9505,
+        "global_long_short_ratio": 1.0475,
+        "top_long_short_ratio": 1.1825,
+        "top_minus_global_ratio": 0.10719999999999996
+      }
+    },
+    {
+      "symbol": "H/USDT:USDT",
+      "date_utc": "2026-06-30",
+      "anchor_utc": "2026-06-30T01:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 6.489139825844115,
+        "oi_value_change_6h_pct": 0.5792489743688511,
+        "oi_value_change_24h_pct": 9.554541661293836,
+        "taker_buy_sell_ratio": 0.7812,
+        "global_long_short_ratio": 2.0093,
+        "top_long_short_ratio": 2.2992,
+        "top_minus_global_ratio": 0.2898999999999998
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.5793163886787411,
+        "oi_value_change_6h_pct": -0.14062044889162628,
+        "oi_value_change_24h_pct": -4.528626192392881,
+        "taker_buy_sell_ratio": 0.9374,
+        "global_long_short_ratio": 1.978,
+        "top_long_short_ratio": 2.3956,
+        "top_minus_global_ratio": 0.391
+      }
+    },
+    {
+      "symbol": "IN/USDT:USDT",
+      "date_utc": "2026-06-30",
+      "anchor_utc": "2026-06-30T11:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.8075033259873585,
+        "oi_value_change_6h_pct": 8.947673257205846,
+        "oi_value_change_24h_pct": 33.33604266834278,
+        "taker_buy_sell_ratio": 1.0588,
+        "global_long_short_ratio": 1.5297,
+        "top_long_short_ratio": 1.3245,
+        "top_minus_global_ratio": -0.20520000000000005
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 1.3714311480017338,
+        "oi_value_change_6h_pct": 6.721006072737379,
+        "oi_value_change_24h_pct": 6.002746329536945,
+        "taker_buy_sell_ratio": 0.9917,
+        "global_long_short_ratio": 1.5589,
+        "top_long_short_ratio": 1.3175,
+        "top_minus_global_ratio": -0.2636999999999998
+      }
+    },
+    {
+      "symbol": "SYN/USDT:USDT",
+      "date_utc": "2026-06-30",
+      "anchor_utc": "2026-06-30T07:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -1.0612488759608074,
+        "oi_value_change_6h_pct": 0.2080056950164222,
+        "oi_value_change_24h_pct": 48.70651388503238,
+        "taker_buy_sell_ratio": 1.0678,
+        "global_long_short_ratio": 0.6861,
+        "top_long_short_ratio": 0.6067,
+        "top_minus_global_ratio": -0.07940000000000003
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -4.068981229005642,
+        "oi_value_change_6h_pct": 1.080229571515745,
+        "oi_value_change_24h_pct": -6.504873053302084,
+        "taker_buy_sell_ratio": 1.0441,
+        "global_long_short_ratio": 0.6504,
+        "top_long_short_ratio": 0.5309,
+        "top_minus_global_ratio": -0.11949999999999994
+      }
+    },
+    {
+      "symbol": "BAS/USDT:USDT",
+      "date_utc": "2026-07-01",
+      "anchor_utc": "2026-07-01T02:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.6521501749243939,
+        "oi_value_change_6h_pct": 5.136026074804145,
+        "oi_value_change_24h_pct": -34.62524037401332,
+        "taker_buy_sell_ratio": 1.005,
+        "global_long_short_ratio": 1.582,
+        "top_long_short_ratio": 1.5694,
+        "top_minus_global_ratio": -0.012600000000000167
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 3.623503191449484,
+        "oi_value_change_6h_pct": 8.902762047613555,
+        "oi_value_change_24h_pct": 3.000152595430472,
+        "taker_buy_sell_ratio": 0.9435,
+        "global_long_short_ratio": 1.3354,
+        "top_long_short_ratio": 1.2326,
+        "top_minus_global_ratio": -0.137
+      }
+    },
+    {
+      "symbol": "BASED/USDT:USDT",
+      "date_utc": "2026-07-01",
+      "anchor_utc": "2026-07-01T06:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -1.1587274371002376,
+        "oi_value_change_6h_pct": 26.765413474730625,
+        "oi_value_change_24h_pct": 57.44367543260296,
+        "taker_buy_sell_ratio": 1.0385,
+        "global_long_short_ratio": 1.7755,
+        "top_long_short_ratio": 1.9334,
+        "top_minus_global_ratio": 0.15789999999999993
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 1.9151048608765153,
+        "oi_value_change_6h_pct": 8.661325717485147,
+        "oi_value_change_24h_pct": 10.380602828001685,
+        "taker_buy_sell_ratio": 1.0344,
+        "global_long_short_ratio": 1.8769,
+        "top_long_short_ratio": 2.126,
+        "top_minus_global_ratio": 0.2386999999999999
+      }
+    },
+    {
+      "symbol": "BTW/USDT:USDT",
+      "date_utc": "2026-07-01",
+      "anchor_utc": "2026-07-01T00:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 2.2166718257476736,
+        "oi_value_change_6h_pct": 1.36804241885633,
+        "oi_value_change_24h_pct": 5.435145202070446,
+        "taker_buy_sell_ratio": 0.7719,
+        "global_long_short_ratio": 1.1413,
+        "top_long_short_ratio": 1.2994,
+        "top_minus_global_ratio": 0.15810000000000013
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.6417539816158113,
+        "oi_value_change_6h_pct": -7.952934878911422,
+        "oi_value_change_24h_pct": -37.909728719482075,
+        "taker_buy_sell_ratio": 0.9382,
+        "global_long_short_ratio": 1.0855,
+        "top_long_short_ratio": 1.1988,
+        "top_minus_global_ratio": 0.11330000000000018
+      }
+    },
+    {
+      "symbol": "DYDX/USDT:USDT",
+      "date_utc": "2026-07-01",
+      "anchor_utc": "2026-07-01T03:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 2.050615108440379,
+        "oi_value_change_6h_pct": 5.346512070811005,
+        "oi_value_change_24h_pct": 25.226305902520217,
+        "taker_buy_sell_ratio": 1.5202,
+        "global_long_short_ratio": 2.0276,
+        "top_long_short_ratio": 2.0193,
+        "top_minus_global_ratio": -0.008300000000000196
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.23964161823301078,
+        "oi_value_change_6h_pct": -2.5154588064277617,
+        "oi_value_change_24h_pct": 1.3321948170052833,
+        "taker_buy_sell_ratio": 1.01,
+        "global_long_short_ratio": 2.2949,
+        "top_long_short_ratio": 2.375,
+        "top_minus_global_ratio": 0.08009999999999984
+      }
+    },
+    {
+      "symbol": "M/USDT:USDT",
+      "date_utc": "2026-07-01",
+      "anchor_utc": "2026-07-01T02:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.3516941075925928,
+        "oi_value_change_6h_pct": -0.5820103775080798,
+        "oi_value_change_24h_pct": 13.215656998970648,
+        "taker_buy_sell_ratio": 0.8758,
+        "global_long_short_ratio": 1.4552,
+        "top_long_short_ratio": 1.405,
+        "top_minus_global_ratio": -0.05020000000000002
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.9756215657899414,
+        "oi_value_change_6h_pct": -0.04180878244336439,
+        "oi_value_change_24h_pct": -1.350707174430521,
+        "taker_buy_sell_ratio": 0.9271,
+        "global_long_short_ratio": 1.0786,
+        "top_long_short_ratio": 1.207,
+        "top_minus_global_ratio": 0.12840000000000007
+      }
+    },
+    {
+      "symbol": "RIF/USDT:USDT",
+      "date_utc": "2026-07-01",
+      "anchor_utc": "2026-07-01T08:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 3.602840566577159,
+        "oi_value_change_6h_pct": -4.414056278964096,
+        "oi_value_change_24h_pct": 36.11304672000073,
+        "taker_buy_sell_ratio": 1.1171,
+        "global_long_short_ratio": 0.873,
+        "top_long_short_ratio": 0.9972,
+        "top_minus_global_ratio": 0.12419999999999998
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.9798216249629177,
+        "oi_value_change_6h_pct": 11.287923304141923,
+        "oi_value_change_24h_pct": 27.156960265896537,
+        "taker_buy_sell_ratio": 0.7785,
+        "global_long_short_ratio": 0.4495,
+        "top_long_short_ratio": 0.5911,
+        "top_minus_global_ratio": 0.10819999999999996
+      }
+    },
+    {
+      "symbol": "ALLO/USDT:USDT",
+      "date_utc": "2026-07-02",
+      "anchor_utc": "2026-07-02T00:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -2.513163527974438,
+        "oi_value_change_6h_pct": -7.062583489319274,
+        "oi_value_change_24h_pct": -9.096230422362094,
+        "taker_buy_sell_ratio": 0.9282,
+        "global_long_short_ratio": 0.3293,
+        "top_long_short_ratio": 0.4134,
+        "top_minus_global_ratio": 0.08410000000000001
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -2.0109960427055817,
+        "oi_value_change_6h_pct": -0.5547568182429741,
+        "oi_value_change_24h_pct": -2.83688096459751,
+        "taker_buy_sell_ratio": 0.9781,
+        "global_long_short_ratio": 0.3719,
+        "top_long_short_ratio": 0.4395,
+        "top_minus_global_ratio": 0.0676
+      }
+    },
+    {
+      "symbol": "M/USDT:USDT",
+      "date_utc": "2026-07-02",
+      "anchor_utc": "2026-07-02T09:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -9.196591835238198,
+        "oi_value_change_6h_pct": 5.253641682949128,
+        "oi_value_change_24h_pct": 96.76545734458189,
+        "taker_buy_sell_ratio": 1.1142,
+        "global_long_short_ratio": 0.8047,
+        "top_long_short_ratio": 0.7507,
+        "top_minus_global_ratio": -0.05399999999999994
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.3785890336099884,
+        "oi_value_change_6h_pct": -0.4390501698517735,
+        "oi_value_change_24h_pct": -7.330522522164607,
+        "taker_buy_sell_ratio": 0.8179,
+        "global_long_short_ratio": 1.1584,
+        "top_long_short_ratio": 1.2477,
+        "top_minus_global_ratio": 0.10880000000000001
+      }
+    },
+    {
+      "symbol": "MAGMA/USDT:USDT",
+      "date_utc": "2026-07-02",
+      "anchor_utc": "2026-07-02T12:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.6405165525372292,
+        "oi_value_change_6h_pct": 0.7868693949457217,
+        "oi_value_change_24h_pct": -17.18554509975344,
+        "taker_buy_sell_ratio": 0.9443,
+        "global_long_short_ratio": 0.6488,
+        "top_long_short_ratio": 0.7138,
+        "top_minus_global_ratio": 0.06499999999999995
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.398218083246038,
+        "oi_value_change_6h_pct": 3.4673316146272004,
+        "oi_value_change_24h_pct": -3.353888128826521,
+        "taker_buy_sell_ratio": 0.8009,
+        "global_long_short_ratio": 1.172,
+        "top_long_short_ratio": 1.0816,
+        "top_minus_global_ratio": -0.06579999999999986
+      }
+    },
+    {
+      "symbol": "GUA/USDT:USDT",
+      "date_utc": "2026-07-03",
+      "anchor_utc": "2026-07-03T00:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -9.46606642316603,
+        "oi_value_change_6h_pct": 7.977570676188517,
+        "oi_value_change_24h_pct": 42.37145622686016,
+        "taker_buy_sell_ratio": 0.987,
+        "global_long_short_ratio": 2.0386,
+        "top_long_short_ratio": 2.1746,
+        "top_minus_global_ratio": 0.13599999999999968
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 2.3104720633059905,
+        "oi_value_change_6h_pct": -3.64700260034031,
+        "oi_value_change_24h_pct": 1.1932297331265218,
+        "taker_buy_sell_ratio": 0.689,
+        "global_long_short_ratio": 1.2381,
+        "top_long_short_ratio": 1.445,
+        "top_minus_global_ratio": 0.20940000000000003
+      }
+    },
+    {
+      "symbol": "HMSTR/USDT:USDT",
+      "date_utc": "2026-07-03",
+      "anchor_utc": "2026-07-03T08:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.31200133476276815,
+        "oi_value_change_6h_pct": -0.9455428552238909,
+        "oi_value_change_24h_pct": -7.980684612721866,
+        "taker_buy_sell_ratio": 1.6944,
+        "global_long_short_ratio": 0.9429,
+        "top_long_short_ratio": 1.2452,
+        "top_minus_global_ratio": 0.3023000000000001
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.08967291863735127,
+        "oi_value_change_6h_pct": 1.3123828393561299,
+        "oi_value_change_24h_pct": -1.535034308740535,
+        "taker_buy_sell_ratio": 0.7602,
+        "global_long_short_ratio": 1.0387,
+        "top_long_short_ratio": 1.3524,
+        "top_minus_global_ratio": 0.3137000000000001
+      }
+    },
+    {
+      "symbol": "MAGMA/USDT:USDT",
+      "date_utc": "2026-07-03",
+      "anchor_utc": "2026-07-03T02:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -1.0975195070568433,
+        "oi_value_change_6h_pct": -0.1621544699790589,
+        "oi_value_change_24h_pct": 59.703907912077895,
+        "taker_buy_sell_ratio": 0.9532,
+        "global_long_short_ratio": 0.6742,
+        "top_long_short_ratio": 0.6631,
+        "top_minus_global_ratio": -0.011099999999999999
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 2.0421014618815736,
+        "oi_value_change_6h_pct": 1.2477378619464297,
+        "oi_value_change_24h_pct": -6.407851685903232,
+        "taker_buy_sell_ratio": 0.8309,
+        "global_long_short_ratio": 1.1259,
+        "top_long_short_ratio": 1.0717,
+        "top_minus_global_ratio": -0.054199999999999804
+      }
+    },
+    {
+      "symbol": "RIF/USDT:USDT",
+      "date_utc": "2026-07-03",
+      "anchor_utc": "2026-07-03T00:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -1.5349710378600112,
+        "oi_value_change_6h_pct": -5.65400150188673,
+        "oi_value_change_24h_pct": -21.167783449225208,
+        "taker_buy_sell_ratio": 1.2074,
+        "global_long_short_ratio": 0.9952,
+        "top_long_short_ratio": 1.1155,
+        "top_minus_global_ratio": 0.12029999999999996
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.2199333187502317,
+        "oi_value_change_6h_pct": -0.21744032122841261,
+        "oi_value_change_24h_pct": 12.471782379132534,
+        "taker_buy_sell_ratio": 1.328,
+        "global_long_short_ratio": 0.4804,
+        "top_long_short_ratio": 0.6134,
+        "top_minus_global_ratio": 0.0923
+      }
+    },
+    {
+      "symbol": "EPIC/USDT:USDT",
+      "date_utc": "2026-07-04",
+      "anchor_utc": "2026-07-04T01:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.6495617650571939,
+        "oi_value_change_6h_pct": 3.689633223773736,
+        "oi_value_change_24h_pct": 17.709971270439496,
+        "taker_buy_sell_ratio": 1.3686,
+        "global_long_short_ratio": 0.5853,
+        "top_long_short_ratio": 0.7538,
+        "top_minus_global_ratio": 0.16849999999999998
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.21521870545601063,
+        "oi_value_change_6h_pct": -1.1152673877122377,
+        "oi_value_change_24h_pct": 3.014560871591354,
+        "taker_buy_sell_ratio": 1.2014,
+        "global_long_short_ratio": 0.5547,
+        "top_long_short_ratio": 0.7373,
+        "top_minus_global_ratio": 0.18259999999999998
+      }
+    },
+    {
+      "symbol": "HEI/USDT:USDT",
+      "date_utc": "2026-07-04",
+      "anchor_utc": "2026-07-04T05:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.5102819871582343,
+        "oi_value_change_6h_pct": 4.694134502634384,
+        "oi_value_change_24h_pct": -8.73706662102023,
+        "taker_buy_sell_ratio": 0.6083,
+        "global_long_short_ratio": 0.452,
+        "top_long_short_ratio": 0.5962,
+        "top_minus_global_ratio": 0.14419999999999994
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -1.4173337373386663,
+        "oi_value_change_6h_pct": 2.5028107200474548,
+        "oi_value_change_24h_pct": -8.874349723868068,
+        "taker_buy_sell_ratio": 0.8415,
+        "global_long_short_ratio": 0.7337,
+        "top_long_short_ratio": 0.8783,
+        "top_minus_global_ratio": 0.14459999999999995
+      }
+    },
+    {
+      "symbol": "HMSTR/USDT:USDT",
+      "date_utc": "2026-07-04",
+      "anchor_utc": "2026-07-04T00:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 6.988289035853379,
+        "oi_value_change_6h_pct": -0.3170281825806698,
+        "oi_value_change_24h_pct": 25.253974890152087,
+        "taker_buy_sell_ratio": 1.0231,
+        "global_long_short_ratio": 0.9227,
+        "top_long_short_ratio": 1.1404,
+        "top_minus_global_ratio": 0.21770000000000012
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.08790592445285794,
+        "oi_value_change_6h_pct": 0.1174868751484981,
+        "oi_value_change_24h_pct": -3.687371541919471,
+        "taker_buy_sell_ratio": 1.1125,
+        "global_long_short_ratio": 1.0292,
+        "top_long_short_ratio": 1.3764,
+        "top_minus_global_ratio": 0.34430000000000005
+      }
+    },
+    {
+      "symbol": "LAB/USDT:USDT",
+      "date_utc": "2026-07-04",
+      "anchor_utc": "2026-07-04T02:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.6324586183981129,
+        "oi_value_change_6h_pct": 7.79248857623529,
+        "oi_value_change_24h_pct": -0.17014557721962698,
+        "taker_buy_sell_ratio": 0.9487,
+        "global_long_short_ratio": 1.4085,
+        "top_long_short_ratio": 1.4931,
+        "top_minus_global_ratio": 0.08460000000000001
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.22193752764964048,
+        "oi_value_change_6h_pct": -2.7666268791115667,
+        "oi_value_change_24h_pct": -8.42971464923491,
+        "taker_buy_sell_ratio": 1.0284,
+        "global_long_short_ratio": 1.2331,
+        "top_long_short_ratio": 1.1887,
+        "top_minus_global_ratio": -0.044399999999999995
+      }
+    },
+    {
+      "symbol": "TAC/USDT:USDT",
+      "date_utc": "2026-07-04",
+      "anchor_utc": "2026-07-04T07:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.05005645579332363,
+        "oi_value_change_6h_pct": -0.479720683817797,
+        "oi_value_change_24h_pct": -20.273106813446507,
+        "taker_buy_sell_ratio": 1.1593,
+        "global_long_short_ratio": 0.8038,
+        "top_long_short_ratio": 0.8129,
+        "top_minus_global_ratio": 0.009099999999999997
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -1.8448300476222368,
+        "oi_value_change_6h_pct": -4.878091619024339,
+        "oi_value_change_24h_pct": -5.836393192509615,
+        "taker_buy_sell_ratio": 1.0207,
+        "global_long_short_ratio": 0.6725,
+        "top_long_short_ratio": 0.6565,
+        "top_minus_global_ratio": -0.03370000000000001
+      }
+    },
+    {
+      "symbol": "VELVET/USDT:USDT",
+      "date_utc": "2026-07-04",
+      "anchor_utc": "2026-07-03T23:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -7.711345966120264,
+        "oi_value_change_6h_pct": -4.282664495074928,
+        "oi_value_change_24h_pct": -10.023230740500843,
+        "taker_buy_sell_ratio": 0.9135,
+        "global_long_short_ratio": 1.4746,
+        "top_long_short_ratio": 1.5246,
+        "top_minus_global_ratio": 0.050000000000000044
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.9430914339863206,
+        "oi_value_change_6h_pct": 3.1509200936397086,
+        "oi_value_change_24h_pct": -13.635877179568535,
+        "taker_buy_sell_ratio": 1.1187,
+        "global_long_short_ratio": 0.4388,
+        "top_long_short_ratio": 0.4002,
+        "top_minus_global_ratio": -0.03860000000000002
+      }
+    },
+    {
+      "symbol": "币安人生/USDT:USDT",
+      "date_utc": "2026-07-04",
+      "anchor_utc": "2026-07-04T14:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 3.1965361189746355,
+        "oi_value_change_6h_pct": 2.5983666504401537,
+        "oi_value_change_24h_pct": 4.073772295728961,
+        "taker_buy_sell_ratio": 1.0354,
+        "global_long_short_ratio": 0.3298,
+        "top_long_short_ratio": 0.3563,
+        "top_minus_global_ratio": 0.026500000000000024
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.2242651556562114,
+        "oi_value_change_6h_pct": -1.0880308637298164,
+        "oi_value_change_24h_pct": -3.331487022895341,
+        "taker_buy_sell_ratio": 0.8595,
+        "global_long_short_ratio": 0.3748,
+        "top_long_short_ratio": 0.4059,
+        "top_minus_global_ratio": 0.023899999999999977
+      }
+    },
+    {
+      "symbol": "BTW/USDT:USDT",
+      "date_utc": "2026-07-05",
+      "anchor_utc": "2026-07-05T06:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.8807106609840853,
+        "oi_value_change_6h_pct": 0.40967483612723843,
+        "oi_value_change_24h_pct": 7.889947793799368,
+        "taker_buy_sell_ratio": 1.1963,
+        "global_long_short_ratio": 0.9616,
+        "top_long_short_ratio": 1.1678,
+        "top_minus_global_ratio": 0.20619999999999994
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.30295910317175156,
+        "oi_value_change_6h_pct": -1.7185666621888251,
+        "oi_value_change_24h_pct": -7.317982351533548,
+        "taker_buy_sell_ratio": 1.0191,
+        "global_long_short_ratio": 0.9932,
+        "top_long_short_ratio": 1.1906,
+        "top_minus_global_ratio": 0.19740000000000013
+      }
+    },
+    {
+      "symbol": "TLM/USDT:USDT",
+      "date_utc": "2026-07-05",
+      "anchor_utc": "2026-07-05T06:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.935194664755957,
+        "oi_value_change_6h_pct": -3.569764775601414,
+        "oi_value_change_24h_pct": -21.03788251999901,
+        "taker_buy_sell_ratio": 1.0543,
+        "global_long_short_ratio": 0.8563,
+        "top_long_short_ratio": 0.7999,
+        "top_minus_global_ratio": -0.056399999999999895
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 4.602164890453464,
+        "oi_value_change_6h_pct": -12.024264726834243,
+        "oi_value_change_24h_pct": 132.68702543452363,
+        "taker_buy_sell_ratio": 1.0297,
+        "global_long_short_ratio": 1.019,
+        "top_long_short_ratio": 1.0462,
+        "top_minus_global_ratio": 0.027200000000000113
+      }
+    },
+    {
+      "symbol": "BEL/USDT:USDT",
+      "date_utc": "2026-07-06",
+      "anchor_utc": "2026-07-06T03:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.9066619307097512,
+        "oi_value_change_6h_pct": -5.237961041276307,
+        "oi_value_change_24h_pct": 4.849527000108744,
+        "taker_buy_sell_ratio": 1.0916,
+        "global_long_short_ratio": 0.5845,
+        "top_long_short_ratio": 0.7957,
+        "top_minus_global_ratio": 0.21119999999999994
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.3584065411904369,
+        "oi_value_change_6h_pct": -1.735836375036559,
+        "oi_value_change_24h_pct": 3.4582104334411667,
+        "taker_buy_sell_ratio": 0.6498,
+        "global_long_short_ratio": 0.6767,
+        "top_long_short_ratio": 0.9102,
+        "top_minus_global_ratio": 0.24
+      }
+    },
+    {
+      "symbol": "HMSTR/USDT:USDT",
+      "date_utc": "2026-07-06",
+      "anchor_utc": "2026-07-06T04:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.3822366051552173,
+        "oi_value_change_6h_pct": 1.8919649627332946,
+        "oi_value_change_24h_pct": -9.244308753814877,
+        "taker_buy_sell_ratio": 1.0747,
+        "global_long_short_ratio": 0.8471,
+        "top_long_short_ratio": 0.8272,
+        "top_minus_global_ratio": -0.019899999999999918
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.18125243125942658,
+        "oi_value_change_6h_pct": 0.004002485751009033,
+        "oi_value_change_24h_pct": -3.1475959096063377,
+        "taker_buy_sell_ratio": 0.8569,
+        "global_long_short_ratio": 1.0342,
+        "top_long_short_ratio": 1.3635,
+        "top_minus_global_ratio": 0.3292999999999999
+      }
+    },
+    {
+      "symbol": "TLM/USDT:USDT",
+      "date_utc": "2026-07-06",
+      "anchor_utc": "2026-07-06T00:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -2.007687882200204,
+        "oi_value_change_6h_pct": 24.441957472679853,
+        "oi_value_change_24h_pct": 92.56456537151469,
+        "taker_buy_sell_ratio": 0.9773,
+        "global_long_short_ratio": 0.6829,
+        "top_long_short_ratio": 0.6176,
+        "top_minus_global_ratio": -0.06529999999999991
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -1.8428852046879274,
+        "oi_value_change_6h_pct": 49.982406241356124,
+        "oi_value_change_24h_pct": 75.65276168645931,
+        "taker_buy_sell_ratio": 1.034,
+        "global_long_short_ratio": 0.8113,
+        "top_long_short_ratio": 0.9066,
+        "top_minus_global_ratio": -0.039999999999999925
+      }
+    },
+    {
+      "symbol": "TRIA/USDT:USDT",
+      "date_utc": "2026-07-06",
+      "anchor_utc": "2026-07-06T09:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.4886733488088435,
+        "oi_value_change_6h_pct": -3.8588324496406257,
+        "oi_value_change_24h_pct": 3.4808748687353397,
+        "taker_buy_sell_ratio": 1.1067,
+        "global_long_short_ratio": 1.401,
+        "top_long_short_ratio": 1.5038,
+        "top_minus_global_ratio": 0.1028
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 1.7346242615566387,
+        "oi_value_change_6h_pct": -1.8344607152904424,
+        "oi_value_change_24h_pct": 4.12313680910017,
+        "taker_buy_sell_ratio": 0.9093,
+        "global_long_short_ratio": 1.4564,
+        "top_long_short_ratio": 1.5445,
+        "top_minus_global_ratio": 0.06370000000000009
+      }
+    },
+    {
+      "symbol": "US/USDT:USDT",
+      "date_utc": "2026-07-06",
+      "anchor_utc": "2026-07-06T01:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.3852692369601618,
+        "oi_value_change_6h_pct": -0.777904266558338,
+        "oi_value_change_24h_pct": -8.604545607070236,
+        "taker_buy_sell_ratio": 1.4043,
+        "global_long_short_ratio": 0.9627,
+        "top_long_short_ratio": 0.8501,
+        "top_minus_global_ratio": -0.11260000000000003
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.0926167525634014,
+        "oi_value_change_6h_pct": 2.0116869389267045,
+        "oi_value_change_24h_pct": 1.2777395819830728,
+        "taker_buy_sell_ratio": 1.023,
+        "global_long_short_ratio": 1.0137,
+        "top_long_short_ratio": 0.8776,
+        "top_minus_global_ratio": -0.12360000000000004
+      }
+    },
+    {
+      "symbol": "CLO/USDT:USDT",
+      "date_utc": "2026-07-07",
+      "anchor_utc": "2026-07-07T08:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.2712909452118337,
+        "oi_value_change_6h_pct": 1.3854928266707534,
+        "oi_value_change_24h_pct": 3.249855888379516,
+        "taker_buy_sell_ratio": 1.3545,
+        "global_long_short_ratio": 0.912,
+        "top_long_short_ratio": 1.1608,
+        "top_minus_global_ratio": 0.24880000000000002
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.49998556721793097,
+        "oi_value_change_6h_pct": -4.314040474311909,
+        "oi_value_change_24h_pct": -2.8018576288102004,
+        "taker_buy_sell_ratio": 0.7722,
+        "global_long_short_ratio": 0.9516,
+        "top_long_short_ratio": 1.2262,
+        "top_minus_global_ratio": 0.28689999999999993
+      }
+    },
+    {
+      "symbol": "EDGE/USDT:USDT",
+      "date_utc": "2026-07-07",
+      "anchor_utc": "2026-07-07T00:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.6319566922291964,
+        "oi_value_change_6h_pct": 9.127622597255503,
+        "oi_value_change_24h_pct": 34.74020021991808,
+        "taker_buy_sell_ratio": 1.056,
+        "global_long_short_ratio": 1.3838,
+        "top_long_short_ratio": 1.5562,
+        "top_minus_global_ratio": 0.1724000000000001
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.44196371256639555,
+        "oi_value_change_6h_pct": 0.7006180209498947,
+        "oi_value_change_24h_pct": -0.29105368433756107,
+        "taker_buy_sell_ratio": 0.7816,
+        "global_long_short_ratio": 1.2665,
+        "top_long_short_ratio": 1.5214,
+        "top_minus_global_ratio": 0.2549000000000001
+      }
+    },
+    {
+      "symbol": "EPIC/USDT:USDT",
+      "date_utc": "2026-07-07",
+      "anchor_utc": "2026-07-07T00:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -1.0731181926907585,
+        "oi_value_change_6h_pct": -0.4207936484411423,
+        "oi_value_change_24h_pct": 24.861809627851695,
+        "taker_buy_sell_ratio": 1.1403,
+        "global_long_short_ratio": 0.6111,
+        "top_long_short_ratio": 0.7999,
+        "top_minus_global_ratio": 0.18880000000000008
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 1.856084666519231,
+        "oi_value_change_6h_pct": 4.093162061401467,
+        "oi_value_change_24h_pct": 5.328295468070365,
+        "taker_buy_sell_ratio": 1.0027,
+        "global_long_short_ratio": 0.7358,
+        "top_long_short_ratio": 0.7825,
+        "top_minus_global_ratio": 0.19599999999999995
+      }
+    },
+    {
+      "symbol": "EVAA/USDT:USDT",
+      "date_utc": "2026-07-07",
+      "anchor_utc": "2026-07-07T03:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 4.446325558363484,
+        "oi_value_change_6h_pct": 9.861333329695142,
+        "oi_value_change_24h_pct": 24.986211032336247,
+        "taker_buy_sell_ratio": 0.9514,
+        "global_long_short_ratio": 2.0562,
+        "top_long_short_ratio": 1.7762,
+        "top_minus_global_ratio": -0.28
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.6772873750324093,
+        "oi_value_change_6h_pct": -3.3606224535130624,
+        "oi_value_change_24h_pct": -15.230190656587073,
+        "taker_buy_sell_ratio": 0.948,
+        "global_long_short_ratio": 2.1319,
+        "top_long_short_ratio": 1.907,
+        "top_minus_global_ratio": -0.2307999999999999
+      }
+    },
+    {
+      "symbol": "M/USDT:USDT",
+      "date_utc": "2026-07-07",
+      "anchor_utc": "2026-07-07T03:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.5579869021921313,
+        "oi_value_change_6h_pct": 3.2307691718206355,
+        "oi_value_change_24h_pct": -1.2700548224145347,
+        "taker_buy_sell_ratio": 1.1635,
+        "global_long_short_ratio": 0.7103,
+        "top_long_short_ratio": 0.7397,
+        "top_minus_global_ratio": 0.02939999999999998
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.0020878380527111773,
+        "oi_value_change_6h_pct": 1.1012992396286725,
+        "oi_value_change_24h_pct": -9.262559189597297,
+        "taker_buy_sell_ratio": 1.0032,
+        "global_long_short_ratio": 0.6327,
+        "top_long_short_ratio": 0.6008,
+        "top_minus_global_ratio": -0.03469999999999995
+      }
+    },
+    {
+      "symbol": "OPG/USDT:USDT",
+      "date_utc": "2026-07-07",
+      "anchor_utc": "2026-07-07T04:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.244534260608531,
+        "oi_value_change_6h_pct": -0.9453784849774993,
+        "oi_value_change_24h_pct": -6.761846399807903,
+        "taker_buy_sell_ratio": 1.0994,
+        "global_long_short_ratio": 0.5741,
+        "top_long_short_ratio": 0.8723,
+        "top_minus_global_ratio": 0.2981999999999999
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.698066481252424,
+        "oi_value_change_6h_pct": -0.11794326310142766,
+        "oi_value_change_24h_pct": -2.2457447966671595,
+        "taker_buy_sell_ratio": 1.0094,
+        "global_long_short_ratio": 0.5291,
+        "top_long_short_ratio": 0.8086,
+        "top_minus_global_ratio": 0.27769999999999995
+      }
+    },
+    {
+      "symbol": "TAC/USDT:USDT",
+      "date_utc": "2026-07-07",
+      "anchor_utc": "2026-07-07T07:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -2.509548228031422,
+        "oi_value_change_6h_pct": -2.3821992598978436,
+        "oi_value_change_24h_pct": 4.623449396673607,
+        "taker_buy_sell_ratio": 1.0117,
+        "global_long_short_ratio": 0.9286,
+        "top_long_short_ratio": 0.9608,
+        "top_minus_global_ratio": 0.032200000000000006
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.8878128431448529,
+        "oi_value_change_6h_pct": -0.5784290571784645,
+        "oi_value_change_24h_pct": -5.836393192509615,
+        "taker_buy_sell_ratio": 0.9912,
+        "global_long_short_ratio": 0.9051,
+        "top_long_short_ratio": 0.9562,
+        "top_minus_global_ratio": 0.0040999999999999925
+      }
+    },
+    {
+      "symbol": "EDGE/USDT:USDT",
+      "date_utc": "2026-07-08",
+      "anchor_utc": "2026-07-08T00:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -2.4524870283926026,
+        "oi_value_change_6h_pct": -9.169231490279305,
+        "oi_value_change_24h_pct": 63.01448603405997,
+        "taker_buy_sell_ratio": 1.0168,
+        "global_long_short_ratio": 1.2717,
+        "top_long_short_ratio": 1.2946,
+        "top_minus_global_ratio": 0.02289999999999992
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.44196371256639555,
+        "oi_value_change_6h_pct": 0.7006180209498947,
+        "oi_value_change_24h_pct": -0.29105368433756107,
+        "taker_buy_sell_ratio": 0.7816,
+        "global_long_short_ratio": 1.2665,
+        "top_long_short_ratio": 1.5214,
+        "top_minus_global_ratio": 0.2549000000000001
+      }
+    },
+    {
+      "symbol": "EVAA/USDT:USDT",
+      "date_utc": "2026-07-08",
+      "anchor_utc": "2026-07-08T00:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.8399675275605034,
+        "oi_value_change_6h_pct": 1.7555443270095283,
+        "oi_value_change_24h_pct": 295.14236007873524,
+        "taker_buy_sell_ratio": 1.1827,
+        "global_long_short_ratio": 0.4817,
+        "top_long_short_ratio": 0.4302,
+        "top_minus_global_ratio": -0.05149999999999999
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -1.9905128226842983,
+        "oi_value_change_6h_pct": -6.990064010983465,
+        "oi_value_change_24h_pct": -12.173077709433077,
+        "taker_buy_sell_ratio": 1.1448,
+        "global_long_short_ratio": 2.1427,
+        "top_long_short_ratio": 1.9248,
+        "top_minus_global_ratio": -0.21789999999999998
+      }
+    },
+    {
+      "symbol": "KAITO/USDT:USDT",
+      "date_utc": "2026-07-08",
+      "anchor_utc": "2026-07-08T04:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 4.20579710650848,
+        "oi_value_change_6h_pct": 5.087865985701456,
+        "oi_value_change_24h_pct": 8.874852757316187,
+        "taker_buy_sell_ratio": 0.485,
+        "global_long_short_ratio": 0.8403,
+        "top_long_short_ratio": 0.9869,
+        "top_minus_global_ratio": 0.14659999999999995
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.6392683797594501,
+        "oi_value_change_6h_pct": -0.43463020439101774,
+        "oi_value_change_24h_pct": -0.8789191281368236,
+        "taker_buy_sell_ratio": 0.6859,
+        "global_long_short_ratio": 0.9798,
+        "top_long_short_ratio": 1.1204,
+        "top_minus_global_ratio": 0.18300000000000005
+      }
+    },
+    {
+      "symbol": "BASED/USDT:USDT",
+      "date_utc": "2026-07-09",
+      "anchor_utc": "2026-07-09T05:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 5.842259826528018,
+        "oi_value_change_6h_pct": 8.781586633772974,
+        "oi_value_change_24h_pct": 30.641822403630094,
+        "taker_buy_sell_ratio": 0.7851,
+        "global_long_short_ratio": 1.1697,
+        "top_long_short_ratio": 1.3844,
+        "top_minus_global_ratio": 0.2147000000000001
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 2.034180477411396,
+        "oi_value_change_6h_pct": -2.4460878209835557,
+        "oi_value_change_24h_pct": -4.695956054750983,
+        "taker_buy_sell_ratio": 0.86,
+        "global_long_short_ratio": 1.5484,
+        "top_long_short_ratio": 1.8612,
+        "top_minus_global_ratio": 0.2836000000000001
+      }
+    },
+    {
+      "symbol": "ESPORTS/USDT:USDT",
+      "date_utc": "2026-07-09",
+      "anchor_utc": "2026-07-09T08:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.36659170872276325,
+        "oi_value_change_6h_pct": 0.4817389248499282,
+        "oi_value_change_24h_pct": 9.903757829138993,
+        "taker_buy_sell_ratio": 1.3893,
+        "global_long_short_ratio": 2.6337,
+        "top_long_short_ratio": 3.0453,
+        "top_minus_global_ratio": 0.41159999999999997
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.33011925190190583,
+        "oi_value_change_6h_pct": -1.4449678435138336,
+        "oi_value_change_24h_pct": -4.058487910191621,
+        "taker_buy_sell_ratio": 0.8615,
+        "global_long_short_ratio": 3.0816,
+        "top_long_short_ratio": 3.7192,
+        "top_minus_global_ratio": 0.6314000000000002
+      }
+    },
+    {
+      "symbol": "SENT/USDT:USDT",
+      "date_utc": "2026-07-09",
+      "anchor_utc": "2026-07-09T11:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.7942518661703701,
+        "oi_value_change_6h_pct": 1.1437318255905549,
+        "oi_value_change_24h_pct": 1.8309565807914652,
+        "taker_buy_sell_ratio": 1.213,
+        "global_long_short_ratio": 1.1404,
+        "top_long_short_ratio": 1.1066,
+        "top_minus_global_ratio": -0.03380000000000005
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.41762087487813293,
+        "oi_value_change_6h_pct": 0.5870598904968327,
+        "oi_value_change_24h_pct": -2.6141512477331874,
+        "taker_buy_sell_ratio": 1.1185,
+        "global_long_short_ratio": 1.3261,
+        "top_long_short_ratio": 1.2946,
+        "top_minus_global_ratio": -0.00990000000000002
+      }
+    },
+    {
+      "symbol": "SKYAI/USDT:USDT",
+      "date_utc": "2026-07-09",
+      "anchor_utc": "2026-07-09T02:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -5.512081138924585,
+        "oi_value_change_6h_pct": -3.4188851784980656,
+        "oi_value_change_24h_pct": -9.95430711645231,
+        "taker_buy_sell_ratio": 0.97,
+        "global_long_short_ratio": 1.0777,
+        "top_long_short_ratio": 1.3502,
+        "top_minus_global_ratio": 0.27249999999999996
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 3.0588603225947697,
+        "oi_value_change_6h_pct": 6.344783678576005,
+        "oi_value_change_24h_pct": -21.563810658156058,
+        "taker_buy_sell_ratio": 0.9519,
+        "global_long_short_ratio": 1.2046,
+        "top_long_short_ratio": 1.4969,
+        "top_minus_global_ratio": 0.29920000000000013
+      }
+    },
+    {
+      "symbol": "TAC/USDT:USDT",
+      "date_utc": "2026-07-09",
+      "anchor_utc": "2026-07-09T15:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.9802340175255617,
+        "oi_value_change_6h_pct": 8.669327087273281,
+        "oi_value_change_24h_pct": -5.823421283639297,
+        "taker_buy_sell_ratio": 0.7967,
+        "global_long_short_ratio": 2.126,
+        "top_long_short_ratio": 2.4014,
+        "top_minus_global_ratio": 0.2754000000000003
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.0355441883259866,
+        "oi_value_change_6h_pct": -1.3757510035907305,
+        "oi_value_change_24h_pct": -20.499626327477948,
+        "taker_buy_sell_ratio": 0.8001,
+        "global_long_short_ratio": 0.9743,
+        "top_long_short_ratio": 1.0198,
+        "top_minus_global_ratio": 0.045499999999999985
+      }
+    },
+    {
+      "symbol": "US/USDT:USDT",
+      "date_utc": "2026-07-09",
+      "anchor_utc": "2026-07-09T09:00:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 4.58626218205358,
+        "oi_value_change_6h_pct": 0.5038222087732969,
+        "oi_value_change_24h_pct": -4.063912586966023,
+        "taker_buy_sell_ratio": 0.7496,
+        "global_long_short_ratio": 1.2523,
+        "top_long_short_ratio": 1.0717,
+        "top_minus_global_ratio": -0.18059999999999987
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -1.1332442344965665,
+        "oi_value_change_6h_pct": -12.739898642919577,
+        "oi_value_change_24h_pct": 0.007053786838784326,
+        "taker_buy_sell_ratio": 1.0124,
+        "global_long_short_ratio": 1.2452,
+        "top_long_short_ratio": 1.1146,
+        "top_minus_global_ratio": -0.136
+      }
+    },
+    {
+      "symbol": "B/USDT:USDT",
+      "date_utc": "2026-07-10",
+      "anchor_utc": "2026-07-10T12:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.2887555023487476,
+        "oi_value_change_6h_pct": -1.181175925044764,
+        "oi_value_change_24h_pct": 6.325971467818348,
+        "taker_buy_sell_ratio": 1.0606,
+        "global_long_short_ratio": 1.5316,
+        "top_long_short_ratio": 1.6015,
+        "top_minus_global_ratio": 0.06989999999999985
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.1030236192061107,
+        "oi_value_change_6h_pct": 0.33588330279199496,
+        "oi_value_change_24h_pct": -6.146632856796219,
+        "taker_buy_sell_ratio": 1.2064,
+        "global_long_short_ratio": 1.2416,
+        "top_long_short_ratio": 1.2753,
+        "top_minus_global_ratio": 0.024599999999999955
+      }
+    },
+    {
+      "symbol": "DEXE/USDT:USDT",
+      "date_utc": "2026-07-10",
+      "anchor_utc": "2026-07-09T23:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -9.018684567821222,
+        "oi_value_change_6h_pct": 0.6675546302233881,
+        "oi_value_change_24h_pct": 0.9626121118248454,
+        "taker_buy_sell_ratio": 1.16,
+        "global_long_short_ratio": 0.4826,
+        "top_long_short_ratio": 0.4302,
+        "top_minus_global_ratio": -0.05239999999999995
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -1.346393537222823,
+        "oi_value_change_6h_pct": -1.5014779958041125,
+        "oi_value_change_24h_pct": 3.591434680261618,
+        "taker_buy_sell_ratio": 0.9293,
+        "global_long_short_ratio": 0.4795,
+        "top_long_short_ratio": 0.4374,
+        "top_minus_global_ratio": -0.04209999999999997
+      }
+    },
+    {
+      "symbol": "EVAA/USDT:USDT",
+      "date_utc": "2026-07-10",
+      "anchor_utc": "2026-07-10T02:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 3.3524454795078817,
+        "oi_value_change_6h_pct": 6.102133660250053,
+        "oi_value_change_24h_pct": -27.519373334605945,
+        "taker_buy_sell_ratio": 1.0305,
+        "global_long_short_ratio": 0.7671,
+        "top_long_short_ratio": 0.6672,
+        "top_minus_global_ratio": -0.09989999999999999
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.21164512165645633,
+        "oi_value_change_6h_pct": -0.9894259398738448,
+        "oi_value_change_24h_pct": 1.9594962154032558,
+        "taker_buy_sell_ratio": 1.1731,
+        "global_long_short_ratio": 2.0931,
+        "top_long_short_ratio": 1.9019,
+        "top_minus_global_ratio": -0.19120000000000026
+      }
+    },
+    {
+      "symbol": "MMT/USDT:USDT",
+      "date_utc": "2026-07-10",
+      "anchor_utc": "2026-07-10T12:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.6716138831893148,
+        "oi_value_change_6h_pct": 1.8222178962296276,
+        "oi_value_change_24h_pct": -8.70921750177237,
+        "taker_buy_sell_ratio": 0.751,
+        "global_long_short_ratio": 1.03,
+        "top_long_short_ratio": 1.3935,
+        "top_minus_global_ratio": 0.36349999999999993
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.45686521547876335,
+        "oi_value_change_6h_pct": -0.1367630094168404,
+        "oi_value_change_24h_pct": 10.536580295180208,
+        "taker_buy_sell_ratio": 0.8954,
+        "global_long_short_ratio": 0.7295,
+        "top_long_short_ratio": 1.006,
+        "top_minus_global_ratio": 0.27649999999999997
+      }
+    },
+    {
+      "symbol": "VELVET/USDT:USDT",
+      "date_utc": "2026-07-10",
+      "anchor_utc": "2026-07-10T02:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 5.714353553509777,
+        "oi_value_change_6h_pct": 17.404390437523865,
+        "oi_value_change_24h_pct": 26.47342334503837,
+        "taker_buy_sell_ratio": 0.9172,
+        "global_long_short_ratio": 1.3602,
+        "top_long_short_ratio": 1.3793,
+        "top_minus_global_ratio": 0.019099999999999895
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.036720296803371966,
+        "oi_value_change_6h_pct": -3.733768676041793,
+        "oi_value_change_24h_pct": -12.951110611237858,
+        "taker_buy_sell_ratio": 1.0456,
+        "global_long_short_ratio": 1.4331,
+        "top_long_short_ratio": 1.5786,
+        "top_minus_global_ratio": 0.09919999999999995
+      }
+    },
+    {
+      "symbol": "CLO/USDT:USDT",
+      "date_utc": "2026-07-11",
+      "anchor_utc": "2026-07-11T02:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.5921330944314018,
+        "oi_value_change_6h_pct": -3.9260402728279797,
+        "oi_value_change_24h_pct": 3.606413909788486,
+        "taker_buy_sell_ratio": 0.7851,
+        "global_long_short_ratio": 1.6483,
+        "top_long_short_ratio": 1.592,
+        "top_minus_global_ratio": -0.05630000000000002
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 3.202477145338678,
+        "oi_value_change_6h_pct": 3.5927867909254285,
+        "oi_value_change_24h_pct": -2.1891855537096605,
+        "taker_buy_sell_ratio": 0.9928,
+        "global_long_short_ratio": 1.3832,
+        "top_long_short_ratio": 1.3652,
+        "top_minus_global_ratio": 0.029200000000000115
+      }
+    },
+    {
+      "symbol": "AGLD/USDT:USDT",
+      "date_utc": "2026-07-12",
+      "anchor_utc": "2026-07-12T04:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -1.517644899326831,
+        "oi_value_change_6h_pct": -6.909648313333672,
+        "oi_value_change_24h_pct": -16.532062565208417,
+        "taker_buy_sell_ratio": 1.7726,
+        "global_long_short_ratio": 0.744,
+        "top_long_short_ratio": 0.8818,
+        "top_minus_global_ratio": 0.13780000000000003
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.15626347309164457,
+        "oi_value_change_6h_pct": 1.2770551762322002,
+        "oi_value_change_24h_pct": 1.5809553654850372,
+        "taker_buy_sell_ratio": 1.2518,
+        "global_long_short_ratio": 0.5356,
+        "top_long_short_ratio": 0.6849,
+        "top_minus_global_ratio": 0.13690000000000002
+      }
+    },
+    {
+      "symbol": "DEXE/USDT:USDT",
+      "date_utc": "2026-07-12",
+      "anchor_utc": "2026-07-12T06:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -1.3222471776012767,
+        "oi_value_change_6h_pct": -0.12524103355149308,
+        "oi_value_change_24h_pct": 6.902354436998648,
+        "taker_buy_sell_ratio": 1.0299,
+        "global_long_short_ratio": 0.3931,
+        "top_long_short_ratio": 0.3572,
+        "top_minus_global_ratio": -0.03589999999999999
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.10315231560904525,
+        "oi_value_change_6h_pct": -0.06437607837336268,
+        "oi_value_change_24h_pct": 2.372016867508364,
+        "taker_buy_sell_ratio": 1.0392,
+        "global_long_short_ratio": 0.468,
+        "top_long_short_ratio": 0.43,
+        "top_minus_global_ratio": -0.038000000000000034
+      }
+    },
+    {
+      "symbol": "MAGMA/USDT:USDT",
+      "date_utc": "2026-07-12",
+      "anchor_utc": "2026-07-12T08:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.1098788131302264,
+        "oi_value_change_6h_pct": -1.3627223229700003,
+        "oi_value_change_24h_pct": -2.014109977709344,
+        "taker_buy_sell_ratio": 0.9696,
+        "global_long_short_ratio": 0.7229,
+        "top_long_short_ratio": 0.8584,
+        "top_minus_global_ratio": 0.13550000000000006
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -1.6383116293292033,
+        "oi_value_change_6h_pct": -3.3728495696421112,
+        "oi_value_change_24h_pct": 2.059232930093291,
+        "taker_buy_sell_ratio": 0.8228,
+        "global_long_short_ratio": 0.8025,
+        "top_long_short_ratio": 0.9055,
+        "top_minus_global_ratio": 0.10370000000000001
+      }
+    },
+    {
+      "symbol": "VELVET/USDT:USDT",
+      "date_utc": "2026-07-12",
+      "anchor_utc": "2026-07-12T11:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -1.4700101241405528,
+        "oi_value_change_6h_pct": 0.16032896660036489,
+        "oi_value_change_24h_pct": -9.858889809189764,
+        "taker_buy_sell_ratio": 0.9906,
+        "global_long_short_ratio": 1.412,
+        "top_long_short_ratio": 1.4125,
+        "top_minus_global_ratio": 0.000500000000000167
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.46158841169728904,
+        "oi_value_change_6h_pct": -0.3675959051418931,
+        "oi_value_change_24h_pct": -21.832244711024217,
+        "taker_buy_sell_ratio": 0.9575,
+        "global_long_short_ratio": 1.3245,
+        "top_long_short_ratio": 1.4301,
+        "top_minus_global_ratio": 0.06679999999999997
+      }
+    },
+    {
+      "symbol": "ALLO/USDT:USDT",
+      "date_utc": "2026-07-13",
+      "anchor_utc": "2026-07-13T11:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 2.3514990243233003,
+        "oi_value_change_6h_pct": 3.6410871861851435,
+        "oi_value_change_24h_pct": 3.1050261540275015,
+        "taker_buy_sell_ratio": 0.8811,
+        "global_long_short_ratio": 0.5221,
+        "top_long_short_ratio": 0.5321,
+        "top_minus_global_ratio": 0.010000000000000009
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 1.3906250706874346,
+        "oi_value_change_6h_pct": -2.5436176786175935,
+        "oi_value_change_24h_pct": -2.1470970884785223,
+        "taker_buy_sell_ratio": 1.0411,
+        "global_long_short_ratio": 0.5689,
+        "top_long_short_ratio": 0.5865,
+        "top_minus_global_ratio": 0.01760000000000006
+      }
+    },
+    {
+      "symbol": "VELVET/USDT:USDT",
+      "date_utc": "2026-07-13",
+      "anchor_utc": "2026-07-13T01:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.7291170076926266,
+        "oi_value_change_6h_pct": -6.6981919605756834,
+        "oi_value_change_24h_pct": 5.007394211331961,
+        "taker_buy_sell_ratio": 1.0538,
+        "global_long_short_ratio": 1.3229,
+        "top_long_short_ratio": 1.301,
+        "top_minus_global_ratio": -0.02190000000000003
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -1.1417644919420766,
+        "oi_value_change_6h_pct": -4.050985793726336,
+        "oi_value_change_24h_pct": -8.548502272113922,
+        "taker_buy_sell_ratio": 0.9271,
+        "global_long_short_ratio": 1.368,
+        "top_long_short_ratio": 1.4067,
+        "top_minus_global_ratio": 0.07520000000000016
+      }
+    },
+    {
+      "symbol": "BSB/USDT:USDT",
+      "date_utc": "2026-07-14",
+      "anchor_utc": "2026-07-14T03:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.32936162519350276,
+        "oi_value_change_6h_pct": 2.0655580989456412,
+        "oi_value_change_24h_pct": -12.958981234334455,
+        "taker_buy_sell_ratio": 1.6896,
+        "global_long_short_ratio": 1.5961,
+        "top_long_short_ratio": 1.9744,
+        "top_minus_global_ratio": 0.37829999999999986
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 1.6359422894530518,
+        "oi_value_change_6h_pct": -1.1215757873074383,
+        "oi_value_change_24h_pct": -0.5739177727571376,
+        "taker_buy_sell_ratio": 1.2122,
+        "global_long_short_ratio": 1.6295,
+        "top_long_short_ratio": 2.0628,
+        "top_minus_global_ratio": 0.4519000000000002
+      }
+    },
+    {
+      "symbol": "EVAA/USDT:USDT",
+      "date_utc": "2026-07-14",
+      "anchor_utc": "2026-07-14T10:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 3.9072786486958,
+        "oi_value_change_6h_pct": -1.089678582689546,
+        "oi_value_change_24h_pct": -11.575180549750097,
+        "taker_buy_sell_ratio": 1.0901,
+        "global_long_short_ratio": 0.9501,
+        "top_long_short_ratio": 0.9573,
+        "top_minus_global_ratio": 0.007200000000000095
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.8080028083416124,
+        "oi_value_change_6h_pct": -10.379039548466928,
+        "oi_value_change_24h_pct": -28.807843499218087,
+        "taker_buy_sell_ratio": 1.0463,
+        "global_long_short_ratio": 0.8212,
+        "top_long_short_ratio": 0.8362,
+        "top_minus_global_ratio": -0.05049999999999999
+      }
+    },
+    {
+      "symbol": "GWEI/USDT:USDT",
+      "date_utc": "2026-07-14",
+      "anchor_utc": "2026-07-14T19:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -1.2543001091150474,
+        "oi_value_change_6h_pct": -3.619967426867088,
+        "oi_value_change_24h_pct": 5.245910937059084,
+        "taker_buy_sell_ratio": 0.9702,
+        "global_long_short_ratio": 0.9376,
+        "top_long_short_ratio": 1.0777,
+        "top_minus_global_ratio": 0.1401000000000001
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -1.7403745848739827,
+        "oi_value_change_6h_pct": -1.941657570595623,
+        "oi_value_change_24h_pct": -14.598801847437947,
+        "taker_buy_sell_ratio": 0.8446,
+        "global_long_short_ratio": 0.8793,
+        "top_long_short_ratio": 1.0052,
+        "top_minus_global_ratio": 0.12590000000000012
+      }
+    },
+    {
+      "symbol": "LAB/USDT:USDT",
+      "date_utc": "2026-07-14",
+      "anchor_utc": "2026-07-13T23:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.658067327716961,
+        "oi_value_change_6h_pct": -16.463528764964806,
+        "oi_value_change_24h_pct": -13.236317238951468,
+        "taker_buy_sell_ratio": 0.9788,
+        "global_long_short_ratio": 2.8402,
+        "top_long_short_ratio": 3.1118,
+        "top_minus_global_ratio": 0.2716000000000003
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.06446360388512318,
+        "oi_value_change_6h_pct": -6.451930377119863,
+        "oi_value_change_24h_pct": -7.8954536734547105,
+        "taker_buy_sell_ratio": 0.8846,
+        "global_long_short_ratio": 3.344,
+        "top_long_short_ratio": 3.6425,
+        "top_minus_global_ratio": 0.2681
+      }
+    },
+    {
+      "symbol": "M/USDT:USDT",
+      "date_utc": "2026-07-14",
+      "anchor_utc": "2026-07-14T08:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": -0.12285847463545663,
+        "oi_value_change_6h_pct": 1.6986442172381322,
+        "oi_value_change_24h_pct": 2.3389486550599914,
+        "taker_buy_sell_ratio": 0.7527,
+        "global_long_short_ratio": 1.2351,
+        "top_long_short_ratio": 0.9829,
+        "top_minus_global_ratio": -0.2522000000000001
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.30496349662757494,
+        "oi_value_change_6h_pct": -0.5760505259371773,
+        "oi_value_change_24h_pct": -4.621710692987224,
+        "taker_buy_sell_ratio": 1.0012,
+        "global_long_short_ratio": 0.8904,
+        "top_long_short_ratio": 0.7416,
+        "top_minus_global_ratio": -0.1399999999999999
+      }
+    },
+    {
+      "symbol": "SXT/USDT:USDT",
+      "date_utc": "2026-07-14",
+      "anchor_utc": "2026-07-14T04:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 5.036181294694653,
+        "oi_value_change_6h_pct": 3.430475236814634,
+        "oi_value_change_24h_pct": -12.961656463341942,
+        "taker_buy_sell_ratio": 1.0318,
+        "global_long_short_ratio": 1.2904,
+        "top_long_short_ratio": 1.3901,
+        "top_minus_global_ratio": 0.0996999999999999
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 4.158840165183286,
+        "oi_value_change_6h_pct": -14.388299881084032,
+        "oi_value_change_24h_pct": 5.405458165547983,
+        "taker_buy_sell_ratio": 0.987,
+        "global_long_short_ratio": 1.2578,
+        "top_long_short_ratio": 1.2758,
+        "top_minus_global_ratio": -0.03469999999999995
+      }
+    },
+    {
+      "symbol": "SYN/USDT:USDT",
+      "date_utc": "2026-07-14",
+      "anchor_utc": "2026-07-14T11:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.7261098117519635,
+        "oi_value_change_6h_pct": -3.3039779245268575,
+        "oi_value_change_24h_pct": -17.382510855330548,
+        "taker_buy_sell_ratio": 0.9739,
+        "global_long_short_ratio": 0.3371,
+        "top_long_short_ratio": 0.3803,
+        "top_minus_global_ratio": 0.043200000000000016
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.9005245254197658,
+        "oi_value_change_6h_pct": 5.064489312061893,
+        "oi_value_change_24h_pct": -9.622473527368058,
+        "taker_buy_sell_ratio": 1.1293,
+        "global_long_short_ratio": 0.3535,
+        "top_long_short_ratio": 0.3714,
+        "top_minus_global_ratio": 0.02190000000000003
+      }
+    },
+    {
+      "symbol": "TRIA/USDT:USDT",
+      "date_utc": "2026-07-14",
+      "anchor_utc": "2026-07-14T01:45:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.0687224194324996,
+        "oi_value_change_6h_pct": 1.6350672483160578,
+        "oi_value_change_24h_pct": -6.970001744633492,
+        "taker_buy_sell_ratio": 0.9814,
+        "global_long_short_ratio": 1.3496,
+        "top_long_short_ratio": 1.6553,
+        "top_minus_global_ratio": 0.3057000000000001
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.5031404141635276,
+        "oi_value_change_6h_pct": -5.682119138968322,
+        "oi_value_change_24h_pct": -4.858144337700732,
+        "taker_buy_sell_ratio": 0.8156,
+        "global_long_short_ratio": 1.4027,
+        "top_long_short_ratio": 1.6838,
+        "top_minus_global_ratio": 0.2943
+      }
+    },
+    {
+      "symbol": "AKE/USDT:USDT",
+      "date_utc": "2026-07-15",
+      "anchor_utc": "2026-07-15T04:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.5171653135172649,
+        "oi_value_change_6h_pct": -0.17587091995051596,
+        "oi_value_change_24h_pct": -17.195731317691497,
+        "taker_buy_sell_ratio": 0.948,
+        "global_long_short_ratio": 2.4223,
+        "top_long_short_ratio": 2.7481,
+        "top_minus_global_ratio": 0.3258000000000001
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.39150882165799317,
+        "oi_value_change_6h_pct": 0.23098670027188462,
+        "oi_value_change_24h_pct": -0.41367133170157055,
+        "taker_buy_sell_ratio": 1.0766,
+        "global_long_short_ratio": 2.2051,
+        "top_long_short_ratio": 2.3223,
+        "top_minus_global_ratio": 0.1511
+      }
+    },
+    {
+      "symbol": "HOME/USDT:USDT",
+      "date_utc": "2026-07-15",
+      "anchor_utc": "2026-07-15T16:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.4352637005577753,
+        "oi_value_change_6h_pct": 8.646454201737818,
+        "oi_value_change_24h_pct": 32.37695437293091,
+        "taker_buy_sell_ratio": 0.86,
+        "global_long_short_ratio": 0.5214,
+        "top_long_short_ratio": 0.779,
+        "top_minus_global_ratio": 0.25760000000000005
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": -0.1930680440149879,
+        "oi_value_change_6h_pct": -1.8141753700747776,
+        "oi_value_change_24h_pct": -6.5493003567820836,
+        "taker_buy_sell_ratio": 0.8696,
+        "global_long_short_ratio": 0.5333,
+        "top_long_short_ratio": 0.7963,
+        "top_minus_global_ratio": 0.26369999999999993
+      }
+    },
+    {
+      "symbol": "SKL/USDT:USDT",
+      "date_utc": "2026-07-15",
+      "anchor_utc": "2026-07-15T02:30:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 0.7826252576856874,
+        "oi_value_change_6h_pct": -4.412749001257299,
+        "oi_value_change_24h_pct": -9.193682225166445,
+        "taker_buy_sell_ratio": 1.1761,
+        "global_long_short_ratio": 1.0206,
+        "top_long_short_ratio": 1.1363,
+        "top_minus_global_ratio": 0.11570000000000014
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 0.6700797400097214,
+        "oi_value_change_6h_pct": -5.288850546004675,
+        "oi_value_change_24h_pct": -19.130524693262394,
+        "taker_buy_sell_ratio": 1.1266,
+        "global_long_short_ratio": 1.1295,
+        "top_long_short_ratio": 1.192,
+        "top_minus_global_ratio": 0.0625
+      }
+    },
+    {
+      "symbol": "US/USDT:USDT",
+      "date_utc": "2026-07-15",
+      "anchor_utc": "2026-07-15T05:15:00+00:00",
+      "event": {
+        "oi_value_change_1h_pct": 1.6955297289839688,
+        "oi_value_change_6h_pct": 6.6942363911473235,
+        "oi_value_change_24h_pct": 10.166091650230946,
+        "taker_buy_sell_ratio": 1.2193,
+        "global_long_short_ratio": 0.8481,
+        "top_long_short_ratio": 0.675,
+        "top_minus_global_ratio": -0.17309999999999992
+      },
+      "control_n": 3,
+      "control_median": {
+        "oi_value_change_1h_pct": 1.5727886054866191,
+        "oi_value_change_6h_pct": -0.7833746614803294,
+        "oi_value_change_24h_pct": 6.576143574637117,
+        "taker_buy_sell_ratio": 1.0661,
+        "global_long_short_ratio": 0.9732,
+        "top_long_short_ratio": 0.7912,
+        "top_minus_global_ratio": -0.18199999999999994
+      }
+    }
+  ]
+}

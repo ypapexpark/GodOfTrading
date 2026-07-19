@@ -1,10 +1,30 @@
 # GodOfTrading Trading Notes
 
+## 2026-07-15 Venue Quant Governor v5
+
+- Bybit/Binance는 같은 신호여도 별도 실체결 코호트로 승격한다.
+- Bybit 허용 EMA-LONG 코호트: 31건, pnl +$9.10, PF 1.70 → 새 버전은 risk×0.50 probation.
+- Binance 동일 코호트: 8건, pnl -$138.83, PF 0.09. v5 실제 OOS 확보를 위해 승인 EMA-LONG만 risk×0.10 canary; 8건 조기평가 실패 시 자동중단.
+- 계정 API 실측 taker fee(Bybit 0.055%, Binance 0.050%)와 편도 3bp 슬리피지를 비용/위험 산정에 반영.
+- Binance 진입 후 실제 진입가·수량·레버리지·증거금을 재조회하고 위험캡 초과 시 reduce-only 긴급청산.
+- Binance 조건부 SL이 별도 Algo 원장에 존재하는 API 변경을 반영해, SL 갱신 시 신규 보호주문 확인 후 구 Algo SL만 취소한다.
+- Binance canary는 일손실 주문가능 잔고×0.5%, 동시 포지션 3개(기존 포함), 정식 20건 통과 전 증액 금지.
+- 과거 동시 모니터가 남긴 가짜 open 3건은 PnL을 만들지 않고 `ledger_orphan`으로 격리.
+- 감사: `python3 tools/quant_research_audit.py`; 방법론: `QUANT_RESEARCH_SYSTEM.md`.
+
 ## 2026-07-11 Hyperliquid whale paper (가동)
 
 - **상태:** paper only, 12 지갑 리더보드 시드, LaunchAgent 180s.
 - **핵심 수정:** 콜드스타트 시 과거 체결 소급 카피 금지 (커서 시드).
 - **정산:** 고래 flat 또는 max_hold 48h. 카피 notional $25, min whale fill $5k.
+
+### 2026-07-19 v2 교체
+
+- v1 63건 PF 0.70, -$7.47로 개별 fill 복사를 폐기.
+- 30초 `userFillsByTime`, taker open 합산 $50k+, clearinghouse 순포지션 증가와
+  계좌대비 0.5% 확신도를 확인하는 position-delta PAPER로 교체.
+- 진입/청산 슬리피지와 양방향 taker fee를 반영하며 v1/v2 통계를 분리.
+- 상세 원인: `HYPERLIQUID_WHALE_REVIEW_2026-07-19.md`.
 - **재스크리닝:** `python3 tools/hl_whale_screen.py --from-leaderboard --write-config --top 12`
 - **LIVE:** 없음. 폴리 고래처럼 paper 성과 본 뒤 결정.
 

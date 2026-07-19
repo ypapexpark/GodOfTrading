@@ -3,6 +3,7 @@ pandas>=2.0.0
 numpy>=1.24.0
 python-dotenv>=1.0.0
 requests>=2.31.0
+websocket-client>=1.8.0
 finance-datareader>=0.9.202
 # Polymarket live (.venv-poly): 2026 CLOB v2 — v1 py-clob-client 주문 거절됨
 # py-clob-client-v2>=1.0.1

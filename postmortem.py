@@ -96,15 +96,15 @@ def _loss_cause_candidates(record: dict) -> list[dict]:
 
     if "SL" in exit_reason or exit_reason == "손실 청산":
         out.append({
-            "code": "stop_hit",
-            "text": f"{exit_reason} — 가격이 SL 쪽을 먼저 터치 (진입 가정 무효 또는 노이즈)",
-            "weight": 1.0,
+            "code": "stop_outcome",
+            "text": f"{exit_reason} — 관측된 결과이며 패배 원인으로 단정하지 않음",
+            "weight": 0.1,
         })
     if r_mult is not None and r_mult <= -0.9:
         out.append({
-            "code": "full_r_loss",
+            "code": "full_r_loss_outcome",
             "text": f"약 {abs(r_mult):.2f}R 전량 손실에 가까움 — 부분익절/보호 전 반대 진행",
-            "weight": 0.9,
+            "weight": 0.1,
         })
     if hold < 15 and "SL" in exit_reason:
         out.append({
@@ -220,9 +220,9 @@ def _win_cause_candidates(record: dict) -> list[dict]:
     ema_aligned = bool(_ctx(record).get("ema_aligned") or record.get("ema_aligned"))
 
     out.append({
-        "code": "thesis_worked",
-        "text": f"진입 방향 유효 — {exit_reason or '수익 청산'}",
-        "weight": 1.0,
+        "code": "profit_outcome",
+        "text": f"{exit_reason or '수익 청산'} — 관측된 결과이며 성공 원인으로 단정하지 않음",
+        "weight": 0.1,
     })
     if r_mult is not None and r_mult >= 1.0:
         out.append({
@@ -301,7 +301,7 @@ def _lessons(record: dict, causes: list[dict], status: str) -> list[str]:
             lessons.append("진입 타이밍·하위TF 정렬 재확인")
         if "stale_signal" in codes:
             lessons.append("신선도 한도 유지 (늦은 진입 금지)")
-        if "shallow_win" not in codes and "full_r_loss" in codes:
+        if "shallow_win" not in codes and "full_r_loss_outcome" in codes:
             lessons.append("TP1 전 추진 실패 — 조기 무효 기준 검토")
         if not lessons:
             lessons.append("동일 심볼·전략군 연패 시 실체결 학습 차단 활용")
@@ -339,7 +339,20 @@ def build_trade_postmortem(record: dict) -> dict:
     attr = _attr(record)
     regime = _regime(record)
     r_mult = _r_multiple(record)
-    primary = causes[0] if causes else {"code": "unknown", "text": "-", "weight": 0}
+    outcome_codes = {"stop_outcome", "full_r_loss_outcome", "profit_outcome"}
+    hypotheses = [c for c in causes if c.get("code") not in outcome_codes]
+    primary_hypothesis = (
+        hypotheses[0] if hypotheses else {
+            "code": "insufficient_evidence",
+            "text": "인과 원인을 판별할 진입 후 가격경로/반사실 증거 부족",
+            "weight": 0.0,
+        }
+    )
+    primary = {
+        "code": "insufficient_causal_evidence",
+        "text": "손익 결과만으로 원인을 확정하지 않음",
+        "weight": 0.0,
+    }
 
     pm = {
         "schema": "got_postmortem_v1",
@@ -363,6 +376,8 @@ def build_trade_postmortem(record: dict) -> dict:
         "hold_minutes": round(_hold_minutes(record), 1),
         "headline": headline,
         "primary_cause": primary,
+        "primary_hypothesis": primary_hypothesis,
+        "causal_evidence": "unverified",
         "causes": causes,
         "lessons": _lessons(record, causes, status),
         "regime": {
@@ -385,7 +400,7 @@ def build_trade_postmortem(record: dict) -> dict:
             f"{'✅승' if status == 'win' else '❌패' if status == 'loss' else '〰본전'} "
             f"{record.get('symbol')} {record.get('direction')} "
             f"pnl={_f(record.get('pnl_usd')):+.2f} "
-            f"| {primary.get('text', '')}"
+            f"| 원인후보: {primary_hypothesis.get('text', '')}"
         ),
     }
     return pm

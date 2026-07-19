@@ -7,7 +7,10 @@ import os
 import json
 import time
 import math
+import uuid
+import hashlib
 import warnings
+from collections import deque
 from html import escape
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -37,6 +40,44 @@ VENUE      = runtime_venue()
 STATE_FILE = namespaced_data_path("trade_state.json")
 CANDIDATE_FILE = namespaced_data_path(CANDIDATE_LOG_FILE)
 EXECUTION_JOURNAL = namespaced_data_path(EXECUTION_JOURNAL_FILE)
+
+TF_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+_CANDIDATE_EVENT_KEYS: set[tuple[str, str, str]] | None = None
+
+
+def _candidate_log_tail(max_lines: int = 50_000) -> list[dict]:
+    """Read only the useful tail of a potentially very large JSONL ledger."""
+    if not CANDIDATE_FILE.exists():
+        return []
+    rows: list[dict] = []
+    try:
+        with CANDIDATE_FILE.open("r", encoding="utf-8") as handle:
+            lines = deque(handle, maxlen=max_lines)
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    except OSError as exc:
+        print(f"[후보로그] tail 읽기 실패: {exc}")
+    return rows
+
+
+def _load_candidate_event_keys() -> set[tuple[str, str, str]]:
+    global _CANDIDATE_EVENT_KEYS
+    if _CANDIDATE_EVENT_KEYS is None:
+        _CANDIDATE_EVENT_KEYS = {
+            (
+                str(row.get("candidate_id") or ""),
+                str(row.get("status") or ""),
+                str(row.get("reason") or ""),
+            )
+            for row in _candidate_log_tail(8_000)
+            if row.get("candidate_id")
+        }
+    return _CANDIDATE_EVENT_KEYS
 
 # ─── 리스크 파라미터 (100억 프로젝트 — 공격적 복리 성장) ─────────────────────
 TRADE_MARGIN_PCT      = 0.25   # 스윙 기본 비율 (강도별 override 됨)
@@ -115,7 +156,10 @@ def _load_state() -> dict:
 
 def _save_state(s: dict):
     s.setdefault("venue", VENUE)
-    STATE_FILE.write_text(json.dumps(s, indent=2, ensure_ascii=False))
+    # 프로세스가 중단돼도 반쪽 JSON이 남지 않게 같은 디렉터리에서 원자 교체한다.
+    tmp = STATE_FILE.with_name(f".{STATE_FILE.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(s, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, STATE_FILE)
 
 
 def _refresh_daily(s: dict) -> dict:
@@ -158,7 +202,14 @@ def _last_closed_loss_ts(s: dict) -> float:
 
 def _apply_drawdown_guard(s: dict, equity: float) -> tuple[bool, str]:
     """
-    계좌 전체 드로우다운 방어.
+    계좌 전체 드로우다운 고정시간 방어.
+
+    실행 기준점 대비 DD가 hard-stop 한도에 닿으면 최초 시각부터 정확히
+    DRAWDOWN_PAUSE_HOURS 동안만 신규진입을 막는다. 반복 검사로 종료시각을
+    연장하지 않으며, 시간이 지나면 손실률과 무관하게 현재 equity로 실행
+    기준점을 재설정하고 자동 재개한다. 전체 최고 equity와 역대 최대 DD는
+    별도 기록으로 보존한다.
+
     .env ACCOUNT_START_BALANCE가 있으면 기존 손실률까지 반영하고,
     없으면 봇이 관측한 최고 equity 기준으로 이후 손실을 막는다.
     """
@@ -174,12 +225,83 @@ def _apply_drawdown_guard(s: dict, equity: float) -> tuple[bool, str]:
     s["equity_peak"] = round(peak, 4)
     s["last_equity"] = round(equity, 4)
 
-    drawdown = max(0.0, (peak - equity) / peak) if peak > 0 else 0.0
+    all_time_drawdown = max(0.0, (peak - equity) / peak) if peak > 0 else 0.0
+    s["all_time_drawdown_pct"] = round(all_time_drawdown * 100, 2)
+
+    # equity_peak는 보고용 역대 최고점으로 보존한다. 시간제 재개 후 즉시 다시
+    # 18% 하드스톱에 걸리지 않도록 실행 회차의 기준점은 별도로 관리한다.
+    guard_peak = float(s.get("drawdown_guard_peak", 0) or 0)
+    if guard_peak <= 0:
+        guard_peak = peak
+    guard_peak = max(guard_peak, equity)
+    s["drawdown_guard_peak"] = round(guard_peak, 4)
+    drawdown = (
+        max(0.0, (guard_peak - equity) / guard_peak)
+        if guard_peak > 0 else 0.0
+    )
     s["drawdown_pct"] = round(drawdown * 100, 2)
     s["max_drawdown_pct"] = max(
         float(s.get("max_drawdown_pct", 0) or 0),
-        s["drawdown_pct"],
+        s["all_time_drawdown_pct"],
     )
+
+    now_ts = time.time()
+    started_ts = float(s.get("hard_stop_started_ts", 0) or 0)
+    until_ts = float(
+        s.get("hard_stop_until", 0)
+        or s.get("pause_until", 0)
+        or 0
+    )
+    hard_stop_latched = started_ts > 0 or s.get("drawdown_status") == "hard_stop"
+
+    if hard_stop_latched and DRAWDOWN_HARD_STOP_BLOCK_NEW_TRADES:
+        if started_ts <= 0:
+            # 구버전에서 이미 멈춘 상태를 마이그레이션한다. 기존 종료시각이
+            # 있으면 역산하고, 없으면 현재를 최초 발동시각으로 사용한다.
+            started_ts = (
+                until_ts - DRAWDOWN_PAUSE_HOURS * 3600
+                if until_ts > now_ts else now_ts
+            )
+        if until_ts <= 0:
+            until_ts = started_ts + DRAWDOWN_PAUSE_HOURS * 3600
+        s["hard_stop_started_ts"] = started_ts
+        s["hard_stop_until"] = until_ts
+        s["pause_until"] = until_ts
+        if now_ts < until_ts:
+            s["drawdown_status"] = "hard_stop"
+            until = datetime.fromtimestamp(until_ts, KST).strftime("%m/%d %H:%M")
+            remaining_minutes = max(1, math.ceil((until_ts - now_ts) / 60))
+            return False, (
+                f"계좌 드로우다운 시간제 하드스톱 — {until} KST 자동재개 "
+                f"(약 {remaining_minutes}분 남음, 종료시각 고정)"
+            )
+
+        # 고정시간 만료: 현재 손실률과 무관하게 무조건 같은 크기로 재개한다.
+        previous_guard_peak = guard_peak
+        previous_drawdown_pct = round(drawdown * 100, 2)
+        s.setdefault("hard_stop_resumes", []).append({
+            "timestamp": now_ts,
+            "equity": round(equity, 4),
+            "previous_guard_peak": round(previous_guard_peak, 4),
+            "previous_drawdown_pct": previous_drawdown_pct,
+            "pause_hours": DRAWDOWN_PAUSE_HOURS,
+        })
+        s["hard_stop_resume_count"] = int(
+            s.get("hard_stop_resume_count", 0) or 0
+        ) + 1
+        s["last_hard_stop_resume_ts"] = now_ts
+        s["last_hard_stop_resume_equity"] = round(equity, 4)
+        s["last_hard_stop_drawdown_pct"] = previous_drawdown_pct
+        s["drawdown_guard_peak"] = round(equity, 4)
+        s["drawdown_pct"] = 0.0
+        s["drawdown_status"] = "normal"
+        s["hard_stop_started_ts"] = 0
+        s["hard_stop_until"] = 0
+        s["pause_until"] = 0
+        return True, (
+            f"계좌 드로우다운 4시간 하드스톱 만료 — equity ${equity:.2f} "
+            "기준으로 자동재개"
+        )
 
     if drawdown >= DRAWDOWN_HARD_STOP_PCT:
         if not DRAWDOWN_HARD_STOP_BLOCK_NEW_TRADES:
@@ -189,13 +311,19 @@ def _apply_drawdown_guard(s: dict, equity: float) -> tuple[bool, str]:
                 f"계좌 드로우다운 {drawdown*100:.1f}% >= {DRAWDOWN_HARD_STOP_PCT*100:.0f}% "
                 f"— 신규매매 중단 대신 회복모드로 축소 운용"
             )
-        until_ts = time.time() + DRAWDOWN_PAUSE_HOURS * 3600
-        s["pause_until"] = max(float(s.get("pause_until", 0) or 0), until_ts)
+        started_ts = now_ts
+        until_ts = started_ts + DRAWDOWN_PAUSE_HOURS * 3600
+        s["hard_stop_started_ts"] = started_ts
+        s["hard_stop_until"] = until_ts
+        s["pause_until"] = until_ts
+        s["last_hard_stop_trigger_ts"] = started_ts
+        s["last_hard_stop_trigger_equity"] = round(equity, 4)
+        s["last_hard_stop_trigger_drawdown_pct"] = round(drawdown * 100, 2)
         s["drawdown_status"] = "hard_stop"
-        until = datetime.fromtimestamp(s["pause_until"], KST).strftime("%m/%d %H:%M")
+        until = datetime.fromtimestamp(until_ts, KST).strftime("%m/%d %H:%M")
         return False, (
             f"계좌 드로우다운 {drawdown*100:.1f}% >= {DRAWDOWN_HARD_STOP_PCT*100:.0f}% "
-            f"— {until} KST까지 신규매매 중단"
+            f"— {until} KST 자동재개 (고정 {DRAWDOWN_PAUSE_HOURS}시간)"
         )
 
     if drawdown >= DRAWDOWN_RISK_OFF_PCT:
@@ -256,7 +384,12 @@ def _json_safe(value):
 def log_trade_candidate(symbol: str, tf_key: str, strategy: str,
                         direction: str, strength: str, status: str,
                         reason: str = "", **extra):
-    """후보/차단/체결 이벤트를 JSONL로 저장해 사후 통계 검증에 사용한다."""
+    """후보/차단/체결 이벤트를 JSONL로 저장해 사후 통계 검증에 사용한다.
+
+    같은 거래소·심볼·판단봉·전략 신호를 매 3~5분 스캔마다 새 후보로 만들면
+    사후평가 표본이 중복으로 부풀고 오래된 후보가 tail에서 밀려난다. v6부터
+    candidate_id는 판단봉 버킷에 고정하고 동일 상태/사유 이벤트는 한 번만 쓴다.
+    """
     if "strategy_family" not in extra or "core_strategy" not in extra:
         signal_type = str(extra.get("signal_type", "") or "")
         is_divergence = bool(extra.get(
@@ -273,9 +406,25 @@ def log_trade_candidate(symbol: str, tf_key: str, strategy: str,
         extra.setdefault("strategy_mode", profile["family_key"])
     candidate_id = extra.pop("candidate_id", None)
     if not candidate_id:
-        ts_ms = int(time.time() * 1000)
+        now = time.time()
+        bucket_seconds = TF_SECONDS.get(tf_key, 300)
+        signal_bucket = int(now // bucket_seconds) * bucket_seconds
+        identity = "|".join((
+            VENUE,
+            symbol,
+            tf_key,
+            strategy,
+            direction,
+            str(extra.get("signal_type", "") or ""),
+            str(signal_bucket),
+        ))
+        digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()[:16]
         safe_symbol = symbol.replace("/", "").replace(":", "")
-        candidate_id = f"{ts_ms}-{safe_symbol}-{tf_key}-{status}"
+        candidate_id = f"{signal_bucket}-{safe_symbol}-{tf_key}-{digest}"
+    event_key = (str(candidate_id), str(status), str(reason))
+    event_keys = _load_candidate_event_keys()
+    if event_key in event_keys:
+        return candidate_id
     row = {
         "candidate_id": candidate_id,
         "venue":     VENUE,
@@ -292,6 +441,13 @@ def log_trade_candidate(symbol: str, tf_key: str, strategy: str,
     row.update(_json_safe(extra))
     with CANDIDATE_FILE.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    event_keys.add(event_key)
+    # 한 프로세스가 매우 오래 살아도 메모리가 무한정 커지지 않게 한다. 일반 실행은
+    # one-shot이어서 거의 도달하지 않지만 안전한 상한을 둔다.
+    if len(event_keys) > 30_000:
+        _CANDIDATE_EVENT_KEYS.clear()
+        _CANDIDATE_EVENT_KEYS.update(list(event_keys)[-12_000:])
+    return candidate_id
 
 
 def log_execution_journal(trade_num: int | None, event: str = "opened", **payload):
@@ -308,7 +464,6 @@ def log_execution_journal(trade_num: int | None, event: str = "opened", **payloa
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-TF_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
 EVAL_HORIZONS = (5, 10, 20)
 
 
@@ -330,25 +485,30 @@ def evaluate_trade_candidates(max_items: int = 80) -> list[str]:
     if not CANDIDATE_FILE.exists():
         return []
 
-    try:
-        rows = [
-            json.loads(line)
-            for line in CANDIDATE_FILE.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-    except Exception as e:
-        print(f"[후보평가] 로그 읽기 실패: {e}")
+    rows = _candidate_log_tail(50_000)
+    if not rows:
         return []
 
     s = _load_state()
     evaluated = set(s.get("evaluated_candidate_ids", []))
     now = time.time()
     pending = []
+    pending_ids: set[str] = set()
+    source_by_id: dict[str, dict] = {}
+    source_priority = {"blocked": 1, "order_failed": 2, "opened": 3}
 
-    for row in rows[-800:]:
+    # 한 판단봉 후보가 여러 게이트 상태를 거쳤다면 실제 주문에 가장 가까운 이벤트를
+    # 대표로 평가한다(opened > order_failed > blocked). 같은 후보를 여러 표본으로
+    # 세는 누수를 막는다.
+    for row in rows:
         if row.get("status") not in ("blocked", "order_failed", "opened"):
             continue
         cid = _candidate_key(row)
+        prior = source_by_id.get(cid)
+        if prior is None or source_priority.get(row.get("status"), 0) >= source_priority.get(prior.get("status"), 0):
+            source_by_id[cid] = row
+
+    for cid, row in source_by_id.items():
         if cid in evaluated:
             continue
         tf = row.get("tf")
@@ -359,7 +519,10 @@ def evaluate_trade_candidates(max_items: int = 80) -> list[str]:
             continue
         if now - ts < TF_SECONDS.get(tf, 3600) * max(EVAL_HORIZONS):
             continue
+        if cid in pending_ids:
+            continue
         pending.append((cid, row))
+        pending_ids.add(cid)
         if len(pending) >= max_items:
             break
 
@@ -481,11 +644,12 @@ def notify_trade_block(symbol: str, tf_key: str, direction: str,
 
 def check_circuit_breaker(balance: float = 0.0,
                           allow_pause_override: bool = False,
-                          override_reason: str = "") -> tuple[bool, str]:
+                          override_reason: str = "",
+                          equity: float | None = None) -> tuple[bool, str]:
     """(거래 가능 여부, 이유 메시지) 반환."""
     s = _refresh_daily(_load_state())
-    equity = get_usdt_equity() or balance
-    guard_ok, guard_reason = _apply_drawdown_guard(s, equity)
+    equity_now = get_usdt_equity() or balance if equity is None else float(equity)
+    guard_ok, guard_reason = _apply_drawdown_guard(s, equity_now)
     daily_limit = get_daily_loss_limit(balance)
 
     if not guard_ok:
@@ -851,6 +1015,60 @@ def _split_tps(total_qty: float, tps: list, symbol: str, exchange=None) -> list:
 
 # ─── 주문 실행 ───────────────────────────────────────────────────────────────
 
+def _planned_stop_loss_usd(qty: float, entry_price: float, sl: float,
+                           round_trip_cost: float = ROUND_TRIP_FEE) -> float:
+    """Worst planned cash loss at SL, including conservative execution cost."""
+    if qty <= 0 or entry_price <= 0 or sl <= 0:
+        return 0.0
+    return (
+        float(qty) * abs(float(entry_price) - float(sl))
+        + float(qty) * float(entry_price) * max(float(round_trip_cost), 0.0)
+    )
+
+
+def _live_position_after_entry(ex, fsym: str, attempts: int = 3) -> dict:
+    """Read the actual Bybit position after a market entry."""
+    last_error = ""
+    for attempt in range(max(1, attempts)):
+        try:
+            for position in ex.fetch_positions(
+                [fsym], params={"category": "linear"}
+            ):
+                qty = abs(float(position.get("contracts", 0) or 0))
+                if qty <= 0:
+                    continue
+                entry = float(position.get("entryPrice", 0) or 0)
+                leverage = max(float(position.get("leverage", 1) or 1), 1.0)
+                return {
+                    "ok": True,
+                    "qty": qty,
+                    "entry_price": entry,
+                    "leverage": leverage,
+                    "margin_usd": qty * entry / leverage if entry > 0 else 0.0,
+                }
+        except Exception as exc:
+            last_error = str(exc)
+        if attempt + 1 < attempts:
+            time.sleep(0.25)
+    return {"ok": False, "error": last_error or "체결 포지션이 조회되지 않음"}
+
+
+def _emergency_market_close(ex, fsym: str, close_side: str, qty: float,
+                            symbol: str, reason: str) -> bool:
+    """Best-effort reduce-only close when a protected entry is incomplete."""
+    print(f"  ❌ {symbol} 보호 실패 — 긴급 청산: {reason}")
+    try:
+        ex.create_order(
+            fsym, "market", close_side, qty,
+            params={"category": "linear", "reduceOnly": True},
+        )
+        print(f"  ✅ {symbol} 긴급 청산 주문 접수")
+        return True
+    except Exception as exc:
+        print(f"  ❌ {symbol} 긴급 청산 실패: {exc}")
+        return False
+
+
 def execute(symbol: str, direction: str, leverage: int,
             entry_price: float, sl: float, tps: list,
             position_pct: float = TRADE_MARGIN_PCT,
@@ -858,7 +1076,10 @@ def execute(symbol: str, direction: str, leverage: int,
             max_margin_usd: float | None = None,
             min_margin_usd: float | None = None,
             allow_pause_override: bool = False,
-            pause_override_reason: str = "") -> dict:
+            pause_override_reason: str = "",
+            max_sl_loss_usd: float | None = None,
+            position_meta: dict | None = None,
+            require_full_protection: bool = False) -> dict:
     """
     실거래 주문 실행.
     tps: [{"price": float, "pct": int}, ...]
@@ -922,6 +1143,20 @@ def execute(symbol: str, direction: str, leverage: int,
     if qty <= 0:
         return {"ok": False, "qty": 0, "leverage": leverage, "error": "수량 계산 실패"}
 
+    planned_loss = _planned_stop_loss_usd(qty, entry_price, sl)
+    loss_cap = max(float(max_sl_loss_usd or 0.0), 0.0)
+    if loss_cap > 0 and planned_loss > loss_cap + 1e-6:
+        msg = (
+            f"정밀도 적용 예상 SL손실 ${planned_loss:.4f} > "
+            f"현재 시드 상한 ${loss_cap:.4f}; 최소수량 확대 금지"
+        )
+        print(f"[자동매매] {msg}")
+        return {
+            "ok": False, "qty": 0, "leverage": leverage, "error": msg,
+            "seed_equity": get_usdt_equity(), "free_balance": balance,
+            "max_sl_loss_usd": loss_cap,
+        }
+
     tp_splits = _split_tps(qty, tps, symbol, exchange=ex)
     if not tp_splits:
         return {"ok": False, "qty": 0, "leverage": leverage, "error": "TP 분할 실패"}
@@ -936,6 +1171,13 @@ def execute(symbol: str, direction: str, leverage: int,
     print(f"  진입≈${entry_price:,.4f}  |  손절: ${sl:,.4f}")
     print(f"{'='*50}")
 
+    entry_live = False
+    actual_qty = qty
+    actual_entry = entry_price
+    actual_margin = qty * entry_price / max(leverage, 1)
+    actual_loss = planned_loss
+    entry_id = ""
+    entry_order_link_id = ""
     try:
         # 1. 레버리지 설정
         try:
@@ -947,18 +1189,85 @@ def execute(symbol: str, direction: str, leverage: int,
         time.sleep(0.4)
 
         # 2. 시장가 진입
+        entry_order_link_id = f"got-{uuid.uuid4().hex}"
         entry_order = ex.create_order(
             fsymbol, "market", side, qty,
-            params={"category": "linear"}
+            params={"category": "linear", "orderLinkId": entry_order_link_id}
         )
         entry_id = entry_order.get("id", "")
+        entry_live = True
         print(f"  ✅ 진입 완료 (주문ID: {entry_id})")
         time.sleep(0.5)
+
+        live_position = _live_position_after_entry(ex, fsymbol)
+        if live_position.get("ok"):
+            actual_qty = float(live_position.get("qty") or qty)
+            actual_entry = float(live_position.get("entry_price") or entry_price)
+            leverage = max(int(float(live_position.get("leverage") or leverage)), 1)
+            actual_margin = float(
+                live_position.get("margin_usd")
+                or actual_qty * actual_entry / leverage
+            )
+            actual_loss = _planned_stop_loss_usd(actual_qty, actual_entry, sl)
+        elif require_full_protection:
+            emergency_ok = _emergency_market_close(
+                ex, fsymbol, close_side, qty, symbol,
+                f"진입 직후 실포지션 검증 실패: {live_position.get('error', '')}",
+            )
+            return {
+                "ok": False, "qty": qty, "leverage": leverage,
+                "error": (
+                    "실포지션 검증 실패 — 긴급 청산 완료"
+                    if emergency_ok else
+                    "실포지션 검증 및 긴급 청산 실패 — 즉시 수동 확인 필요"
+                ),
+                "entry_order_id": entry_id,
+                "entry_order_link_id": entry_order_link_id,
+                "emergency_closed": emergency_ok,
+            }
+
+        over_margin = max_margin > 0 and actual_margin > max_margin * 1.02 + 0.01
+        over_loss = loss_cap > 0 and actual_loss > loss_cap * 1.005 + 1e-6
+        if over_margin or over_loss:
+            reason = (
+                f"실체결 위험캡 초과: margin ${actual_margin:.2f}/${max_margin:.2f}, "
+                f"SL ${actual_loss:.4f}/${loss_cap:.4f}"
+            )
+            emergency_ok = _emergency_market_close(
+                ex, fsymbol, close_side, actual_qty, symbol, reason,
+            )
+            return {
+                "ok": False, "qty": actual_qty, "leverage": leverage,
+                "error": (
+                    f"{reason} — 긴급 청산 완료"
+                    if emergency_ok else f"{reason} — 긴급 청산 실패"
+                ),
+                "entry_order_id": entry_id,
+                "entry_order_link_id": entry_order_link_id,
+                "emergency_closed": emergency_ok,
+            }
+
+        qty = actual_qty
+        entry_price = actual_entry
+        tp_splits = _split_tps(qty, tps, symbol, exchange=ex)
+        if not tp_splits:
+            emergency_ok = _emergency_market_close(
+                ex, fsymbol, close_side, qty, symbol,
+                "실체결 수량 기준 TP 분할 실패",
+            )
+            return {
+                "ok": False, "qty": qty, "leverage": leverage,
+                "error": "실체결 수량 TP 분할 실패 — 긴급 청산 처리",
+                "emergency_closed": emergency_ok,
+            }
 
         # 진입 직후 즉시 포지션 추적 저장 — SL 실패해도 orphan으로 감지되게 함
         _save_position(
             symbol, direction, entry_price, qty, sl,
             atr=atr, is_elite=is_elite, leverage=leverage,
+            entry_order_id=entry_id,
+            entry_order_link_id=entry_order_link_id,
+            position_meta=position_meta,
         )
 
         # 3. 손절 (Stop Market, reduceOnly) — 최대 3회 재시도, 실패 시 긴급 시장가 청산
@@ -994,23 +1303,27 @@ def execute(symbol: str, direction: str, leverage: int,
                 )
             except Exception:
                 pass
-            try:
-                ex.create_order(
-                    fsymbol, "market", close_side, qty,
-                    params={"category": "linear", "reduceOnly": True}
-                )
-                print(f"  ✅ 긴급 청산 완료")
-            except Exception as emergency_err:
-                print(f"  ❌ 긴급 청산도 실패: {emergency_err}")
-            _clear_position(symbol)
-            return {"ok": False, "qty": qty, "leverage": leverage,
-                    "error": "SL 설정 3회 실패 — 긴급 청산 처리"}
+            emergency_ok = _emergency_market_close(
+                ex, fsymbol, close_side, qty, symbol, "SL 설정 3회 실패",
+            )
+            if emergency_ok:
+                _clear_position(symbol)
+            return {
+                "ok": False, "qty": qty, "leverage": leverage,
+                "error": (
+                    "SL 설정 3회 실패 — 긴급 청산 완료"
+                    if emergency_ok else
+                    "SL 및 긴급 청산 실패 — 추적 유지, 즉시 수동 확인 필요"
+                ),
+                "emergency_closed": emergency_ok,
+            }
 
         print(f"  ✅ 손절 설정: ${sl:,.4f}")
         time.sleep(0.4)
 
         # 4. TP 지정가 분할 주문
         labels = ["TP1", "TP2", "TP3"]
+        tp_errors = []
         for i, tp_item in enumerate(tp_splits):
             try:
                 ex.create_order(
@@ -1025,27 +1338,82 @@ def execute(symbol: str, direction: str, leverage: int,
                     print(f"  ℹ️ {labels[i]}: 포지션 이미 청산됨 (스킵)")
                 else:
                     print(f"  ⚠️ {labels[i]} 설정 실패: {tp_err}")
+                    tp_errors.append(f"{labels[i]}: {tp_err}")
             time.sleep(0.3)
+
+        if require_full_protection and tp_errors:
+            emergency_ok = _emergency_market_close(
+                ex, fsymbol, close_side, qty, symbol,
+                f"TP 보호주문 설정 실패: {' | '.join(tp_errors)}",
+            )
+            if emergency_ok:
+                try:
+                    ex.cancel_all_orders(fsymbol, params={"category": "linear"})
+                except Exception as cancel_err:
+                    print(f"  ⚠️ {symbol} 긴급청산 후 잔여주문 취소 실패: {cancel_err}")
+                _clear_position(symbol)
+            return {
+                "ok": False, "qty": qty, "leverage": leverage,
+                "error": (
+                    "TP 설정 실패 — 긴급 청산 완료"
+                    if emergency_ok else
+                    "TP 설정 및 긴급 청산 실패 — SL/추적 유지, 즉시 수동 확인 필요"
+                ),
+                "entry_order_id": entry_id,
+                "entry_order_link_id": entry_order_link_id,
+                "tp_errors": tp_errors,
+                "emergency_closed": emergency_ok,
+            }
 
         # 포지션 추적 저장은 SL 설정 전에 이미 완료됨
         print(f"{'='*50}\n")
-        return {"ok": True, "qty": qty, "leverage": leverage, "error": ""}
+        return {
+            "ok": True,
+            "qty": qty,
+            "leverage": leverage,
+            "error": "",
+            "entry_order_id": entry_id,
+            "entry_order_link_id": entry_order_link_id,
+            "entry_price": entry_price,
+            "seed_equity": get_usdt_equity(),
+            "free_balance": balance,
+            "margin_usd": actual_margin,
+            "notional_usd": qty * entry_price,
+            "estimated_sl_loss_usd": actual_loss,
+            "max_sl_loss_usd": loss_cap,
+        }
 
     except Exception as e:
         err = str(e)
         print(f"  ❌ 주문 오류: {err}")
+        emergency_ok = False
+        if require_full_protection and entry_live:
+            emergency_ok = _emergency_market_close(
+                ex, fsymbol, close_side, actual_qty, symbol,
+                f"보호주문 구성 중 예외: {err}",
+            )
+            if emergency_ok:
+                _clear_position(symbol)
         print(f"{'='*50}\n")
-        return {"ok": False, "qty": qty, "leverage": leverage, "error": err}
+        return {
+            "ok": False, "qty": qty, "leverage": leverage,
+            "error": f"{err} — 긴급 청산 완료" if emergency_ok else err,
+            "entry_order_id": entry_id,
+            "entry_order_link_id": entry_order_link_id,
+            "emergency_closed": emergency_ok,
+        }
 
 
 # ─── 포지션 추적 / 손익분기 SL ────────────────────────────────────────────────
 
 def _save_position(symbol: str, direction: str, entry_price: float,
                    qty: float, sl: float, atr: float = 0.0,
-                   is_elite: bool = False, leverage: int = 1):
+                   is_elite: bool = False, leverage: int = 1,
+                   entry_order_id: str = "", entry_order_link_id: str = "",
+                   position_meta: dict | None = None):
     """진입 정보 저장. ELITE는 TP1 이후 트레일링 스톱 활성화."""
     s = _load_state()
-    s.setdefault("positions", {})[symbol] = {
+    record = {
         "venue":       VENUE,
         "direction":   direction,
         "entry_price": entry_price,
@@ -1058,9 +1426,22 @@ def _save_position(symbol: str, direction: str, entry_price: float,
         "profit_lock_10_done": False,
         "atr":         round(atr, 4),
         "leverage":    int(leverage or 1),
+        "entry_order_id": entry_order_id,
+        "entry_order_link_id": entry_order_link_id,
         "is_elite":    is_elite,
         "trail_sl":    None,    # ELITE TP1 이후 활성화되는 트레일 SL
     }
+    safe_meta = _json_safe(position_meta or {})
+    for key in (
+        "engine_version", "strategy", "signal_bar", "max_hold_minutes",
+        "exit_policy", "divergence_kind", "signal_tier", "setup_timeframe",
+        "tp1_lock_r",
+        "trail_atr_mult", "trail_activation_r",
+        "progress_check_minutes", "progress_min_r",
+    ):
+        if key in safe_meta:
+            record[key] = safe_meta[key]
+    s.setdefault("positions", {})[symbol] = record
     _save_state(s)
 
 
@@ -1068,6 +1449,43 @@ def _clear_position(symbol: str):
     s = _load_state()
     s.get("positions", {}).pop(symbol, None)
     _save_state(s)
+
+
+def reconcile_stale_open_history(actual_symbols: set[str] | list[str]) -> list[dict]:
+    """Quarantine local ``open`` rows that are neither tracked nor live.
+
+    Older full/fast processes could both observe one close and consume separate
+    open rows for the same symbol.  Those duplicate rows must not count as live
+    risk or as wins/losses.  We preserve them as ledger anomalies instead of
+    inventing a PnL that cannot be attributed safely.
+    """
+    live = {str(symbol) for symbol in (actual_symbols or [])}
+    s = _load_state()
+    tracked = set((s.get("positions") or {}).keys())
+    quarantined: list[dict] = []
+    now_label = datetime.now(KST).strftime("%m/%d %H:%M KST")
+    for record in s.get("trade_history", []) or []:
+        symbol = str(record.get("symbol") or "")
+        if record.get("status") != "open" or symbol in tracked or symbol in live:
+            continue
+        snapshot = {
+            "num": record.get("num"),
+            "symbol": symbol,
+            "opened_at": record.get("time"),
+            "entry_order_id": record.get("entry_order_id", ""),
+            "entry_order_link_id": record.get("entry_order_link_id", ""),
+            "reason": "local_open_without_tracked_or_exchange_position",
+            "detected_at": now_label,
+        }
+        record["status"] = "ledger_orphan"
+        record["closed_at"] = now_label
+        record["ledger_reconciliation"] = snapshot
+        quarantined.append(snapshot)
+    if quarantined:
+        s.setdefault("ledger_anomalies", []).extend(quarantined)
+        _save_state(s)
+        print(f"[원장] 미추적·미보유 open 기록 {len(quarantined)}건 격리")
+    return quarantined
 
 
 def _closed_pnl_entries_for_trade(ex, fsym: str, symbol: str, direction: str,
@@ -1276,6 +1694,47 @@ def monitor_positions():
                 tg_send(build_trade_close_notification(closed_record))
             _clear_position(symbol)
             continue
+
+        # S1 is a short-horizon engine.  If the expected move has not appeared
+        # inside its holding window, exit instead of turning a scalp into an
+        # unplanned swing.  A failed exit leaves the SL and local tracking intact.
+        max_hold_minutes = float(info.get("max_hold_minutes") or 0.0)
+        opened_ts = float(info.get("opened_ts") or 0.0)
+        age_seconds = time.time() - opened_ts if opened_ts > 0 else 0.0
+        last_time_exit = float(info.get("time_exit_requested_ts") or 0.0)
+        if (
+            max_hold_minutes > 0
+            and age_seconds >= max_hold_minutes * 60
+            and (not last_time_exit or time.time() - last_time_exit >= 120)
+        ):
+            direction = info["direction"]
+            close_side = "sell" if direction == "LONG" else "buy"
+            try:
+                ex.create_order(
+                    fsym, "market", close_side, current_qty,
+                    params={"category": "linear", "reduceOnly": True},
+                )
+                time.sleep(0.2)
+                try:
+                    ex.cancel_all_orders(fsym, params={"category": "linear"})
+                except Exception as cancel_err:
+                    print(f"[시간청산] {symbol} 잔여주문 취소 실패: {cancel_err}")
+                s2 = _load_state()
+                if symbol in s2.get("positions", {}):
+                    s2["positions"][symbol]["time_exit_requested_ts"] = time.time()
+                    _save_state(s2)
+                print(
+                    f"[시간청산] {symbol} {direction} "
+                    f"{age_seconds/60:.0f}분 >= {max_hold_minutes:.0f}분"
+                )
+                tg_send(
+                    f"⏱️ <b>[S1 시간청산]</b> {symbol} {direction}\n"
+                    f"보유 {age_seconds/60:.0f}분 — 계획된 "
+                    f"{max_hold_minutes:.0f}분 한도 도달, reduce-only 청산"
+                )
+                continue
+            except Exception as time_exit_err:
+                print(f"[시간청산] {symbol} 실패 — SL 유지: {time_exit_err}")
 
         # 레버리지 포함 수익률이 +10%를 넘으면 SL도 +10% 이익권으로 끌어올린다.
         if not info.get("profit_lock_10_done"):

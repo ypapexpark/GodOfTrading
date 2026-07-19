@@ -1,0 +1,14 @@
+GodOfTrading Quant Audit — 2026-07-16 22:20:48 KST
+stack: 2026-07-16-v6-strict-15m-ema
+
+[BYBIT] probation allow=True risk×0.50
+  n=33 WR=69.7% PF=1.55 pnl=$+8.14 E=$+0.247 maxDD=$11.48
+  version n=0 pnl=$+0.00
+  decision: bybit 챔피언 유지: n=33, PF=1.55, E=$+0.247 | 현 버전 0/20건 pnl=$+0.00, risk×0.50
+  tracked=2 history_open=2 ledger_orphans=3
+
+[BINANCE] shadow allow=False risk×0.00
+  n=10 WR=20.0% PF=0.09 pnl=$-140.65 E=$-14.065 maxDD=$151.29
+  version n=0 pnl=$+0.00
+  decision: binance 챔피언 표본 10/20, PF 0.09, pnl $-140.65 — 실거래 승격 전
+  tracked=0 history_open=0 ledger_orphans=0

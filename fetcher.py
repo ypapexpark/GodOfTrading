@@ -1,7 +1,16 @@
 """USDT perpetual OHLCV collection + real-time market radar."""
+from __future__ import annotations
+
 import json
+import hashlib
+import os
+import re
+import threading
 import time
 import warnings
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 warnings.filterwarnings(
     "ignore",
@@ -14,6 +23,11 @@ import math
 import ccxt
 import pandas as pd
 import requests
+from binance_api_guard import (
+    api_backoff_remaining,
+    record_api_error,
+    reserve_api_weight,
+)
 from config import (BTC_SYNC_BETA_LOOKBACK, BTC_SYNC_LOOKBACK,
                     BTC_SYNC_MAX_SPREAD_PCT, BTC_SYNC_MIN_24H_USD,
                     BTC_SYNC_MIN_ABS_GAP_PCT, BTC_SYNC_MIN_VOL_RATIO,
@@ -32,11 +46,45 @@ from venue_runtime import market_data_venue, namespaced_data_path, venue_label
 _exchange   = None
 _radar_cache: dict = {"data": [], "ts": 0}
 _ticker_cache: dict = {"rows": [], "ts": 0}
+_full_perpetual_cache: dict = {"rows": [], "ts": 0}
 _btc_sync_cache: dict = {"data": [], "ts": 0}
 _hyperliquid_cache: dict = {"data": [], "ts": 0}
 _RADAR_TTL  = 900   # 15분 캐시 (스캔 5분마다 재사용)
 _RADAR_STATE_FILE = namespaced_data_path("market_radar_state.json", market_data_venue())
 _HYPERLIQUID_STATE_FILE = namespaced_data_path("hyperliquid_radar_state.json", market_data_venue())
+
+# Binance 전체종목 스캔은 매 실행마다 1h 1,000봉을 500여 종목에 다시 요청하면
+# 구조적으로 수 분 이상 걸린다. 완료봉은 바뀌지 않으므로 디스크에 보존하고 새로
+# 생긴 봉만 합치는 증분 캐시를 사용한다. 스캐너와 별도 수집 프로세스가 같은 캐시를
+# 공유하므로 재시작 뒤에도 초기 백필을 반복하지 않는다.
+_OHLCV_CACHE_DIR = Path(__file__).parent / ".cache" / "ohlcv"
+_BINANCE_FAPI_BASE = os.getenv(
+    "BINANCE_FAPI_PUBLIC_BASE", "https://fapi.binance.com"
+).rstrip("/")
+_TF_MILLISECONDS = {
+    "1m": 60_000,
+    "3m": 180_000,
+    "5m": 300_000,
+    "15m": 900_000,
+    "30m": 1_800_000,
+    "1h": 3_600_000,
+    "2h": 7_200_000,
+    "4h": 14_400_000,
+    "6h": 21_600_000,
+    "8h": 28_800_000,
+    "12h": 43_200_000,
+    "1d": 86_400_000,
+    "3d": 259_200_000,
+    "1w": 604_800_000,
+}
+_cache_locks_guard = threading.Lock()
+_cache_locks: dict[str, threading.Lock] = {}
+_binance_weight_guard = threading.Lock()
+_binance_weight_events: deque[tuple[float, int]] = deque()
+_BINANCE_PUBLIC_WEIGHT_PER_MINUTE = max(
+    300,
+    int(os.getenv("BINANCE_PUBLIC_WEIGHT_PER_MINUTE", "1800") or 1800),
+)
 
 # 레버드/인덱스 토큰 제외 키워드
 _EXCLUDE = {"BULL", "BEAR", "UP", "DOWN", "3L", "3S", "HALF", "SOXL", "TQQQ"}
@@ -80,13 +128,272 @@ def _market_symbol(exchange, symbol: str) -> str:
     return symbol
 
 
-def fetch_ohlcv(symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
-    ex  = _get_exchange()
-    raw = ex.fetch_ohlcv(_market_symbol(ex, symbol), timeframe=timeframe, limit=limit)
-    df  = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
+def _ohlcv_frame(raw: list) -> pd.DataFrame:
+    df = pd.DataFrame(
+        raw,
+        columns=["timestamp", "open", "high", "low", "close", "volume"],
+    )
+    if df.empty:
+        return df
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     df.set_index("timestamp", inplace=True)
-    return df
+    for column in ("open", "high", "low", "close", "volume"):
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    return df.dropna().sort_index()
+
+
+def _ohlcv_cache_path(symbol: str, timeframe: str) -> Path:
+    venue = market_data_venue()
+    normalized_symbol = symbol.upper()
+    safe_symbol = re.sub(r"[^A-Za-z0-9_.-]+", "_", normalized_symbol)
+    # Several Binance contracts use non-ASCII display symbols. Stripping those
+    # names used to collapse 币安人生/USDT, 龙虾/USDT and 我踏马来了/USDT into the
+    # same `_USDT` file, contaminating indicators across different markets.
+    if re.search(r"[^A-Za-z0-9_.\-/]", normalized_symbol):
+        digest = hashlib.sha1(normalized_symbol.encode("utf-8")).hexdigest()[:10]
+        safe_symbol = f"{safe_symbol}_{digest}"
+    safe_timeframe = re.sub(r"[^A-Za-z0-9_.-]+", "_", timeframe)
+    return _OHLCV_CACHE_DIR / venue / f"{safe_symbol}__{safe_timeframe}.json"
+
+
+def _cache_lock(path: Path) -> threading.Lock:
+    key = str(path)
+    with _cache_locks_guard:
+        return _cache_locks.setdefault(key, threading.Lock())
+
+
+def _read_ohlcv_cache(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        rows = payload.get("rows", []) if isinstance(payload, dict) else payload
+        return _ohlcv_frame(rows)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _write_ohlcv_cache(path: Path, df: pd.DataFrame) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for stamp, row in df.tail(1600).iterrows():
+        rows.append([
+            int(pd.Timestamp(stamp).timestamp() * 1000),
+            float(row["open"]),
+            float(row["high"]),
+            float(row["low"]),
+            float(row["close"]),
+            float(row["volume"]),
+        ])
+    payload = {
+        "updated_at": time.time(),
+        "rows": rows,
+    }
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _latest_completed_open_ms(timeframe: str, now_ms: int | None = None) -> int:
+    interval = _TF_MILLISECONDS.get(timeframe, 0)
+    if interval <= 0:
+        return 0
+    now_ms = int(now_ms or time.time() * 1000)
+    if timeframe == "1w":
+        # Binance weekly klines open Monday 00:00 UTC; Unix epoch is Thursday.
+        monday_origin_ms = 4 * 86_400_000  # 1970-01-05 00:00 UTC
+        current_open = (
+            (now_ms - monday_origin_ms) // interval
+        ) * interval + monday_origin_ms
+        return current_open - interval
+    return (now_ms // interval) * interval - interval
+
+
+def _frame_is_current(df: pd.DataFrame, timeframe: str, limit: int) -> bool:
+    if (
+        df is None
+        or len(df) == 0
+        or len(df) < limit
+        or not isinstance(df.index, pd.DatetimeIndex)
+    ):
+        return False
+    expected = _latest_completed_open_ms(timeframe)
+    if expected <= 0:
+        return False
+    last_ms = int(pd.Timestamp(df.index[-1]).timestamp() * 1000)
+    return last_ms >= expected
+
+
+def _binance_kline_weight(limit: int) -> int:
+    if limit < 100:
+        return 1
+    if limit < 500:
+        return 2
+    if limit <= 1000:
+        return 5
+    return 10
+
+
+def _reserve_binance_public_weight(weight: int) -> None:
+    """Reserve from the shared IP budget used by every local Binance bot."""
+    reserve_api_weight(weight)
+
+
+def _fetch_binance_ohlcv_raw(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+    since_ms: int | None = None,
+    end_ms: int | None = None,
+) -> list:
+    remaining = api_backoff_remaining()
+    if remaining > 0:
+        raise RuntimeError(f"Binance shared API backoff {remaining:.1f}s")
+    request_limit = max(1, min(int(limit), 1500))
+    _reserve_binance_public_weight(_binance_kline_weight(request_limit))
+    params: dict[str, int | str] = {
+        "symbol": symbol.split(":")[0].replace("/", "").upper(),
+        "interval": timeframe,
+        "limit": request_limit,
+    }
+    if since_ms is not None and since_ms > 0:
+        params["startTime"] = int(since_ms)
+    if end_ms is not None and end_ms > 0:
+        params["endTime"] = int(end_ms)
+    try:
+        response = requests.get(
+            f"{_BINANCE_FAPI_BASE}/fapi/v1/klines",
+            params=params,
+            timeout=12,
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        record_api_error(exc)
+        raise
+    payload = response.json()
+    if not isinstance(payload, list):
+        raise RuntimeError(f"Binance kline 응답 오류: {payload}")
+    return [row[:6] for row in payload]
+
+
+def fetch_ohlcv(
+    symbol: str,
+    timeframe: str,
+    limit: int,
+    *,
+    force_refresh: bool = False,
+    cache_only: bool = False,
+) -> pd.DataFrame:
+    """Fetch OHLCV, using an incremental persistent cache for Binance.
+
+    Binance requests are capped at the latest completed candle, so a partially
+    formed candle is never mistaken for its final OHLCV after the next boundary.
+    ``attrs['stale']`` is true only when a refresh failed and the latest
+    completed candle is missing.
+    """
+    if market_data_venue() != "binance" or timeframe not in _TF_MILLISECONDS:
+        ex = _get_exchange()
+        raw = ex.fetch_ohlcv(
+            _market_symbol(ex, symbol), timeframe=timeframe, limit=limit
+        )
+        df = _ohlcv_frame(raw)
+        df.attrs.update({"source": "rest", "stale": False})
+        return df
+
+    path = _ohlcv_cache_path(symbol, timeframe)
+    lock = _cache_lock(path)
+    with lock:
+        cached = _read_ohlcv_cache(path)
+        if not force_refresh and _frame_is_current(cached, timeframe, limit):
+            result = cached.tail(limit).copy()
+            result.attrs.update({"source": "cache", "stale": False})
+            return result
+        if cache_only:
+            if not len(cached):
+                raise RuntimeError(f"OHLCV cache miss: {symbol} {timeframe}")
+            result = cached.tail(limit).copy()
+            result.attrs.update({
+                "source": "cache-only",
+                "stale": not _frame_is_current(
+                    cached, timeframe, min(limit, len(cached))
+                ),
+            })
+            return result
+
+        interval_ms = _TF_MILLISECONDS[timeframe]
+        fetch_limit = int(limit) if len(cached) < limit else 3
+        since_ms = None
+        if len(cached) >= limit and isinstance(cached.index, pd.DatetimeIndex):
+            last_ms = int(pd.Timestamp(cached.index[-1]).timestamp() * 1000)
+            since_ms = max(0, last_ms - interval_ms)
+        try:
+            latest_completed_ms = _latest_completed_open_ms(timeframe)
+            fresh = _ohlcv_frame(
+                _fetch_binance_ohlcv_raw(
+                    symbol,
+                    timeframe,
+                    fetch_limit,
+                    since_ms=since_ms,
+                    end_ms=latest_completed_ms + interval_ms - 1,
+                )
+            )
+            merged = pd.concat([cached, fresh]) if len(cached) else fresh
+            merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+            _write_ohlcv_cache(path, merged)
+            result = merged.tail(limit).copy()
+            result.attrs.update({
+                "source": "incremental" if len(cached) else "backfill",
+                "stale": not _frame_is_current(merged, timeframe, min(limit, len(merged))),
+            })
+            return result
+        except Exception:
+            if len(cached):
+                result = cached.tail(limit).copy()
+                result.attrs.update({
+                    "source": "stale-cache",
+                    "stale": not _frame_is_current(cached, timeframe, min(limit, len(cached))),
+                })
+                return result
+            raise
+
+
+def fetch_ohlcv_batch(
+    requests_: list[tuple[str, str, int]],
+    *,
+    max_workers: int = 8,
+    force_refresh: bool = False,
+    cache_only: bool = False,
+) -> tuple[dict[tuple[str, str], pd.DataFrame], dict[tuple[str, str], str]]:
+    """Fetch independent symbol/timeframe requests concurrently.
+
+    The public-weight limiter and persistent cache keep concurrency bounded.
+    Errors are returned per key so one delisted symbol cannot abort the universe.
+    """
+    unique = list(dict.fromkeys(requests_))
+    frames: dict[tuple[str, str], pd.DataFrame] = {}
+    errors: dict[tuple[str, str], str] = {}
+    if not unique:
+        return frames, errors
+    workers = max(1, min(int(max_workers), len(unique), 16))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ohlcv") as pool:
+        futures = {
+            pool.submit(
+                fetch_ohlcv,
+                symbol,
+                timeframe,
+                limit,
+                force_refresh=force_refresh,
+                cache_only=cache_only,
+            ): (symbol, timeframe)
+            for symbol, timeframe, limit in unique
+        }
+        for future in as_completed(futures):
+            key = futures[future]
+            try:
+                frames[key] = future.result()
+            except Exception as exc:
+                errors[key] = str(exc)[:240]
+    return frames, errors
 
 
 def _vol_label(v: float) -> str:
@@ -118,8 +425,17 @@ def _fetch_futures_ticker_rows() -> list[dict]:
     if now - _ticker_cache["ts"] < _RADAR_TTL and _ticker_cache["rows"]:
         return _ticker_cache["rows"]
 
-    ex      = _get_exchange()
-    tickers = ex.fetch_tickers()
+    if market_data_venue() == "binance" and api_backoff_remaining() > 0:
+        if _ticker_cache.get("rows"):
+            return list(_ticker_cache["rows"])
+        raise RuntimeError("Binance shared API backoff active")
+    ex = _get_exchange()
+    try:
+        reserve_api_weight(40)
+        tickers = ex.fetch_tickers()
+    except Exception as exc:
+        record_api_error(exc)
+        raise
 
     rows = []
     for raw_sym, t in tickers.items():
@@ -200,6 +516,9 @@ def fetch_market_radar(n: int = 10) -> list[dict]:
                 "change_pct":   round(row["change_pct"], 2),
                 "volume_usd":   row["volume_usd"],
                 "volume_label": _vol_label(row["volume_usd"]),
+                "bid":          row["bid"],
+                "ask":          row["ask"],
+                "spread_pct":   row["spread_pct"],
             }
             for i, row in enumerate(rows[:n])
         ]
@@ -215,6 +534,89 @@ def fetch_market_radar(n: int = 10) -> list[dict]:
 def fetch_top_symbols(n: int = 10) -> list[str]:
     """호환용 래퍼 — symbol 목록만 반환."""
     return [r["symbol"] for r in fetch_market_radar(n)]
+
+
+def fetch_all_usdt_perpetual_markets(cache_seconds: int = 300) -> list[dict]:
+    """Return every active linear USDT perpetual on the data venue.
+
+    Unlike the volume radar this applies no rank or coin-name filter. Exchange
+    metadata is the source of truth for active, linear, perpetual USDT markets.
+    A bulk ticker snapshot supplies price/spread without one request per symbol.
+    """
+    global _full_perpetual_cache
+    now = time.time()
+    if (
+        now - float(_full_perpetual_cache.get("ts", 0) or 0) < cache_seconds
+        and _full_perpetual_cache.get("rows")
+    ):
+        return list(_full_perpetual_cache["rows"])
+
+    if market_data_venue() == "binance" and api_backoff_remaining() > 0:
+        if _full_perpetual_cache.get("rows"):
+            return list(_full_perpetual_cache["rows"])
+        raise RuntimeError("Binance shared API backoff active")
+
+    ex = _get_exchange()
+    try:
+        reserve_api_weight(40)
+        ex.load_markets()
+        tickers = ex.fetch_tickers()
+    except Exception as exc:
+        record_api_error(exc)
+        raise
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for market_symbol, market in ex.markets.items():
+        if market.get("active") is False:
+            continue
+        if not market.get("swap") or not market.get("linear"):
+            continue
+        # Binance TRADIFI_PERPETUAL markets require a separate agreement
+        # (-4411) and are outside this crypto strategy.  CCXT classifies both
+        # as swaps, so use the raw contractType when the venue provides it.
+        contract_type = str(
+            (market.get("info") or {}).get("contractType") or ""
+        ).upper()
+        if contract_type and contract_type != "PERPETUAL":
+            continue
+        if str(market.get("quote") or "").upper() != "USDT":
+            continue
+        if str(market.get("settle") or "").upper() != "USDT":
+            continue
+        canonical = market_symbol.split(":")[0]
+        if canonical in seen:
+            continue
+        ticker = tickers.get(market_symbol) or tickers.get(canonical) or {}
+        last = float(ticker.get("last") or ticker.get("close") or 0.0)
+        if last <= 0:
+            continue
+        bid = float(ticker.get("bid") or 0.0)
+        ask = float(ticker.get("ask") or 0.0)
+        mid = (bid + ask) / 2 if bid > 0 and ask > 0 else 0.0
+        spread_pct = (
+            (ask - bid) / mid * 100
+            if mid > 0 and ask >= bid else 0.0
+        )
+        quote_volume = float(
+            ticker.get("quoteVolume")
+            or float(ticker.get("baseVolume") or 0.0) * last
+            or 0.0
+        )
+        rows.append({
+            "symbol": canonical,
+            "market_symbol": market_symbol,
+            "last": last,
+            "bid": bid,
+            "ask": ask,
+            "spread_pct": spread_pct,
+            "volume_usd": quote_volume,
+            "contract_type": contract_type or "PERPETUAL",
+        })
+        seen.add(canonical)
+
+    rows.sort(key=lambda row: row["volume_usd"], reverse=True)
+    _full_perpetual_cache = {"rows": rows, "ts": now}
+    return list(rows)
 
 
 def fetch_volume_surge_radar(n: int = 5) -> list[dict]:
@@ -279,6 +681,9 @@ def fetch_volume_surge_radar(n: int = 5) -> list[dict]:
                 "volume_growth_pct": round(delta_pct, 2),
                 "interval_min": round(interval_min, 1),
                 "surge_score": surge_score,
+                "bid": row["bid"],
+                "ask": row["ask"],
+                "spread_pct": row["spread_pct"],
             })
 
         surge.sort(key=lambda x: x["surge_score"], reverse=True)

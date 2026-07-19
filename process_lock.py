@@ -4,12 +4,14 @@ macOS LaunchAgent 의 StartInterval 은 "이전 실행 종료 후 N초"가 아�
 "N초마다 기동 시도"라서, 스캔이 주기보다 길면 main.py 가 여러 개 겹친다.
 
 같은 벤뉴·같은 모드의 두 번째 인스턴스는 즉시 종료(exit 0)한다.
-다른 벤뉴(Bybit/Binance)나 모드(full/fast)는 서로 막지 않는다.
+실거래 모드는 full/fast 구분 없이 계정 단위 잠금을 공유한다.
 """
 from __future__ import annotations
 
 import fcntl
 import os
+import time
+from functools import wraps
 from pathlib import Path
 from typing import Optional, TextIO
 
@@ -75,10 +77,56 @@ def release(name: str) -> None:
         pass
 
 
-def main_run_lock_name(*, venue: str, fast: bool, special: str = "") -> str:
+def acquire_wait(name: str, timeout: float = 10.0, poll_seconds: float = 0.05) -> bool:
+    """Acquire a short critical-section lock, waiting up to ``timeout``."""
+    if name in _held:
+        return True
+    deadline = time.monotonic() + max(float(timeout), 0.0)
+    LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    path = lock_path(name)
+    while True:
+        f = open(path, "a+", encoding="utf-8")
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError):
+            f.close()
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(max(min(poll_seconds, 0.25), 0.01))
+            continue
+        try:
+            f.seek(0)
+            f.truncate()
+            f.write(f"{os.getpid()}\n")
+            f.flush()
+        except Exception:
+            pass
+        _held[name] = f
+        return True
+
+
+def synchronized_process(name: str, timeout: float = 10.0):
+    """Decorator for a cross-process read/modify/write critical section."""
+    def decorate(func):
+        @wraps(func)
+        def wrapped(*args, **kwargs):
+            if not acquire_wait(name, timeout=timeout):
+                print(f"[lock] critical section timeout: {name}")
+                return None
+            try:
+                return func(*args, **kwargs)
+            finally:
+                release(name)
+        return wrapped
+    return decorate
+
+
+def main_run_lock_name(*, venue: str, fast: bool, special: str = "",
+                       auto_trade: bool = False) -> str:
     """main.py 인스턴스 키.
 
     examples:
+      main_bybit_live_execution
       main_bybit_full
       main_bybit_fast
       main_binance_full
@@ -86,6 +134,8 @@ def main_run_lock_name(*, venue: str, fast: bool, special: str = "") -> str:
     """
     if special:
         return f"main_{venue}_{special}"
+    if auto_trade:
+        return f"main_{venue}_live_execution"
     mode = "fast" if fast else "full"
     return f"main_{venue}_{mode}"
 

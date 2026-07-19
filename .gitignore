@@ -22,12 +22,33 @@ polymarket_whale_paper_state.json
 polymarket_whale_paper_journal.jsonl
 polymarket_whale_live_state.json
 polymarket_whale_live_journal.jsonl
+polymarket_wallet_pipeline_state.json
+polymarket_wallet_watchlist.json
+polymarket_wallet_radar_state.json
+polymarket_wallet_radar_journal.jsonl
+polymarket_mm_state.json
+polymarket_mm_journal.jsonl
+polymarket_mm_stream_state.json
+polymarket_mm_stream_events.jsonl
+polymarket_mm_stream_events.jsonl.1
+polymarket_mm_candidates.json
 polymarket_insight_paper_state.json
 polymarket_insight_paper_journal.jsonl
 polymarket_insight_live_state.json
 polymarket_insight_live_journal.jsonl
 hyperliquid_whale_paper_state.json
 hyperliquid_whale_paper_journal.jsonl
+binance_pump_paper_state.json
+binance_pump_paper_journal.jsonl
+binance_copy_intel_state.json
+binance_copy_intel_snapshots.jsonl
+binance_copy_intel_journal.jsonl
+binance_orderflow_challenger_state.json
+binance_orderflow_challenger_journal.jsonl
+bithumb_wallet_radar_state.json
+bithumb_wallet_radar_journal.jsonl
+telegram_engine_command_state.json
+project_reminders_state.json
 trade_postmortem.jsonl
 trade_postmortem_*.jsonl
 weekly_learning_report_latest.txt
@@ -63,3 +84,5 @@ trend-radar-free/
 
 # ── 프로세스 잠금 (런타임) ──────────────────────────────────
 .locks/
+.runtime/
+.cache/

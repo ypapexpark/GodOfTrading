@@ -318,6 +318,87 @@ def get_usdc_balance_approx() -> float:
         return -1.0
 
 
+def quote_buy_usd(
+    token_id: str,
+    usd_amount: float,
+    *,
+    max_price: float | None = None,
+) -> dict[str, Any]:
+    """공개 CLOB ask를 소진해 고정 USDC 매수의 실행 가능 VWAP을 계산한다.
+
+    읽기 전용 사전견적이며 주문이나 서명을 만들지 않는다. ``max_price`` 안에서
+    요청 금액 전부가 채워지지 않으면 FOK 주문과 동일하게 미체결로 반환한다.
+    """
+    result: dict[str, Any] = {
+        "ok": False,
+        "token_id": str(token_id),
+        "requested_usd": float(usd_amount),
+        "max_price": max_price,
+        "best_ask": None,
+        "worst_ask": None,
+        "vwap": None,
+        "shares": 0.0,
+        "fillable_usd": 0.0,
+        "error": "",
+    }
+    if not token_id or usd_amount <= 0:
+        result["error"] = "invalid token_id/usd_amount"
+        return result
+    try:
+        resp = requests.get(
+            f"{CLOB_HOST}/book",
+            params={"token_id": str(token_id)},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        book = resp.json()
+    except Exception as exc:
+        result["error"] = f"book unavailable: {str(exc)[:180]}"
+        return result
+
+    asks: list[tuple[float, float]] = []
+    for row in (book or {}).get("asks") or []:
+        try:
+            price = float(row.get("price") or 0)
+            size = float(row.get("size") or 0)
+        except (TypeError, ValueError):
+            continue
+        if price > 0 and size > 0:
+            asks.append((price, size))
+    asks.sort(key=lambda item: item[0])
+    if not asks:
+        result["error"] = "empty ask book"
+        return result
+    result["best_ask"] = asks[0][0]
+
+    remaining = float(usd_amount)
+    spent = 0.0
+    shares = 0.0
+    worst_ask = 0.0
+    for price, size in asks:
+        if max_price is not None and price > float(max_price) + 1e-12:
+            break
+        take_cost = min(remaining, price * size)
+        if take_cost <= 0:
+            continue
+        spent += take_cost
+        shares += take_cost / price
+        remaining -= take_cost
+        worst_ask = price
+        if remaining <= 1e-8:
+            break
+
+    result["fillable_usd"] = spent
+    result["shares"] = shares
+    result["worst_ask"] = worst_ask or None
+    if remaining > max(1e-6, float(usd_amount) * 1e-6) or shares <= 0:
+        result["error"] = "insufficient asks within price limit"
+        return result
+    result["vwap"] = spent / shares
+    result["ok"] = True
+    return result
+
+
 def place_buy_usd(
     token_id: str,
     usd_amount: float,

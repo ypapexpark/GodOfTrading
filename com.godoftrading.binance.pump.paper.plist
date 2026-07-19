@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.godoftrading.binance.pump.paper</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/ghp/Projects/GodOfTrading/binance_pump_paper_bot.py</string>
+        <string>--daemon</string>
+        <string>--interval</string>
+        <string>30</string>
+    </array>
+
+    <!-- 상시 프로세스 내부에서 정확히 30초 시작 간격. 비정상 종료 시 자동 재시작. -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/ghp/Projects/GodOfTrading</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/ghp</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/godoftrading_binance_pump_paper.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/godoftrading_binance_pump_paper_err.log</string>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

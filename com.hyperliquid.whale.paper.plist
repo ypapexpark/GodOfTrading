@@ -11,7 +11,7 @@
         <string>/Users/ghp/Projects/GodOfTrading/hyperliquid_whale_paper_bot.py</string>
     </array>
     <key>StartInterval</key>
-    <integer>180</integer>
+    <integer>30</integer>
     <key>WorkingDirectory</key>
     <string>/Users/ghp/Projects/GodOfTrading</string>
     <key>EnvironmentVariables</key>

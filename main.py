@@ -26,6 +26,7 @@ import warnings
 from html import escape
 from pathlib import Path
 from dotenv import load_dotenv
+from process_lock import synchronized_process
 
 warnings.filterwarnings(
     "ignore",
@@ -106,6 +107,8 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     PREMIUM_MTF_AUTO_STRENGTHS,
                     PAPER_ONLY_STRENGTHS, RISK_PCT_BY_STRENGTH, SCALP_RISK_MULT,
                     GOLDEN_ENTRY_RISK_PCT, MAX_ACCOUNT_RISK_PCT, AUTO_TRADE_DIAGNOSTICS,
+                    TELEGRAM_RESEARCH_SIGNALS_ENABLED,
+                    CANDIDATE_EVALUATION_IN_LIVE_LOOP_ENABLED,
                     ACTIVE_STRONG_STRATEGIES, STRONG_LIVE_MAX_BARS_AGO, STRONG_LIVE_MIN_VOL,
                     ASYMMETRIC_SYMBOL_DAILY_LOSS_LIMIT, SYMBOL_STRATEGY_DAILY_LOSS_LIMIT,
                     SYMBOL_DAILY_TOTAL_LOSS_LIMIT,
@@ -113,7 +116,9 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     SHORT_NON_EMA_RISK_MULT, SHORT_STRICT_GATES_ENABLED,
                     SHORT_REQUIRE_MTF_ALIGNED, SHORT_REQUIRE_EMA_ALIGNED,
                     SHORT_GLOBAL_RISK_MULT, SHORT_15M_STRATEGY_WHITELIST,
-                    LIVE_15M_STRATEGIES,
+                    LIVE_15M_STRATEGIES, LIVE_AUTO_TRADE_TIMEFRAMES,
+                    EMA_LIVE_MAX_VOL_RATIO, EMA_LIVE_REQUIRE_LOWER_TF,
+                    EMA_LIVE_DISABLE_ASYMMETRIC,
                     EMA_MACD_FILTER_ENABLED, EMA_MACD_SOFT_RISK_MULT,
                     EMA_MACD_HARD_BLOCK,
                     REGIME_ROUTER_ENABLED, LOGIC_STACK_VERSION,
@@ -123,18 +128,52 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     VWAP_REVERSION_OBSERVATION_RISK_MULT,
                     RSI2_REVERSION_OBSERVATION_RISK_MULT,
                     BINANCE_FIXED_MARGIN_USD, BINANCE_MAX_MARGIN_USD,
+                    BINANCE_MAX_MARGIN_PCT,
                     BINANCE_MAX_TRADE_SL_LOSS_PCT,
+                    BINANCE_CANARY_LIVE_ENABLED, BINANCE_CANARY_RISK_MULT,
+                    BINANCE_CANARY_EARLY_REVIEW_CLOSED,
+                    BINANCE_CANARY_DAILY_LOSS_PCT,
+                    BINANCE_CANARY_MAX_OPEN_POSITIONS,
                     EXTENSION_HARD_BLOCK_PCT, MAX_ENTRY_SL_PCT,
+                    MAX_ENTRY_SL_ATR,
                     HIDDEN_LIVE_MAX_BARS_AGO, ENTRY_SYMBOL_BLOCKLIST,
                     SCALP_TIMING_HARD_BLOCK_SIGNAL_TYPES,
                     OBSERVATION_MODE_PAPER_ONLY,
                     DRAWDOWN_RISK_OFF_PCT,
                     SCALP_COMPOUND_ENABLED, SCALP_COMPOUND_TF,
                     SCALP_COMPOUND_STRATEGIES, SCALP_COMPOUND_TP1_PCT,
-                    ROUND_TRIP_FEE)
+                    SCALP_ENGINE_ENABLED, LEGACY_AUTO_TRADE_ENABLED,
+                    SCALP_ENGINE_TIMEFRAME, SCALP_ENGINE_TRIGGER_TIMEFRAME,
+                    SCALP_ENGINE_LEVERAGE, SCALP_ENGINE_MAX_MARGIN_PCT,
+                    SCALP_ENGINE_MIN_MARGIN_USD, SCALP_ENGINE_MAX_OPEN_POSITIONS,
+                    SCALP_ENGINE_MAX_HOLD_MINUTES, SCALP_BINANCE_CANARY_ENABLED,
+                    BINANCE_D2_ENGINE_ENABLED, BINANCE_D2_LIVE_ENABLED,
+                    BINANCE_D2_SETUP_TIMEFRAME, BINANCE_D2_TRIGGER_TIMEFRAME,
+                    BINANCE_D2_CONTEXT_TIMEFRAMES, BINANCE_D2_LEVERAGE,
+                    BINANCE_D2_MAX_MARGIN_PCT, BINANCE_D2_MIN_MARGIN_USD,
+                    BINANCE_D2_MIN_24H_VOLUME_USD,
+                    BINANCE_D2_MAX_HOLD_MINUTES,
+                    BINANCE_D2_PROGRESS_CHECK_MINUTES,
+                    BINANCE_D2_PROGRESS_MIN_R,
+                    BINANCE_D2_TRAIL_ACTIVATION_R,
+                    BINANCE_D2_TIER_TTL_MINUTES,
+                    BINANCE_MA200_PULLBACK_ENGINE_ENABLED,
+                    BINANCE_MA200_PULLBACK_LIVE_ENABLED,
+                    BINANCE_MA200_PULLBACK_LEVERAGE,
+                    BINANCE_MA200_PULLBACK_MAX_MARGIN_PCT,
+                    BINANCE_MA200_PULLBACK_MIN_MARGIN_USD,
+                    BINANCE_MA200_PULLBACK_MIN_24H_VOLUME_USD,
+                    BINANCE_MA200_PULLBACK_MAX_HOLD_MINUTES,
+                    BINANCE_MA200_PULLBACK_PROGRESS_CHECK_MINUTES,
+                    BINANCE_MA200_PULLBACK_PROGRESS_MIN_R,
+                    BINANCE_MA200_PULLBACK_TRAIL_ACTIVATION_R,
+                    PYRAMID_ENABLED,
+                    BYBIT_ROUND_TRIP_EXECUTION_COST,
+                    BINANCE_ROUND_TRIP_EXECUTION_COST)
 from leading import get_market_context
 from mtf import check_mtf, mtf_summary, get_macro_bias, get_daily_bias
-from fetcher import (fetch_btc_sync_dislocations, fetch_ohlcv,
+from fetcher import (fetch_btc_sync_dislocations, fetch_ohlcv, fetch_ohlcv_batch,
+                     fetch_all_usdt_perpetual_markets,
                      fetch_hyperliquid_lead_radar,
                      fetch_market_radar, fetch_volume_surge_radar,
                      CORE_SYMBOLS, STOCK_SYMBOLS)
@@ -146,7 +185,8 @@ from bithumb_screener import maybe_send_bithumb_ma200_alert
 from krx_screener import maybe_send_krx_ma200_alert
 from project_reminders import maybe_send_kis_api_review_reminder
 from formatter import build_alert, build_summary, calc_targets, _get_leverage, _raw_strength, _round_price, SIGNAL_META
-from publisher import send, send_market_screening, send_position_analysis, send_review, send_signal
+from publisher import (send, send_bithumb, send_market_screening, send_position_analysis,
+                       send_review, send_signal, send_signal_once)
 from analyzer import (is_tradeable, get_adaptive_min_rr, get_adaptive_min_vol,
                       get_adaptive_min_confirmed, get_adaptive_swing_freshness,
                       get_adaptive_filters, analyze_and_adjust,
@@ -156,15 +196,63 @@ from analyzer import (is_tradeable, get_adaptive_min_rr, get_adaptive_min_vol,
                       get_quality_leverage_adjustment, get_signal_quality_adjustment,
                       is_tradeable_with_strategy, get_cooldown_symbols)
 from strategy_catalog import classify_strategy, format_profile
+from quant_governor import evaluate_live_candidate
+from scalping_engine import (ENGINE_VERSION as SCALP_ENGINE_VERSION,
+                             STRATEGY as SCALP_ENGINE_STRATEGY,
+                             evaluate_live_permission, evaluate_scalp)
+from binance_divergence_engine import (
+    ENGINE_VERSION as BINANCE_D2_ENGINE_VERSION,
+    STRATEGY as BINANCE_D2_STRATEGY,
+    D2Plan,
+    detect_divergence_setup,
+    evaluate_divergence_entry,
+    evaluate_live_permission as evaluate_binance_d2_live_permission,
+    resample_ohlcv,
+    select_multitimeframe_setup,
+)
+from binance_ma200_pullback_engine import (
+    ENGINE_VERSION as BINANCE_MA200_PULLBACK_ENGINE_VERSION,
+    STRATEGY as BINANCE_MA200_PULLBACK_STRATEGY,
+    MA200PullbackPlan,
+    detect_ma200_volume_breakout,
+    evaluate_ma200_pullback_entry,
+)
 from venue_runtime import runtime_context, venue_label
 
 load_dotenv(Path(__file__).parent / ".env")
 
 DRY_RUN    = "--dry-run"    in sys.argv
-AUTO_TRADE = "--auto-trade" in sys.argv
 FAST_RADAR = "--fast-radar" in sys.argv
+_AUTO_TRADE_REQUESTED = "--auto-trade" in sys.argv
+# FastRadar는 정보 스캐너다. 설치 plist가 잘못되어 두 플래그가 함께 들어와도
+# 두 번째 실거래 실행기가 되지 않도록 코드 레벨에서 fail-closed 한다.
+AUTO_TRADE = _AUTO_TRADE_REQUESTED and not FAST_RADAR
+if _AUTO_TRADE_REQUESTED and FAST_RADAR:
+    print("[안전] FastRadar의 --auto-trade 요청 무시 — 정보알림 전용으로 실행")
 BITHUMB_ONLY = "--bithumb-ma200" in sys.argv
 KRX_ONLY = "--krx-ma200" in sys.argv
+
+_SIGNAL_DEDUPE_SECONDS = {
+    "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400,
+}
+
+
+def _round_trip_execution_cost() -> float:
+    """Conservative fee + slippage estimate for the active venue."""
+    if runtime_context()["execution_venue"] == "binance":
+        return BINANCE_ROUND_TRIP_EXECUTION_COST
+    return BYBIT_ROUND_TRIP_EXECUTION_COST
+
+
+def _signal_dedupe_key(symbol: str, tf_key: str, direction: str, signal: dict) -> str:
+    """동일 캔들·동일 판단의 full/fast 중복 텔레그램을 하나로 묶는다."""
+    seconds = _SIGNAL_DEDUPE_SECONDS.get(tf_key, 300)
+    bucket = int(time.time() // seconds)
+    venue = runtime_context()["state_namespace"]
+    strategy = str(signal.get("strategy") or "")
+    signal_type = str(signal.get("signal_type") or "")
+    strength = str(signal.get("strength") or signal.get("raw_strength") or "")
+    return "|".join((venue, symbol, tf_key, direction, strategy, signal_type, strength, str(bucket)))
 
 
 def _read_int_arg(flag: str) -> int | None:
@@ -186,15 +274,22 @@ def _read_int_arg(flag: str) -> int | None:
 SCREEN_LIMIT = _read_int_arg("--limit")
 
 
-def wait_for_network(host="8.8.8.8", port=53, max_wait=90) -> bool:
-    for i in range(max_wait // 5):
-        try:
-            socket.setdefaulttimeout(3)
-            socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
-            return True
-        except OSError:
-            print(f"[네트워크] 대기 중... {(i+1)*5}초")
-            time.sleep(5)
+def wait_for_network(host="8.8.8.8", port=53, max_wait=20) -> bool:
+    """Best-effort startup hint; exchange API health remains the live hard gate."""
+    endpoints = list(dict.fromkeys([
+        (host, port),
+        ("1.1.1.1", 443),
+        ("api.bybit.com", 443),
+    ]))
+    for i in range(max(1, max_wait // 5)):
+        for endpoint in endpoints:
+            try:
+                with socket.create_connection(endpoint, timeout=3):
+                    return True
+            except OSError:
+                continue
+        print(f"[네트워크] 직접 연결 확인 대기 중... {(i+1)*5}초")
+        time.sleep(5)
     return False
 
 
@@ -411,7 +506,7 @@ def _directional_move_pct(entry_price: float, target_price: float, direction: st
 def _planned_roi_metrics(entry_price: float, direction: str,
                          tps: list[dict], leverage: int) -> dict:
     """TP 계획의 가격수익률과 레버리지 포함 증거금 ROI를 계산한다."""
-    fee_pct = ROUND_TRIP_FEE * 100
+    fee_pct = _round_trip_execution_cost() * 100
     weighted_net_pct = 0.0
     max_margin_roi = 0.0
     tp1_margin_roi = 0.0
@@ -495,7 +590,7 @@ def _raise_leverage_for_roi(entry_price: float, direction: str,
         tp1_price = float(tps[0].get("price", 0) or 0)
         tp1_net_pct = (
             _directional_move_pct(entry_price, tp1_price, direction)
-            - ROUND_TRIP_FEE * 100
+            - _round_trip_execution_cost() * 100
         )
     if weighted_net_pct <= 0 or tp1_net_pct <= 0:
         return base_leverage, metrics, []
@@ -787,7 +882,7 @@ def _compress_leverage_for_profit_surge(leverage: int, entry_price: float,
     if balance <= 0 or target_margin <= 0 or risk_cap_usd <= 0:
         return base_leverage, metrics, []
 
-    loss_pct = float(sl_pct or 0) / 100 + ROUND_TRIP_FEE
+    loss_pct = float(sl_pct or 0) / 100 + _round_trip_execution_cost()
     if loss_pct <= 0:
         return base_leverage, metrics, []
 
@@ -841,6 +936,18 @@ def _ceil_position_pct_for_margin(balance: float, margin: float) -> float:
     if balance <= 0 or margin <= 0:
         return 0.0
     return math.ceil((margin / balance) * 10000) / 10000
+
+
+def _binance_margin_cap_usd(balance: float) -> float:
+    """Binance 증거금 상한: equity 비율과 선택적 절대 USD 상한 중 더 작은 값."""
+    if balance <= 0:
+        return 0.0
+    caps = []
+    if BINANCE_MAX_MARGIN_PCT and BINANCE_MAX_MARGIN_PCT > 0:
+        caps.append(balance * float(BINANCE_MAX_MARGIN_PCT))
+    if BINANCE_MAX_MARGIN_USD and BINANCE_MAX_MARGIN_USD > 0:
+        caps.append(float(BINANCE_MAX_MARGIN_USD))
+    return round(min(caps), 4) if caps else 0.0
 
 
 def _apply_min_trade_margin(balance: float, position_pct: float, leverage: int,
@@ -899,8 +1006,10 @@ def _apply_min_trade_margin(balance: float, position_pct: float, leverage: int,
     boosted_margin = min(boosted_margin, max_balance_margin, max_margin_usd)
 
     sl_pct = abs(entry_price - sl_price) / entry_price if entry_price > 0 else 0.0
-    loss_pct = sl_pct + ROUND_TRIP_FEE
-    boosted_loss = boosted_margin * leverage * (sl_pct + ROUND_TRIP_FEE)
+    loss_pct = sl_pct + _round_trip_execution_cost()
+    boosted_loss = boosted_margin * leverage * (
+        sl_pct + _round_trip_execution_cost()
+    )
     if boosted_loss > remaining_daily_risk:
         if not allow_opportunity_override:
             return position_pct, 0.0, [], (
@@ -949,7 +1058,9 @@ def _apply_portfolio_capacity_gate(balance: float, position_pct: float,
                                    direction: str,
                                    high_opportunity: bool = False,
                                    label: str = "포트폴리오",
-                                   min_execution_margin_usd: float | None = None) -> tuple[float, float, list[str], str]:
+                                   min_execution_margin_usd: float | None = None,
+                                   max_open_positions_override: int | None = None,
+                                   enforce_position_count: bool = True) -> tuple[float, float, list[str], str]:
     """
     고정 동시 포지션 개수 대신 계좌 전체 증거금/SL위험으로 신규 진입을 판단한다.
 
@@ -1080,12 +1191,25 @@ def _apply_portfolio_capacity_gate(balance: float, position_pct: float,
         PORTFOLIO_MAX_OPEN_POSITIONS_HIGH_OPPORTUNITY
         if high_opportunity else PORTFOLIO_MAX_OPEN_POSITIONS
     )
-    if isinstance(open_count, int) and open_count >= max_open_positions:
+    if max_open_positions_override is not None:
+        max_open_positions = min(
+            max_open_positions, max(1, int(max_open_positions_override))
+        )
+    if (
+        enforce_position_count
+        and isinstance(open_count, int)
+        and open_count >= max_open_positions
+    ):
         return position_pct, est_sl_loss, notes, (
             f"동시 포지션 안전한도 {max_open_positions}개 도달 "
             f"(현재 {open_count}개) — 추가 진입보다 기존 포지션 관리 우선"
         )
-    if isinstance(open_count, int) and open_count >= 4:
+    if not enforce_position_count and isinstance(open_count, int):
+        notes.append(
+            f"고정 포지션 개수 제한 없음: 현재 {open_count}개, "
+            f"증거금/방향/합산SL 위험으로만 용량 판단"
+        )
+    elif isinstance(open_count, int) and open_count >= 4:
         notes.append(
             f"포지션 분산 안전한도 확인: 현재 {open_count}/{max_open_positions}개, "
             f"증거금 ${margin_used:.2f}→${margin_used + planned_margin:.2f} 기준 허용"
@@ -1392,6 +1516,8 @@ def _full_elite_divergence(signal: dict) -> dict:
 
 def _live_asymmetric_candidate(signal: dict, tf_key: str, strategy: str) -> bool:
     """초고거래량 추세형 신호는 과거 표본이 부족해도 러너형 후보로 본다."""
+    if EMA_LIVE_DISABLE_ASYMMETRIC and strategy in AUTO_TRADE_STRATEGY_WHITELIST:
+        return False
     try:
         vol = float(signal.get("vol", {}).get("value", 0) or 0)
     except Exception:
@@ -1428,6 +1554,16 @@ def _mtf_soft_override(signal: dict, mtf_info: dict, tf_key: str,
     """
     denied = {"allow": False, "kind": "", "risk_mult": 1.0, "note": "", "elite": False}
     if not mtf_info.get("block"):
+        return denied
+
+    # v6: 실제 손실군(PIEVERSE/TRUST)은 "고거래량" 하나로 상위봉 완전역방향을
+    # 통과했다. 승인 EMA 추세전략에서 MTF 역행은 반전 선행신호가 아니라 전략
+    # 전제 위반이므로 거래량/비대칭 예외를 허용하지 않는다.
+    if (
+        EMA_LIVE_DISABLE_ASYMMETRIC
+        and strategy in AUTO_TRADE_STRATEGY_WHITELIST
+        and signal.get("signal_type") not in _DIVERGENCE_SIGNAL_TYPES
+    ):
         return denied
 
     # 2026-07-03 리뷰: MTF 완전역방향 소프트 통과는 LONG 전용.
@@ -1542,6 +1678,285 @@ def _trend_min_confirm(tf_key: str, trend_score: int, is_continuation: bool) -> 
     return 6          # 반전 신호만 ELITE로 허용
 
 
+def _try_scalping_engine_trade(symbol: str, df_15m, current_price: float,
+                               spread_pct: float | None = None,
+                               df_5m=None) -> None:
+    """Run the replacement S1 engine and place a current-version canary order."""
+    if not SCALP_ENGINE_ENABLED or not AUTO_TRADE or DRY_RUN or FAST_RADAR:
+        return
+
+    from trade_router import (
+        _append_trade, _load_state, _save_state, active_exchange,
+        build_trade_notification, execute, get_usdt_balance, get_usdt_equity,
+        has_open_position, is_execution_api_healthy, log_execution_journal,
+        log_trade_candidate, maybe_alert_execution_api_down,
+    )
+
+    venue = active_exchange()
+    if df_5m is None:
+        try:
+            df_5m = fetch_ohlcv(symbol, SCALP_ENGINE_TRIGGER_TIMEFRAME, 120)
+        except Exception as e:
+            print(f"  [S1] {symbol} 5m 트리거 데이터 실패: {e}")
+            return
+
+    execution_cost = (
+        BINANCE_ROUND_TRIP_EXECUTION_COST
+        if venue == "binance" else BYBIT_ROUND_TRIP_EXECUTION_COST
+    )
+    plan = evaluate_scalp(
+        df_15m,
+        df_5m,
+        live_price=current_price,
+        round_trip_cost=execution_cost,
+        spread_pct=spread_pct,
+    )
+    direction = plan.direction
+    signal_type = f"scalp_trend_pullback_{direction.lower()}"
+    if not plan.eligible:
+        if plan.score >= 50:
+            print(f"  [S1후보] {symbol} score={plan.score:.0f} 차단 — {plan.reason}")
+            log_trade_candidate(
+                symbol, SCALP_ENGINE_TIMEFRAME, SCALP_ENGINE_STRATEGY,
+                direction, "S1", "blocked", plan.reason,
+                signal_type=signal_type,
+                engine_version=SCALP_ENGINE_VERSION,
+                engine_plan=plan.to_dict(),
+            )
+        return
+
+    if has_open_position(symbol):
+        print(f"  [S1] {symbol} 기존 포지션 보유 — 중복진입 스킵")
+        return
+
+    state = _load_state()
+    last_bars = ((state.get("scalp_engine") or {}).get("last_entry_bar_by_symbol") or {})
+    if last_bars.get(symbol) == plan.signal_bar:
+        print(f"  [S1] {symbol} 동일 완료봉 재진입 차단 ({plan.signal_bar})")
+        return
+
+    if not is_execution_api_healthy():
+        maybe_alert_execution_api_down()
+        print(f"  [S1] {venue} private API 비정상 — fail-closed")
+        return
+
+    permission = evaluate_live_permission(
+        root=Path(__file__).resolve().parent,
+        venue=venue,
+        engine_version=SCALP_ENGINE_VERSION,
+        binance_canary_enabled=SCALP_BINANCE_CANARY_ENABLED,
+    )
+    if not permission.allow:
+        reason = f"S1 현버전 승격게이트: {permission.reason}"
+        print(f"  [S1] {symbol} {reason}")
+        log_trade_candidate(
+            symbol, SCALP_ENGINE_TIMEFRAME, SCALP_ENGINE_STRATEGY,
+            direction, "S1", "blocked", reason,
+            signal_type=signal_type,
+            engine_version=SCALP_ENGINE_VERSION,
+            engine_plan=plan.to_dict(),
+            live_permission=permission.to_dict(),
+        )
+        return
+
+    balance = float(get_usdt_balance() or 0.0)
+    equity = float(get_usdt_equity() or balance)
+    if balance <= 0 or equity <= 0:
+        print(f"  [S1] {symbol} 잔고/equity 확인 실패 — fail-closed")
+        return
+
+    leverage = max(1, int(SCALP_ENGINE_LEVERAGE))
+    entry = float(plan.entry)
+    stop = float(plan.stop)
+    stop_fraction = abs(entry - stop) / entry
+    loss_fraction = stop_fraction + execution_cost
+    risk_budget = equity * float(permission.account_risk_pct)
+    max_margin = min(balance, equity * float(SCALP_ENGINE_MAX_MARGIN_PCT))
+    margin = min(risk_budget / (leverage * loss_fraction), max_margin)
+    if margin + 1e-9 < SCALP_ENGINE_MIN_MARGIN_USD:
+        reason = (
+            f"현재 시드 위험예산 ${risk_budget:.3f}에서 가능한 증거금 "
+            f"${margin:.2f} < 실행하한 ${SCALP_ENGINE_MIN_MARGIN_USD:.2f}"
+        )
+        print(f"  [S1] {symbol} {reason}")
+        log_trade_candidate(
+            symbol, SCALP_ENGINE_TIMEFRAME, SCALP_ENGINE_STRATEGY,
+            direction, "S1", "blocked", reason,
+            engine_version=SCALP_ENGINE_VERSION,
+            engine_plan=plan.to_dict(),
+            live_permission=permission.to_dict(),
+        )
+        return
+
+    position_pct = min(margin / balance, SCALP_ENGINE_MAX_MARGIN_PCT)
+    margin = min(balance * position_pct, max_margin)
+    est_sl_loss = margin * leverage * loss_fraction
+    # The executor receives the same cap and independently validates rounded
+    # quantity and the actual fill.  A minimum order may never enlarge risk.
+    max_sl_loss_usd = risk_budget
+    position_pct, est_sl_loss, portfolio_notes, portfolio_block = _apply_portfolio_capacity_gate(
+        balance,
+        position_pct,
+        est_sl_loss,
+        max_margin,
+        direction,
+        high_opportunity=False,
+        label="S1 포트폴리오",
+        min_execution_margin_usd=SCALP_ENGINE_MIN_MARGIN_USD,
+        max_open_positions_override=SCALP_ENGINE_MAX_OPEN_POSITIONS,
+    )
+    if portfolio_block:
+        print(f"  [S1] {symbol} {portfolio_block}")
+        log_trade_candidate(
+            symbol, SCALP_ENGINE_TIMEFRAME, SCALP_ENGINE_STRATEGY,
+            direction, "S1", "blocked", portfolio_block,
+            engine_version=SCALP_ENGINE_VERSION,
+            engine_plan=plan.to_dict(),
+            live_permission=permission.to_dict(),
+        )
+        return
+
+    tps = [
+        {"price": _round_price(float(tp["price"])), "pct": int(tp["pct"]), "rr": float(tp["rr"])}
+        for tp in plan.tps
+    ]
+    reasons = [
+        "완료봉만 사용: 15m 추세·눌림 + 5m 재가속",
+        f"S1 점수 {plan.score:.0f}/100, 거래량 {plan.volume_ratio:.2f}x",
+        f"구조손절 {plan.stop_atr:.2f}ATR/{plan.stop_pct:.2f}%",
+        f"비용후 손익분기 승률 {plan.required_win_rate*100:.1f}%",
+        permission.reason,
+        *portfolio_notes,
+    ]
+    entry_context = {
+        "engine_version": SCALP_ENGINE_VERSION,
+        "strategy": SCALP_ENGINE_STRATEGY,
+        "strategy_family": "S1 Cost-Aware Scalp",
+        "core_strategy": "완료봉 추세 눌림 재가속",
+        "strategy_mode": "scalp_s1",
+        "signal_type": signal_type,
+        "signal_label": f"S1 15m/5m {direction}",
+        "direction": direction,
+        "tf": SCALP_ENGINE_TIMEFRAME,
+        "reasons": reasons,
+        "entry_price": entry,
+        "sl": stop,
+        "sl_pct": plan.stop_pct,
+        "tps": tps,
+        "risk_pct": permission.account_risk_pct,
+        "position_pct": position_pct,
+        "est_sl_loss": est_sl_loss,
+        "leverage": leverage,
+        "signal_bar": plan.signal_bar,
+        "engine_plan": plan.to_dict(),
+        "live_permission": permission.to_dict(),
+        "is_divergence": False,
+        "asymmetric_mode": False,
+    }
+    result = execute(
+        symbol=symbol,
+        direction=direction,
+        leverage=leverage,
+        entry_price=entry,
+        sl=stop,
+        tps=tps,
+        position_pct=position_pct,
+        atr=plan.atr,
+        is_elite=False,
+        max_margin_usd=max_margin,
+        min_margin_usd=SCALP_ENGINE_MIN_MARGIN_USD,
+        max_sl_loss_usd=max_sl_loss_usd,
+        position_meta={
+            "engine_version": SCALP_ENGINE_VERSION,
+            "strategy": SCALP_ENGINE_STRATEGY,
+            "signal_bar": plan.signal_bar,
+            "max_hold_minutes": SCALP_ENGINE_MAX_HOLD_MINUTES,
+        },
+        require_full_protection=True,
+    )
+    if not result.get("ok"):
+        reason = f"S1 주문 실패: {result.get('error') or 'unknown'}"
+        print(f"  [S1] {symbol} {reason}")
+        log_trade_candidate(
+            symbol, SCALP_ENGINE_TIMEFRAME, SCALP_ENGINE_STRATEGY,
+            direction, "S1", "blocked", reason,
+            engine_version=SCALP_ENGINE_VERSION,
+            engine_plan=plan.to_dict(),
+            live_permission=permission.to_dict(),
+        )
+        return
+
+    filled_entry = float(result.get("entry_price") or entry)
+    qty = float(result.get("qty") or 0.0)
+    leverage = int(result.get("leverage") or leverage)
+    margin = float(result.get("margin_usd") or (qty * filled_entry / leverage))
+    est_sl_loss = float(result.get("estimated_sl_loss_usd") or est_sl_loss)
+    entry_context["entry_price"] = filled_entry
+    entry_context["execution_sizing"] = {
+        "seed_equity": float(result.get("seed_equity") or equity),
+        "free_balance": float(result.get("free_balance") or balance),
+        "margin_usd": margin,
+        "estimated_sl_loss_usd": est_sl_loss,
+        "max_sl_loss_usd": max_sl_loss_usd,
+    }
+    trade_num = _append_trade(
+        symbol, direction, SCALP_ENGINE_TIMEFRAME, "S1-CANARY",
+        leverage, qty, filled_entry, stop, margin,
+        strategy=SCALP_ENGINE_STRATEGY,
+        signal_type=signal_type,
+        tps=tps,
+        entry_reasons=reasons,
+        entry_context=entry_context,
+        engine_version=SCALP_ENGINE_VERSION,
+        logic_stack_version=SCALP_ENGINE_VERSION,
+        est_sl_loss=est_sl_loss,
+        risk_pct=permission.account_risk_pct,
+        position_pct=position_pct,
+        max_sl_loss_usd=max_sl_loss_usd,
+        entry_order_id=result.get("entry_order_id", ""),
+        entry_order_link_id=result.get("entry_order_link_id", ""),
+    )
+    log_trade_candidate(
+        symbol, SCALP_ENGINE_TIMEFRAME, SCALP_ENGINE_STRATEGY,
+        direction, "S1-CANARY", "opened",
+        price=filled_entry, leverage=leverage, qty=qty,
+        position_pct=position_pct, risk_pct=permission.account_risk_pct,
+        est_sl_loss=est_sl_loss, rr=2.0, sl=stop, sl_pct=plan.stop_pct,
+        tps=tps, entry_reasons=reasons, entry_context=entry_context,
+        engine_version=SCALP_ENGINE_VERSION,
+    )
+    log_execution_journal(
+        trade_num, "opened", symbol=symbol, tf=SCALP_ENGINE_TIMEFRAME,
+        strategy=SCALP_ENGINE_STRATEGY, direction=direction, strength="S1-CANARY",
+        signal_type=signal_type, entry_price=filled_entry,
+        sl=stop, tps=tps, leverage=leverage, qty=qty, margin=margin,
+        risk_pct=permission.account_risk_pct, position_pct=position_pct,
+        est_sl_loss=est_sl_loss, entry_context=entry_context,
+        engine_version=SCALP_ENGINE_VERSION,
+    )
+    state = _load_state()
+    engine_state = state.setdefault("scalp_engine", {})
+    engine_state.setdefault("last_entry_bar_by_symbol", {})[symbol] = plan.signal_bar
+    engine_state["engine_version"] = SCALP_ENGINE_VERSION
+    _save_state(state)
+
+    notification = build_trade_notification(
+        symbol, direction, leverage, qty, filled_entry, stop, tps, balance,
+        tf_key=SCALP_ENGINE_TIMEFRAME, strength="S1-CANARY",
+        strategy=SCALP_ENGINE_STRATEGY, trade_num=trade_num,
+        reasons=reasons, timing_note="완료된 5m 재가속 확인",
+        rr=2.0, risk_pct=permission.account_risk_pct,
+        est_sl_loss=est_sl_loss, sl_pct=plan.stop_pct,
+        signal_type=signal_type, confirmed_count=0,
+        is_divergence=False, entry_context=entry_context,
+    )
+    send(notification)
+    print(
+        f"  [S1체결] {symbol} {direction} score={plan.score:.0f} "
+        f"risk=${est_sl_loss:.2f}/{max_sl_loss_usd:.2f} mode={permission.mode}"
+    )
+
+
 def _try_auto_trade(symbol: str, tf_key: str, signals: list,
                     current_price: float, scalp: bool = False,
                     mtf_boost: float = 1.0,
@@ -1552,6 +1967,8 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     복리형 베팅: 신호 강도별 계좌 위험률을 먼저 정하고,
     SL폭/레버리지로 증거금 비율을 역산한다.
     """
+    if not LEGACY_AUTO_TRADE_ENABLED:
+        return
     from trade_router import (execute, get_usdt_balance, build_trade_notification,
                         _append_trade, add_trade_context, MAX_MARGIN_USD, MAX_SCALP_MARGIN_USD,
                         MAX_DAILY_LOSS,
@@ -1591,6 +2008,8 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         (direction == "SHORT" and ema_trend == -1)
     )
     asym_mult, asym_notes, _asym_profile = get_asymmetric_profile(symbol, tf_key, strategy, direction)
+    if EMA_LIVE_DISABLE_ASYMMETRIC and strategy in AUTO_TRADE_STRATEGY_WHITELIST:
+        asym_mult, asym_notes = 1.0, []
     live_asym = _live_asymmetric_candidate(best, tf_key, strategy)
     asymmetric_mode = bool(asym_mult > 1.0 or live_asym)
     if asymmetric_mode:
@@ -1685,6 +2104,28 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         return
 
     if (
+        strategy in AUTO_TRADE_STRATEGY_WHITELIST
+        and LIVE_AUTO_TRADE_TIMEFRAMES
+        and tf_key not in LIVE_AUTO_TRADE_TIMEFRAMES
+    ):
+        _block(
+            f"v6 EMA 라이브 판단봉은 {sorted(LIVE_AUTO_TRADE_TIMEFRAMES)}만 허용 — "
+            f"{tf_key}는 후보 기록 전용",
+            paper_only=True,
+        )
+        return
+
+    if strategy in AUTO_TRADE_STRATEGY_WHITELIST:
+        _ema_live_vol = float(best.get("vol", {}).get("value", 0) or 0)
+        if EMA_LIVE_MAX_VOL_RATIO > 0 and _ema_live_vol > EMA_LIVE_MAX_VOL_RATIO:
+            _block(
+                f"v6 EMA 거래량 {_ema_live_vol:.1f}x > 상한 "
+                f"{EMA_LIVE_MAX_VOL_RATIO:.1f}x — 블로우오프 추격 차단",
+                send_diag=True,
+            )
+            return
+
+    if (
         symbol == BTC_MACRO_SHORT_SYMBOL
         and BTC_MACRO_SHORT_BLOCK_LONG
         and not BTC_MACRO_TREND_REFERENCE_ONLY
@@ -1718,6 +2159,16 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     timing_risk_note = ""
     timing = _check_lower_tf_timing(symbol, tf_key, direction)
     if not timing["ok"]:
+        if (
+            EMA_LIVE_REQUIRE_LOWER_TF
+            and strategy in AUTO_TRADE_STRATEGY_WHITELIST
+        ):
+            _block(
+                f"v6 EMA {timing['tf']} 보조봉 필수확인 불일치 — "
+                f"예외 진입 금지 | {timing['note']}",
+                send_diag=True,
+            )
+            return
         vol_r = float(best.get("vol", {}).get("value", 0) or 0)
         sig_type = str(best.get("signal_type", "") or "")
         # 2026-07-11: RSI2/VWAP회귀/마이크로돌파 — 하위TF 타이밍 실패·강한역방향 시
@@ -1801,6 +2252,28 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     if BLOCK_SHORT_AUTO_TRADE and direction == "SHORT":
         _block("SHORT 실거래 임시 차단 — EMA LONG 전략 집중", paper_only=True)
         return
+
+    # 거래소별 실체결 성과를 분리한다. Bybit에서 살아남은 신호라고 해서 체결비용,
+    # 종목군, 과거 사이징이 다른 Binance에도 같은 엣지가 있다고 가정하지 않는다.
+    quant_decision = evaluate_live_candidate(
+        venue=runtime_context()["execution_venue"],
+        strategy=strategy,
+        direction=direction,
+        timeframe=tf_key,
+        approved_strategies=tuple(AUTO_TRADE_STRATEGY_WHITELIST),
+        logic_stack_version=LOGIC_STACK_VERSION,
+        binance_canary_enabled=BINANCE_CANARY_LIVE_ENABLED,
+        binance_canary_risk_mult=BINANCE_CANARY_RISK_MULT,
+        binance_canary_early_review=BINANCE_CANARY_EARLY_REVIEW_CLOSED,
+    )
+    if not quant_decision.allow:
+        _block(
+            f"퀀트 승격 게이트: {quant_decision.reason}",
+            paper_only=True,
+            quant_governor=quant_decision.to_dict(),
+        )
+        return
+    print(f"  [퀀트게이트] {quant_decision.reason}")
 
     # 2026-07-11: 15m 실거래는 양의 엣지 확인된 EMA 계열만 (히든/기타는 1h+ 또는 paper)
     if tf_key == "15m" and LIVE_15M_STRATEGIES and strategy not in LIVE_15M_STRATEGIES:
@@ -1987,6 +2460,14 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         _block(
             f"SL {_sl_pct_now:.2f}% > 한도 {MAX_ENTRY_SL_PCT:.1f}% — "
             f"와이드 SL 진입 차단 (단건 대형손실 방지)",
+            send_diag=True,
+        )
+        return
+    _sl_atr_now = float(t.get("sl_atr", 0) or 0)
+    if MAX_ENTRY_SL_ATR > 0 and _sl_atr_now > MAX_ENTRY_SL_ATR:
+        _block(
+            f"SL {_sl_atr_now:.2f}ATR > 한도 {MAX_ENTRY_SL_ATR:.1f}ATR — "
+            "구조손절이 먼 추격 진입 차단",
             send_diag=True,
         )
         return
@@ -2282,6 +2763,22 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     state_now = _load_state()
     daily_limit = get_daily_loss_limit(balance_now)
     daily_loss = float(state_now.get("daily_loss", 0) or 0)
+    if (
+        quant_decision.mode == "canary"
+        and runtime_context()["execution_venue"] == "binance"
+    ):
+        canary_daily_limit = round(
+            balance_now * float(BINANCE_CANARY_DAILY_LOSS_PCT), 2
+        )
+        daily_limit = min(daily_limit, canary_daily_limit)
+        risk_notes.append(
+            f"Binance canary 일손실캡 {BINANCE_CANARY_DAILY_LOSS_PCT*100:.2f}% "
+            f"(${daily_limit:.2f})"
+        )
+        print(
+            f"  [Canary일손실] ${daily_loss:.2f}/${daily_limit:.2f} "
+            f"(equity×{BINANCE_CANARY_DAILY_LOSS_PCT*100:.2f}%)"
+        )
     # 2026-07-09 진단: DD risk_off(리스크×0.25) 상태에서 소액계좌는 축소된 목표증거금이
     # $8 최소실행증거금 밑으로 떨어져 신호품질과 무관하게 통째로 거부됨(바이빗 3일
     # 공백의 실제 원인 — 108건이 이 사유로 실패). DD 리스크축소는 소프트캡이어야
@@ -2388,6 +2885,22 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         risk_notes.extend(margin_notes)
         for note in margin_notes:
             print(f"  [시드상향] {note}  |  예상 SL손실 ${est_sl_loss:.2f}")
+
+    # 새 로직 버전은 과거 챔피언 성과를 그대로 빌려 풀사이즈로 시작하지 않는다.
+    # 최소 실행 마진/확신도 시드가 앞에서 올린 수량도 여기서 최종 감액한다.
+    if quant_decision.risk_mult < 0.999:
+        position_pct = round(position_pct * quant_decision.risk_mult, 6)
+        est_sl_loss = round(est_sl_loss * quant_decision.risk_mult, 4)
+        risk_pct = round(risk_pct * quant_decision.risk_mult, 8)
+        quant_note = (
+            f"퀀트 {quant_decision.mode}: 현 버전 검증중 "
+            f"리스크×{quant_decision.risk_mult:.2f}"
+        )
+        risk_notes.append(quant_note)
+        print(
+            f"  [퀀트사이즈] {quant_note} → 비중 {position_pct*100:.2f}%, "
+            f"예상SL ${est_sl_loss:.2f}"
+        )
 
     # 비-EMA(거래량급등) SHORT 강등: 순수 EMA눌림목/EMA눌림목+돌파 SHORT(70% WR)은 유지,
     # "거래량급등" 조합 SHORT(SHORT일 때만 EV음수)만 소액화한다(2026-07-06 진단).
@@ -2514,7 +3027,7 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
                 position_pct = round(fixed_pct, 6)
                 est_sl_loss = round(
                     balance_now * position_pct * leverage
-                    * (t["sl_pct"] / 100 + ROUND_TRIP_FEE), 4
+                    * (t["sl_pct"] / 100 + _round_trip_execution_cost()), 4
                 )
                 conviction_tier = "BINANCE-FIXED"
                 _fixed_margin_usd = round(balance_now * position_pct, 2)
@@ -2527,17 +3040,19 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
                 print(f"  [Binance고정] {note}")
         else:
             _cap_notes = []
-            if BINANCE_MAX_MARGIN_USD and BINANCE_MAX_MARGIN_USD > 0:
-                max_pct = min(BINANCE_MAX_MARGIN_USD / balance_now, max_m_final / balance_now)
+            binance_margin_cap = _binance_margin_cap_usd(balance_now)
+            if binance_margin_cap > 0:
+                max_pct = min(binance_margin_cap / balance_now, max_m_final / balance_now)
                 if position_pct > max_pct > 0:
                     old_pct = position_pct
                     position_pct = round(max_pct, 6)
                     est_sl_loss = round(
                         balance_now * position_pct * leverage
-                        * (t["sl_pct"] / 100 + ROUND_TRIP_FEE), 4
+                        * (t["sl_pct"] / 100 + _round_trip_execution_cost()), 4
                     )
                     _cap_notes.append(
-                        f"증거금상한 ${BINANCE_MAX_MARGIN_USD:.0f}: "
+                        f"증거금상한 equity×{BINANCE_MAX_MARGIN_PCT*100:.0f}% "
+                        f"(${binance_margin_cap:.2f}): "
                         f"{old_pct*100:.2f}%→{position_pct*100:.2f}%"
                     )
             if BINANCE_MAX_TRADE_SL_LOSS_PCT and BINANCE_MAX_TRADE_SL_LOSS_PCT > 0:
@@ -2585,6 +3100,10 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
             if (high_opportunity or scalp_execution_floor or dd_risk_off)
             else MIN_TRADE_MARGIN_USD
         ),
+        max_open_positions_override=(
+            BINANCE_CANARY_MAX_OPEN_POSITIONS
+            if quant_decision.mode == "canary" else None
+        ),
     )
     if portfolio_block:
         _block(portfolio_block, send_diag=True)
@@ -2598,7 +3117,11 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
 
     # 실제 예상 SL 손실액 (황금 진입도 표시용으로 계산)
     est_margin_f = min(balance_now * position_pct, max_m_final)
-    est_sl_loss  = min(est_sl_loss, est_margin_f * leverage * (t["sl_pct"] / 100 + ROUND_TRIP_FEE))
+    est_sl_loss = min(
+        est_sl_loss,
+        est_margin_f * leverage
+        * (t["sl_pct"] / 100 + _round_trip_execution_cost()),
+    )
 
     # 5m 스캘핑: 단일 TP로 강제 (빠른 확정, 보유 없음)
     if tf_key == "5m" and len(t["tps"]) > 1:
@@ -2668,6 +3191,7 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         "target_margin_usd": target_margin,
         "logic_attribution": logic_attr,
         "logic_stack_version": LOGIC_STACK_VERSION,
+        "quant_governor": quant_decision.to_dict(),
         "regime": (regime_info or {}) if REGIME_ROUTER_ENABLED else {},
     })
     if btc_macro_short:
@@ -2715,12 +3239,27 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
 
     if result["ok"]:
         # 거래 이력 기록
+        filled_entry = float(result.get("entry_price") or current_price)
+        entry_context["entry_price"] = filled_entry
         max_m    = max_m_final
-        margin_r = min(balance_now * position_pct, max_m)
+        margin_r = float(
+            result.get("margin_usd") or min(balance_now * position_pct, max_m)
+        )
+        est_sl_loss = float(
+            result.get("estimated_sl_loss_usd") or est_sl_loss
+        )
+        entry_context["execution_sizing"] = {
+            "seed_equity": result.get("seed_equity", balance_now),
+            "free_balance": result.get("free_balance", balance_now),
+            "margin_usd": margin_r,
+            "notional_usd": result.get("notional_usd", 0),
+            "estimated_sl_loss_usd": est_sl_loss,
+            "max_sl_loss_usd": result.get("max_sl_loss_usd", 0),
+        }
         trade_num = _append_trade(
             symbol, direction, tf_key, strength,
             result["leverage"], result["qty"],
-            current_price, t["sl"], margin_r,
+            filled_entry, t["sl"], margin_r,
             tps=tps,
             entry_reasons=entry_context["reasons"],
             entry_context=entry_context,
@@ -2731,6 +3270,12 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
             logic_stack_version=LOGIC_STACK_VERSION,
             logic_attribution=logic_attr,
             new_stack_applied=bool(logic_attr.get("new_stack_applied")),
+            entry_order_id=result.get("entry_order_id", ""),
+            entry_order_link_id=result.get("entry_order_link_id", ""),
+            seed_equity=result.get("seed_equity", balance_now),
+            free_balance=result.get("free_balance", balance_now),
+            notional_usd=result.get("notional_usd", 0),
+            max_sl_loss_usd=result.get("max_sl_loss_usd", 0),
         )
         # 분석용 컨텍스트 추가 기록 (패인 분석에 사용)
         add_trade_context(
@@ -2789,7 +3334,12 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
             signal_type=best.get("signal_type", ""),
             entry_price=current_price, sl=t["sl"], tps=tps,
             leverage=result["leverage"], qty=result["qty"],
-            margin=margin_r, balance=balance_now,
+            entry_order_id=result.get("entry_order_id", ""),
+            entry_order_link_id=result.get("entry_order_link_id", ""),
+            margin=margin_r, balance=result.get("seed_equity", balance_now),
+            free_balance=result.get("free_balance", balance_now),
+            notional_usd=result.get("notional_usd", 0),
+            max_sl_loss_usd=result.get("max_sl_loss_usd", 0),
             risk_pct=risk_pct, position_pct=position_pct,
             est_sl_loss=est_sl_loss,
             btc_macro_short_mode=bool(entry_context.get("btc_macro_short_mode", False)),
@@ -2814,13 +3364,8 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
             is_divergence=entry_context["is_divergence"],
             entry_context=entry_context,
         )
-        analysis_sent = send_position_analysis(notif)
-        send(_build_open_summary(
-            trade_num, symbol, direction, tf_key, strategy, strength,
-            result["leverage"], result["qty"], current_price, t["sl"], tps,
-            est_sl_loss, analysis_sent, entry_context["strategy_profile"],
-        ))
-        print(f"  [자동매매{scalp_tag}] ✅ {trade_num}회차 기록 ({pct_label}) — 텔레그램 분리 발송")
+        send_position_analysis(notif)
+        print(f"  [자동매매{scalp_tag}] ✅ {trade_num}회차 기록 ({pct_label}) — 텔레그램 단일 발송")
     else:
         print(f"  [자동매매] ❌ 주문 실패: {result['error']}")
         log_trade_candidate(
@@ -2878,6 +3423,8 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
     SL: 돌파 레벨 바로 아래/위 (다이버전스 SL보다 타이트: 1.0 ATR)
     TP: VERY STRONG 기준 적용 (45%@2ATR + 35%@3.5ATR + 20%@5ATR)
     """
+    if not LEGACY_AUTO_TRADE_ENABLED:
+        return
     from trade_router import (execute, get_usdt_balance, build_trade_notification,
                         _append_trade, add_trade_context, MAX_MARGIN_USD,
                         MAX_DAILY_LOSS,
@@ -3471,11 +4018,26 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
     )
 
     if result["ok"]:
-        margin_r = min(balance_now * position_pct, max_margin)
+        filled_entry = float(result.get("entry_price") or current_price)
+        entry_context["entry_price"] = filled_entry
+        margin_r = float(
+            result.get("margin_usd") or min(balance_now * position_pct, max_margin)
+        )
+        est_sl_loss = float(
+            result.get("estimated_sl_loss_usd") or est_sl_loss
+        )
+        entry_context["execution_sizing"] = {
+            "seed_equity": result.get("seed_equity", balance_now),
+            "free_balance": result.get("free_balance", balance_now),
+            "margin_usd": margin_r,
+            "notional_usd": result.get("notional_usd", 0),
+            "estimated_sl_loss_usd": est_sl_loss,
+            "max_sl_loss_usd": result.get("max_sl_loss_usd", 0),
+        }
         trade_num = _append_trade(
             symbol, direction, tf_key, strength,
             result["leverage"], result["qty"],
-            current_price, sl, margin_r,
+            filled_entry, sl, margin_r,
             tps=tps,
             entry_reasons=entry_context["reasons"],
             entry_context=entry_context,
@@ -3483,6 +4045,12 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
             core_strategy=entry_context["core_strategy"],
             strategy_mode=entry_context["strategy_mode"],
             asymmetric_mode=entry_context["asymmetric_mode"],
+            entry_order_id=result.get("entry_order_id", ""),
+            entry_order_link_id=result.get("entry_order_link_id", ""),
+            seed_equity=result.get("seed_equity", balance_now),
+            free_balance=result.get("free_balance", balance_now),
+            notional_usd=result.get("notional_usd", 0),
+            max_sl_loss_usd=result.get("max_sl_loss_usd", 0),
         )
         add_trade_context(
             trade_num,
@@ -3533,7 +4101,12 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
             signal_type=bsig.get("signal_type", "breakout"),
             entry_price=current_price, sl=sl, tps=tps,
             leverage=result["leverage"], qty=result["qty"],
-            margin=margin_r, balance=balance_now,
+            entry_order_id=result.get("entry_order_id", ""),
+            entry_order_link_id=result.get("entry_order_link_id", ""),
+            margin=margin_r, balance=result.get("seed_equity", balance_now),
+            free_balance=result.get("free_balance", balance_now),
+            notional_usd=result.get("notional_usd", 0),
+            max_sl_loss_usd=result.get("max_sl_loss_usd", 0),
             risk_pct=risk_pct, position_pct=position_pct,
             est_sl_loss=est_sl_loss,
             btc_macro_short_mode=bool(entry_context.get("btc_macro_short_mode", False)),
@@ -3554,13 +4127,8 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
             is_divergence=False,
             entry_context=entry_context,
         )
-        analysis_sent = send_position_analysis(notif)
-        send(_build_open_summary(
-            trade_num, symbol, direction, tf_key, trade_strategy, strength,
-            result["leverage"], result["qty"], current_price, sl, tps,
-            est_sl_loss, analysis_sent, entry_context["strategy_profile"],
-        ))
-        print(f"  [돌파매매] ✅ {trade_num}회차 기록 — 텔레그램 분리 발송")
+        send_position_analysis(notif)
+        print(f"  [돌파매매] ✅ {trade_num}회차 기록 — 텔레그램 단일 발송")
     else:
         print(f"  [돌파매매] ❌ 주문 실패: {result['error']}")
         log_trade_candidate(
@@ -3686,7 +4254,7 @@ def _planned_expectation_text(t: dict) -> str:
     if entry <= 0 or not tps:
         return ""
 
-    fee_pct = ROUND_TRIP_FEE * 100
+    fee_pct = _round_trip_execution_cost() * 100
     weighted_net_pct = 0.0
     for tp in tps:
         weight = float(tp.get("pct", 0) or 0) / 100
@@ -4369,7 +4937,10 @@ def _try_btc_sync_direct_trade(candidate: dict) -> bool:
 
     sl_pct = abs(entry_price - sl) / entry_price * 100
     est_margin = min(balance_now * position_pct, max_margin)
-    est_sl_loss = min(est_sl_loss, est_margin * leverage * (sl_pct / 100 + ROUND_TRIP_FEE))
+    est_sl_loss = min(
+        est_sl_loss,
+        est_margin * leverage * (sl_pct / 100 + _round_trip_execution_cost()),
+    )
     confirmed_count = 5 + int(abs_gap >= BTC_SYNC_DIRECT_MIN_ABS_GAP_PCT * 1.5) + int(vol_ratio >= 2.0)
 
     profile = classify_strategy(strategy, signal_type, False, direction)
@@ -4495,11 +5066,26 @@ def _try_btc_sync_direct_trade(candidate: dict) -> bool:
     )
 
     if result["ok"]:
-        margin_r = min(balance_now * position_pct, max_margin)
+        filled_entry = float(result.get("entry_price") or entry_price)
+        entry_context["entry_price"] = filled_entry
+        margin_r = float(
+            result.get("margin_usd") or min(balance_now * position_pct, max_margin)
+        )
+        est_sl_loss = float(
+            result.get("estimated_sl_loss_usd") or est_sl_loss
+        )
+        entry_context["execution_sizing"] = {
+            "seed_equity": result.get("seed_equity", balance_now),
+            "free_balance": result.get("free_balance", balance_now),
+            "margin_usd": margin_r,
+            "notional_usd": result.get("notional_usd", 0),
+            "estimated_sl_loss_usd": est_sl_loss,
+            "max_sl_loss_usd": result.get("max_sl_loss_usd", 0),
+        }
         trade_num = _append_trade(
             symbol, direction, tf_key, strength,
             result["leverage"], result["qty"],
-            entry_price, sl, margin_r,
+            filled_entry, sl, margin_r,
             strategy=strategy,
             signal_type=signal_type,
             is_divergence=False,
@@ -4510,6 +5096,12 @@ def _try_btc_sync_direct_trade(candidate: dict) -> bool:
             core_strategy=entry_context["core_strategy"],
             strategy_mode=entry_context["strategy_mode"],
             asymmetric_mode=False,
+            entry_order_id=result.get("entry_order_id", ""),
+            entry_order_link_id=result.get("entry_order_link_id", ""),
+            seed_equity=result.get("seed_equity", balance_now),
+            free_balance=result.get("free_balance", balance_now),
+            notional_usd=result.get("notional_usd", 0),
+            max_sl_loss_usd=result.get("max_sl_loss_usd", 0),
         )
         add_trade_context(
             trade_num,
@@ -4578,7 +5170,12 @@ def _try_btc_sync_direct_trade(candidate: dict) -> bool:
             signal_type=signal_type,
             entry_price=entry_price, sl=sl, tps=tps,
             leverage=result["leverage"], qty=result["qty"],
-            margin=margin_r, balance=balance_now,
+            entry_order_id=result.get("entry_order_id", ""),
+            entry_order_link_id=result.get("entry_order_link_id", ""),
+            margin=margin_r, balance=result.get("seed_equity", balance_now),
+            free_balance=result.get("free_balance", balance_now),
+            notional_usd=result.get("notional_usd", 0),
+            max_sl_loss_usd=result.get("max_sl_loss_usd", 0),
             risk_pct=risk_pct, position_pct=position_pct,
             est_sl_loss=est_sl_loss,
             btc_sync_gap_pct=gap,
@@ -4608,12 +5205,7 @@ def _try_btc_sync_direct_trade(candidate: dict) -> bool:
             is_divergence=False,
             entry_context=entry_context,
         )
-        analysis_sent = send_position_analysis(notif)
-        send(_build_open_summary(
-            trade_num, symbol, direction, tf_key, strategy, strength,
-            result["leverage"], result["qty"], entry_price, sl, tps,
-            est_sl_loss, analysis_sent, entry_context["strategy_profile"],
-        ))
+        send_position_analysis(notif)
         print(f"  [전략3] ✅ {trade_num}회차 BTC 괴리 독립 진입 기록")
         return True
 
@@ -4683,9 +5275,22 @@ def _reconcile_orphan_positions():
       - PnL <= -30% 손실: 긴급 SL 자동 설정 (현재가 기준 3ATR 위 / 아래)
     퀀트 원칙: SL 없는 포지션은 즉시 관리 대상.
     """
-    from trade_router import fetch_all_positions_raw, place_emergency_sl, _load_state, _save_state
+    from trade_router import (
+        fetch_all_positions_raw, place_emergency_sl,
+        reconcile_stale_open_history, _load_state, _save_state,
+        is_execution_api_healthy,
+    )
 
     all_positions = fetch_all_positions_raw()
+    # Private API 실패를 "실포지션 0개"로 오인하면 정상 open 원장을 격리할 수
+    # 있다. 인증/레이트리밋 장애에서는 어떤 상태 변경도 하지 않는다.
+    if (
+        runtime_context()["execution_venue"] == "binance"
+        and not is_execution_api_healthy()
+    ):
+        print("[조정] Binance 실포지션 조회 불확실 — 원장 reconciliation 생략")
+        return
+    reconcile_stale_open_history({p["symbol"] for p in all_positions})
     if not all_positions:
         return
 
@@ -4760,6 +5365,794 @@ def _reconcile_orphan_positions():
     print(f"[조정] 미추적 포지션 {len(fresh_orphans)}개 처리 완료")
 
 
+def _run_s1_primary_scan(scan_symbols: list[str],
+                         spread_by_symbol: dict[str, float]) -> int:
+    """Evaluate S1 for the whole universe before any legacy research scan.
+
+    The legacy loop fetches five timeframes plus macro context per symbol and
+    routinely outlives the five-minute LaunchAgent interval.  S1 only needs
+    15m+5m, so keeping it on that loop would make an otherwise timely signal
+    arrive several minutes late.
+    """
+    evaluated = 0
+    print(f"  [S1 PRIMARY] {len(scan_symbols)}종목 15m+5m 우선 평가")
+    for symbol in scan_symbols:
+        try:
+            d15 = fetch_ohlcv(
+                symbol,
+                SCALP_ENGINE_TIMEFRAME,
+                TIMEFRAMES[SCALP_ENGINE_TIMEFRAME]["limit"],
+            )
+            d5 = fetch_ohlcv(
+                symbol,
+                SCALP_ENGINE_TRIGGER_TIMEFRAME,
+                TIMEFRAMES[SCALP_ENGINE_TRIGGER_TIMEFRAME]["limit"],
+            )
+            if d15 is None or d5 is None or len(d15) == 0 or len(d5) == 0:
+                print(f"  [S1] {symbol} OHLCV 없음 — 스킵")
+                continue
+            evaluated += 1
+            _try_scalping_engine_trade(
+                symbol,
+                d15,
+                float(d15["close"].iloc[-1]),
+                spread_pct=spread_by_symbol.get(symbol),
+                df_5m=d5,
+            )
+        except Exception as exc:
+            print(f"  [S1] {symbol} 우선평가 오류: {exc}")
+    return evaluated
+
+
+@synchronized_process("binance_account_state_cycle", timeout=15.0)
+def _try_binance_d2_trade(
+    symbol: str,
+    plan: D2Plan | MA200PullbackPlan,
+    *,
+    engine_code: str = "D2",
+    strategy: str = BINANCE_D2_STRATEGY,
+    engine_version: str = BINANCE_D2_ENGINE_VERSION,
+    engine_state_key: str = "binance_d2_engine",
+    live_enabled: bool = BINANCE_D2_ENGINE_ENABLED and BINANCE_D2_LIVE_ENABLED,
+    leverage_config: int = BINANCE_D2_LEVERAGE,
+    max_margin_pct: float = BINANCE_D2_MAX_MARGIN_PCT,
+    min_margin_usd: float = BINANCE_D2_MIN_MARGIN_USD,
+    max_hold_minutes: int = BINANCE_D2_MAX_HOLD_MINUTES,
+    progress_check_minutes: int = BINANCE_D2_PROGRESS_CHECK_MINUTES,
+    progress_min_r: float = BINANCE_D2_PROGRESS_MIN_R,
+    trail_activation_r: float = BINANCE_D2_TRAIL_ACTIVATION_R,
+    is_divergence: bool = True,
+    strategy_family: str = "D2 Asymmetric Divergence",
+    core_strategy: str = "15m/1h/4h 등급형 다이버전스 + 5m 실행확인",
+    strategy_mode: str = "binance_d2_live",
+    exit_policy: str | None = None,
+    account_risk_pct_override: float | None = None,
+) -> None:
+    """Place one isolated Binance strategy plan with shared safety sizing."""
+    if (
+        not live_enabled
+        or not AUTO_TRADE
+        or DRY_RUN
+        or FAST_RADAR
+        or runtime_context()["execution_venue"] != "binance"
+        or not plan.eligible
+    ):
+        return
+
+    from trade_router import (
+        _append_trade, _load_state, _save_state,
+        build_trade_notification, execute, get_usdt_balance, get_usdt_equity,
+        has_open_position, is_execution_api_healthy, log_execution_journal,
+        log_trade_candidate, maybe_alert_execution_api_down,
+    )
+
+    direction = plan.direction
+    setup_tf = plan.setup_timeframe or BINANCE_D2_SETUP_TIMEFRAME
+    tier = plan.signal_tier or "C"
+    signal_type = (
+        f"{engine_code.lower()}_{tier.lower()}_{setup_tf}_"
+        f"{plan.divergence_kind}_{direction.lower()}"
+    )
+    if has_open_position(symbol):
+        print(f"  [{engine_code}] {symbol} 기존 포지션 보유 — 중복진입 스킵")
+        return
+
+    state = _load_state()
+    last_bars = (
+        (state.get(engine_state_key) or {}).get("last_entry_bar_by_symbol") or {}
+    )
+    if last_bars.get(symbol) == plan.signal_bar:
+        print(f"  [{engine_code}] {symbol} 동일 셋업 재진입 차단 ({plan.signal_bar})")
+        return
+
+    if not is_execution_api_healthy():
+        maybe_alert_execution_api_down()
+        print(f"  [{engine_code}] Binance private API 비정상 — fail-closed")
+        return
+
+    permission = evaluate_binance_d2_live_permission(
+        root=Path(__file__).resolve().parent,
+        venue="binance",
+        engine_version=engine_version,
+        strategy=strategy,
+        engine_label=engine_code,
+    )
+    if not permission.allow:
+        reason = f"{engine_code} 현버전 승격게이트: {permission.reason}"
+        print(f"  [{engine_code}] {symbol} {reason}")
+        log_trade_candidate(
+            symbol, setup_tf, strategy,
+            direction, engine_code, "blocked", reason,
+            signal_type=signal_type,
+            engine_version=engine_version,
+            engine_plan=plan.to_dict(),
+            live_permission=permission.to_dict(),
+        )
+        return
+
+    effective_risk_pct = float(permission.account_risk_pct)
+    permission_reason = permission.reason
+    permission_payload = permission.to_dict()
+    if account_risk_pct_override is not None:
+        effective_risk_pct = min(
+            effective_risk_pct,
+            max(float(account_risk_pct_override), 0.0),
+        )
+        permission_reason = (
+            f"{permission.reason} / {engine_code} challenger 계좌위험 "
+            f"{effective_risk_pct * 100:.2f}% 상한"
+        )
+        permission_payload["account_risk_pct"] = effective_risk_pct
+        permission_payload["reason"] = permission_reason
+
+    balance = float(get_usdt_balance() or 0.0)
+    equity = float(get_usdt_equity() or balance)
+    if balance <= 0 or equity <= 0:
+        print(f"  [{engine_code}] {symbol} 잔고/equity 확인 실패 — fail-closed")
+        return
+
+    leverage = max(1, int(leverage_config))
+    entry = float(plan.entry)
+    stop = float(plan.stop)
+    stop_fraction = abs(entry - stop) / entry
+    loss_fraction = stop_fraction + BINANCE_ROUND_TRIP_EXECUTION_COST
+    risk_budget = equity * effective_risk_pct
+    max_margin = min(balance, equity * float(max_margin_pct))
+    margin = min(risk_budget / (leverage * loss_fraction), max_margin)
+    if margin + 1e-9 < min_margin_usd:
+        reason = (
+            f"시드 위험예산 ${risk_budget:.3f}에서 증거금 ${margin:.2f} "
+            f"< 실행하한 ${min_margin_usd:.2f}"
+        )
+        print(f"  [{engine_code}] {symbol} {reason}")
+        log_trade_candidate(
+            symbol, setup_tf, strategy,
+            direction, engine_code, "blocked", reason,
+            engine_version=engine_version,
+            engine_plan=plan.to_dict(),
+            live_permission=permission_payload,
+        )
+        return
+
+    position_pct = min(margin / balance, max_margin_pct)
+    margin = min(balance * position_pct, max_margin)
+    est_sl_loss = margin * leverage * loss_fraction
+    position_pct, est_sl_loss, portfolio_notes, portfolio_block = (
+        _apply_portfolio_capacity_gate(
+            balance,
+            position_pct,
+            est_sl_loss,
+            max_margin,
+            direction,
+            high_opportunity=False,
+            label=f"{engine_code} 다종목 포트폴리오",
+            min_execution_margin_usd=min_margin_usd,
+            enforce_position_count=False,
+        )
+    )
+    if portfolio_block:
+        print(f"  [{engine_code}] {symbol} {portfolio_block}")
+        log_trade_candidate(
+            symbol, setup_tf, strategy,
+            direction, engine_code, "blocked", portfolio_block,
+            engine_version=engine_version,
+            engine_plan=plan.to_dict(),
+            live_permission=permission_payload,
+        )
+        return
+
+    tps = [
+        {
+            "price": _round_price(float(tp["price"])),
+            "pct": int(tp["pct"]),
+            "rr": float(tp["rr"]),
+        }
+        for tp in plan.tps
+    ]
+    votes = ",".join(plan.indicator_votes)
+    context_text = ", ".join(
+        f"{tf}:{vote:+d}" for tf, vote in (plan.context_votes or {}).items()
+    )
+    setup_reason = (
+        f"{tier}등급 {setup_tf} {plan.divergence_kind} 다이버전스 "
+        f"{len(plan.indicator_votes)}/4 ({votes})"
+        if is_divergence
+        else f"{setup_tf} {plan.reason} ({votes})"
+    )
+    execution_confirmation = (
+        f"실시간 20초 공격체결 {float((plan.metrics or {}).get('flow_imbalance') or 0):+.2f}, "
+        f"호가불균형 {float((plan.metrics or {}).get('book_imbalance') or 0):+.2f}, "
+        f"스프레드 {float((plan.metrics or {}).get('spread_pct') or 0):.3f}%"
+        if exit_policy in {"c1_orderflow", "c1v2_asymmetric_scalp"}
+        else f"최근 3개 15m/5m 실행확인, 적용 거래량 {plan.volume_ratio_5m:.2f}x"
+    )
+    reasons = [
+        setup_reason,
+        execution_confirmation,
+        f"구조손절 {plan.stop_atr:.2f}ATR/{plan.stop_pct:.2f}%",
+        f"계획 가중수익 {plan.weighted_reward_r:.2f}R, 비용후 손익분기승률 {plan.required_win_rate*100:.1f}%",
+        f"상위문맥 {context_text}",
+        permission_reason,
+        *portfolio_notes,
+    ]
+    trail_mult = float((plan.metrics or {}).get("trail_atr_mult") or 1.0)
+    max_hold_minutes = int(
+        (plan.metrics or {}).get("max_hold_minutes") or max_hold_minutes
+    )
+    progress_check_minutes = int(
+        (plan.metrics or {}).get("progress_check_minutes") or progress_check_minutes
+    )
+    progress_min_r = float(
+        (plan.metrics or {}).get("progress_min_r") or progress_min_r
+    )
+    trail_activation_r = float(
+        (plan.metrics or {}).get("trail_activation_r") or trail_activation_r
+    )
+    position_meta = {
+        "engine_version": engine_version,
+        "strategy": strategy,
+        "signal_bar": plan.signal_bar,
+        "signal_tier": tier,
+        "setup_timeframe": setup_tf,
+        "max_hold_minutes": max_hold_minutes,
+        "exit_policy": exit_policy or (
+            "d2_asymmetric" if is_divergence else "d3_pullback"
+        ),
+        "divergence_kind": plan.divergence_kind,
+        "tp1_lock_r": 0.20,
+        "trail_atr_mult": trail_mult,
+        "trail_activation_r": trail_activation_r,
+        "progress_check_minutes": progress_check_minutes,
+        "progress_min_r": progress_min_r,
+    }
+    entry_context = {
+        "engine_version": engine_version,
+        "strategy": strategy,
+        "strategy_family": strategy_family,
+        "core_strategy": core_strategy,
+        "strategy_mode": strategy_mode,
+        "signal_type": signal_type,
+        "signal_label": f"{engine_code} {plan.divergence_kind} {direction}",
+        "direction": direction,
+        "tf": setup_tf,
+        "signal_tier": tier,
+        "setup_timeframe": setup_tf,
+        "reasons": reasons,
+        "entry_price": entry,
+        "sl": stop,
+        "sl_pct": plan.stop_pct,
+        "tps": tps,
+        "rr": {"weighted": plan.weighted_reward_r, "best": max(tp["rr"] for tp in tps)},
+        "risk_pct": effective_risk_pct,
+        "position_pct": position_pct,
+        "est_sl_loss": est_sl_loss,
+        "leverage": leverage,
+        "signal_bar": plan.signal_bar,
+        "engine_plan": plan.to_dict(),
+        "live_permission": permission_payload,
+        "is_divergence": is_divergence,
+        "divergence_kind": plan.divergence_kind,
+        "asymmetric_mode": True,
+    }
+    result = execute(
+        symbol=symbol,
+        direction=direction,
+        leverage=leverage,
+        entry_price=entry,
+        sl=stop,
+        tps=tps,
+        position_pct=position_pct,
+        atr=plan.atr,
+        is_elite=False,
+        max_margin_usd=max_margin,
+        min_margin_usd=min_margin_usd,
+        max_sl_loss_usd=risk_budget,
+        position_meta=position_meta,
+        require_full_protection=True,
+        # 전략조건·비용·유동성·단건/포트폴리오 위험을 모두 통과한
+        # 고정 소액 위험 주문이다. 당일 연속 손실 합계만으로 다음
+        # 정상 신호를 막지 않는다. 계좌 전체 hard drawdown 차단은 execute의
+        # circuit breaker에서 그대로 유지된다.
+        allow_pause_override=True,
+        pause_override_reason=f"{engine_code} 전략조건 충족 고정소액 신호",
+    )
+    if not result.get("ok"):
+        reason = f"{engine_code} 주문 실패: {result.get('error') or 'unknown'}"
+        print(f"  [{engine_code}] {symbol} {reason}")
+        log_trade_candidate(
+            symbol, setup_tf, strategy,
+            direction, engine_code, "blocked", reason,
+            engine_version=engine_version,
+            engine_plan=plan.to_dict(),
+            live_permission=permission_payload,
+        )
+        return
+
+    filled_entry = float(result.get("entry_price") or entry)
+    qty = float(result.get("qty") or 0.0)
+    leverage = int(result.get("leverage") or leverage)
+    margin = float(result.get("margin_usd") or (qty * filled_entry / leverage))
+    est_sl_loss = float(result.get("estimated_sl_loss_usd") or est_sl_loss)
+    entry_context["entry_price"] = filled_entry
+    entry_context["execution_sizing"] = {
+        "seed_equity": float(result.get("seed_equity") or equity),
+        "free_balance": float(result.get("free_balance") or balance),
+        "margin_usd": margin,
+        "estimated_sl_loss_usd": est_sl_loss,
+        "max_sl_loss_usd": risk_budget,
+    }
+    strength = f"{engine_code}-{tier}-FIXED"
+    trade_num = _append_trade(
+        symbol, direction, setup_tf, strength,
+        leverage, qty, filled_entry, stop, margin,
+        strategy=strategy,
+        signal_type=signal_type,
+        tps=tps,
+        entry_reasons=reasons,
+        entry_context=entry_context,
+        engine_version=engine_version,
+        logic_stack_version=engine_version,
+        est_sl_loss=est_sl_loss,
+        risk_pct=effective_risk_pct,
+        position_pct=position_pct,
+        max_sl_loss_usd=risk_budget,
+        entry_order_id=result.get("entry_order_id", ""),
+        entry_order_link_id=result.get("entry_order_link_id", ""),
+    )
+    log_trade_candidate(
+        symbol, setup_tf, strategy,
+        direction, strength, "opened",
+        price=filled_entry, leverage=leverage, qty=qty,
+        position_pct=position_pct, risk_pct=effective_risk_pct,
+        est_sl_loss=est_sl_loss, rr=plan.weighted_reward_r,
+        sl=stop, sl_pct=plan.stop_pct, tps=tps,
+        entry_reasons=reasons, entry_context=entry_context,
+        engine_version=engine_version,
+    )
+    log_execution_journal(
+        trade_num, "opened", symbol=symbol, tf=setup_tf,
+        strategy=strategy, direction=direction,
+        strength=strength, signal_type=signal_type,
+        entry_price=filled_entry, sl=stop, tps=tps,
+        leverage=leverage, qty=qty, margin=margin,
+        risk_pct=effective_risk_pct, position_pct=position_pct,
+        est_sl_loss=est_sl_loss, entry_context=entry_context,
+        engine_version=engine_version,
+    )
+    state = _load_state()
+    engine_state = state.setdefault(engine_state_key, {})
+    engine_state.setdefault("last_entry_bar_by_symbol", {})[symbol] = plan.signal_bar
+    engine_state["engine_version"] = engine_version
+    _save_state(state)
+
+    notification = build_trade_notification(
+        symbol, direction, leverage, qty, filled_entry, stop, tps, balance,
+        tf_key=setup_tf, strength=strength,
+        strategy=strategy, trade_num=trade_num,
+        reasons=reasons,
+        timing_note=(
+            f"{engine_code} {tier} 1h/5m 완료봉 + 실시간 20초 주문흐름"
+            if exit_policy in {"c1_orderflow", "c1v2_asymmetric_scalp"}
+            else f"{engine_code} {tier} 최근 완료 15m/5m 실행확인"
+        ),
+        rr=plan.weighted_reward_r,
+        risk_pct=effective_risk_pct,
+        est_sl_loss=est_sl_loss, sl_pct=plan.stop_pct,
+        signal_type=signal_type, confirmed_count=len(plan.indicator_votes),
+        is_divergence=is_divergence, entry_context=entry_context,
+    )
+    send(notification)
+    print(
+        f"  [{engine_code}체결] {symbol} {direction} {tier}/{setup_tf} "
+        f"{plan.divergence_kind} "
+        f"votes={len(plan.indicator_votes)}/4 risk=${est_sl_loss:.2f}/${risk_budget:.2f}"
+    )
+
+
+def _try_binance_ma200_pullback_trade(
+    symbol: str, plan: MA200PullbackPlan,
+) -> None:
+    _try_binance_d2_trade(
+        symbol,
+        plan,
+        engine_code="D3",
+        strategy=BINANCE_MA200_PULLBACK_STRATEGY,
+        engine_version=BINANCE_MA200_PULLBACK_ENGINE_VERSION,
+        engine_state_key="binance_ma200_pullback_engine",
+        live_enabled=(
+            BINANCE_MA200_PULLBACK_ENGINE_ENABLED
+            and BINANCE_MA200_PULLBACK_LIVE_ENABLED
+        ),
+        leverage_config=BINANCE_MA200_PULLBACK_LEVERAGE,
+        max_margin_pct=BINANCE_MA200_PULLBACK_MAX_MARGIN_PCT,
+        min_margin_usd=BINANCE_MA200_PULLBACK_MIN_MARGIN_USD,
+        max_hold_minutes=BINANCE_MA200_PULLBACK_MAX_HOLD_MINUTES,
+        progress_check_minutes=BINANCE_MA200_PULLBACK_PROGRESS_CHECK_MINUTES,
+        progress_min_r=BINANCE_MA200_PULLBACK_PROGRESS_MIN_R,
+        trail_activation_r=BINANCE_MA200_PULLBACK_TRAIL_ACTIVATION_R,
+        is_divergence=False,
+        strategy_family="D3 4h Breakout Pullback",
+        core_strategy="4h MA200 거래량 돌파 후 MA200/볼린저 중단 눌림롱",
+        strategy_mode="binance_d3_ma200_pullback_live",
+    )
+
+
+def _run_binance_d2_primary_scan(market_rows: list[dict]) -> dict[str, int]:
+    """Scan all Binance crypto perpetuals once for D2 divergence and D3 pullback."""
+    from trade_router import _load_state, _save_state, log_trade_candidate
+
+    stats = {
+        "universe": len(market_rows), "setup": 0, "trigger": 0,
+        "expired": 0, "errors": 0, "tier_a": 0, "tier_b": 0, "tier_c": 0,
+        "d3_setup": 0, "d3_trigger": 0, "stale": 0,
+    }
+    print(
+        f"  [D2+D3 FULL UNIVERSE] {len(market_rows)}종목 — "
+        "다이버전스 A/B/C + 4h MA200 거래량 돌파 눌림롱"
+    )
+    state = _load_state()
+    engine_state = state.get("binance_d2_engine") or {}
+    stored_pending = engine_state.get("pending_signals") or {}
+    scan_started = time.time()
+    # Expired entries remain as tombstones so an unchanged old divergence is
+    # not granted a fresh 30-60 minute window on every process invocation.
+    pending_signals = {
+        key: value
+        for key, value in stored_pending.items()
+        if scan_started - float((value or {}).get("first_seen") or 0.0) < 7 * 86400
+    }
+    context_limits = {"1d": 90, "1w": 70}
+
+    collector_active = False
+    try:
+        from service_status import heartbeat_is_fresh
+        collector_active = heartbeat_is_fresh(
+            "binance_market_collector", 180, require_ok=False
+        )
+    except Exception:
+        collector_active = False
+    if collector_active:
+        print("  [D2 수집] 독립 market collector 정상 — 공유 캐시 전용 평가")
+
+    def load_cached_batch(
+        requests_: list[tuple[str, str, int]],
+        *,
+        label: str,
+    ) -> tuple[dict, dict]:
+        frames, errors = fetch_ohlcv_batch(
+            requests_, max_workers=8, cache_only=collector_active
+        )
+        # Candle-boundary race: the scanner and collector can wake together.
+        # Never trade the old candle, but give the collector up to 15 seconds
+        # to publish the just-closed bar before discarding this scan.
+        if not collector_active:
+            return frames, errors
+        for attempt in range(3):
+            stale_requests = [
+                request
+                for request in requests_
+                if (request[0], request[1]) not in frames
+                or bool(frames[(request[0], request[1])].attrs.get("stale"))
+            ]
+            if not stale_requests:
+                break
+            print(
+                f"  [D2 수집] {label} 최신봉 {len(stale_requests)}개 "
+                f"collector 동기화 대기 {attempt + 1}/3"
+            )
+            time.sleep(5.0)
+            refreshed, retry_errors = fetch_ohlcv_batch(
+                stale_requests, max_workers=8, cache_only=True
+            )
+            frames.update(refreshed)
+            errors.update(retry_errors)
+            for key in refreshed:
+                errors.pop(key, None)
+        return frames, errors
+
+    # Stage 1 — collector cache에서 전 종목의 공통 프레임을 병렬 로드한다.
+    # 캐시가 비어 있는 최초 1회만 REST 백필하고 이후에는 새 완료봉만 합쳐진다.
+    symbols = [str(row.get("symbol") or "") for row in market_rows]
+    symbols = [symbol for symbol in symbols if symbol]
+    base_started = time.time()
+    base_requests = [
+        request
+        for symbol in symbols
+        for request in (
+            (symbol, BINANCE_D2_SETUP_TIMEFRAME, 140),
+            (symbol, "1h", 1000),
+        )
+    ]
+    base_frames, base_errors = load_cached_batch(
+        base_requests,
+        label="공통프레임",
+    )
+    print(
+        f"  [D2 수집] 공통프레임 {len(base_frames)}/{len(symbols) * 2} "
+        f"{time.time() - base_started:.1f}초 errors={len(base_errors)}"
+    )
+
+    candidates: list[dict] = []
+    for index, row in enumerate(market_rows, start=1):
+        symbol = str(row.get("symbol") or "")
+        if not symbol:
+            continue
+        try:
+            d15 = base_frames[(symbol, BINANCE_D2_SETUP_TIMEFRAME)]
+            # 4h MA200에 완료봉 230개 이상이 필요하다. 1h 1000개를 한 번 받아
+            # 4h로 집계하고 D2/D3가 공유해 API 요청 수는 기존과 동일하게 유지한다.
+            d1h = base_frames[(symbol, "1h")]
+            if d15.attrs.get("stale") or d1h.attrs.get("stale"):
+                stats["stale"] += 1
+                continue
+            d4h = resample_ohlcv(d1h, "4h")
+            if BINANCE_D2_ENGINE_ENABLED:
+                setups = {
+                    "15m": detect_divergence_setup(d15, timeframe="15m"),
+                    "1h": detect_divergence_setup(d1h, timeframe="1h"),
+                    "4h": detect_divergence_setup(d4h, timeframe="4h"),
+                }
+                setup, tier = select_multitimeframe_setup(setups)
+            else:
+                setup, tier = None, ""
+            d3_setup = (
+                detect_ma200_volume_breakout(d4h)
+                if BINANCE_MA200_PULLBACK_ENGINE_ENABLED
+                else None
+            )
+            d2_active = False
+            age_minutes = 0.0
+            ttl_minutes = 0.0
+            if setup is not None:
+                stats["setup"] += 1
+                stats[f"tier_{tier.lower()}"] += 1
+                signal_key = f"{symbol}|{tier}|{setup.signal_bar}"
+                pending = pending_signals.get(signal_key) or {}
+                first_seen = float(pending.get("first_seen") or time.time())
+                pending_signals[signal_key] = {
+                    "symbol": symbol,
+                    "tier": tier,
+                    "setup_timeframe": setup.timeframe,
+                    "signal_bar": setup.signal_bar,
+                    "first_seen": first_seen,
+                    "last_seen": time.time(),
+                }
+                ttl_minutes = float(BINANCE_D2_TIER_TTL_MINUTES.get(tier, 30))
+                age_minutes = (time.time() - first_seen) / 60
+                d2_active = age_minutes <= ttl_minutes
+                if not d2_active:
+                    stats["expired"] += 1
+
+            d3_active = bool(d3_setup is not None and d3_setup.eligible)
+            if d3_active:
+                stats["d3_setup"] += 1
+            if not d2_active and not d3_active:
+                continue
+            candidates.append({
+                "symbol": symbol,
+                "row": row,
+                "d15": d15,
+                "d1h": d1h,
+                "d4h": d4h,
+                "setup": setup,
+                "tier": tier,
+                "d2_active": d2_active,
+                "d3_setup": d3_setup,
+                "d3_active": d3_active,
+                "age_minutes": age_minutes,
+                "ttl_minutes": ttl_minutes,
+            })
+        except KeyError:
+            stats["errors"] += 1
+            detail = (
+                base_errors.get((symbol, BINANCE_D2_SETUP_TIMEFRAME))
+                or base_errors.get((symbol, "1h"))
+                or "공통프레임 없음"
+            )
+            print(f"  [D2+D3] {symbol} 수집 오류: {detail}")
+        except Exception as exc:
+            stats["errors"] += 1
+            print(f"  [D2+D3] {symbol} 설정 평가 오류: {exc}")
+        if index % 100 == 0:
+            print(
+                f"  [D2 준비] {index}/{len(market_rows)} "
+                f"setup={stats['setup']} A/B/C={stats['tier_a']}/"
+                f"{stats['tier_b']}/{stats['tier_c']} "
+                f"D3={stats['d3_setup']} stale={stats['stale']} "
+                f"errors={stats['errors']}"
+            )
+
+    # Stage 2 — 실제 활성 setup에 필요한 5m 및 장기 컨텍스트만 병렬 수집한다.
+    extra_requests: list[tuple[str, str, int]] = []
+    for candidate in candidates:
+        symbol = candidate["symbol"]
+        extra_requests.append((symbol, BINANCE_D2_TRIGGER_TIMEFRAME, 90))
+        if candidate["d2_active"]:
+            extra_requests.extend(
+                (symbol, timeframe, context_limits[timeframe])
+                for timeframe in ("1d", "1w")
+            )
+    extra_started = time.time()
+    extra_frames, extra_errors = load_cached_batch(
+        extra_requests,
+        label="활성프레임",
+    )
+    print(
+        f"  [D2 수집] 활성프레임 {len(extra_frames)}/{len(set(extra_requests))} "
+        f"{time.time() - extra_started:.1f}초 errors={len(extra_errors)}"
+    )
+
+    # 백필이 오래 걸린 최초 실행에서도 주문가격/스프레드는 평가 직전에 갱신한다.
+    try:
+        latest_rows = fetch_all_usdt_perpetual_markets(cache_seconds=0)
+        latest_by_symbol = {row["symbol"]: row for row in latest_rows}
+    except Exception as exc:
+        print(f"  [D2 시세] 최신 ticker 갱신 실패 — 시작 snapshot 사용: {exc}")
+        latest_by_symbol = {}
+
+    for index, candidate in enumerate(candidates, start=1):
+        symbol = candidate["symbol"]
+        setup = candidate["setup"]
+        tier = candidate["tier"]
+        d15 = candidate["d15"]
+        d1h = candidate["d1h"]
+        d4h = candidate["d4h"]
+        d3_setup = candidate["d3_setup"]
+        d2_active = candidate["d2_active"]
+        d3_active = candidate["d3_active"]
+        age_minutes = candidate["age_minutes"]
+        ttl_minutes = candidate["ttl_minutes"]
+        row = latest_by_symbol.get(symbol, candidate["row"])
+        try:
+            d5 = extra_frames[(symbol, BINANCE_D2_TRIGGER_TIMEFRAME)]
+            if d5.attrs.get("stale"):
+                stats["stale"] += 1
+                print(f"  [D2+D3] {symbol} 최신 완료 5m봉 누락 — 진입 차단")
+                continue
+            live_price = float(row.get("last") or d5["close"].iloc[-1])
+            spread_pct = float(row.get("spread_pct") or 0.0) or None
+            quote_volume_usd = float(row.get("volume_usd") or 0.0)
+
+            if d2_active and setup is not None:
+                daily = extra_frames.get((symbol, "1d"))
+                weekly = extra_frames.get((symbol, "1w"))
+                if daily is None or weekly is None:
+                    raise RuntimeError(
+                        extra_errors.get((symbol, "1d"))
+                        or extra_errors.get((symbol, "1w"))
+                        or "장기 컨텍스트 누락"
+                    )
+                if daily.attrs.get("stale") or weekly.attrs.get("stale"):
+                    stats["stale"] += 1
+                    print(f"  [D2] {symbol} 1d/1w 완료봉 지연 — 진입 차단")
+                    continue
+                higher_frames = {
+                    "1h": d1h,
+                    "4h": d4h,
+                    "1d": daily,
+                    "1w": weekly,
+                }
+                plan = evaluate_divergence_entry(
+                    d15,
+                    d5,
+                    setup=setup,
+                    signal_tier=tier,
+                    higher_frames=higher_frames,
+                    live_price=live_price,
+                    round_trip_cost=BINANCE_ROUND_TRIP_EXECUTION_COST,
+                    spread_pct=spread_pct,
+                    quote_volume_usd=quote_volume_usd,
+                    min_quote_volume_usd=BINANCE_D2_MIN_24H_VOLUME_USD,
+                )
+                if not plan.eligible:
+                    log_trade_candidate(
+                        symbol, setup.timeframe, BINANCE_D2_STRATEGY,
+                        setup.direction, f"D2-{tier}", "blocked", plan.reason,
+                        signal_type=(
+                            f"d2_{tier.lower()}_{setup.timeframe}_"
+                            f"{setup.kind}_{setup.direction.lower()}"
+                        ),
+                        engine_version=BINANCE_D2_ENGINE_VERSION,
+                        engine_setup=setup.to_dict(),
+                        engine_plan=plan.to_dict(),
+                        candidate_age_minutes=round(age_minutes, 2),
+                        candidate_ttl_minutes=ttl_minutes,
+                    )
+                else:
+                    stats["trigger"] += 1
+                    print(
+                        f"  [D2후보] {symbol} {plan.direction} "
+                        f"{plan.signal_tier}/{plan.setup_timeframe} "
+                        f"{plan.divergence_kind} {len(plan.indicator_votes)}/4 "
+                        f"VOL={plan.volume_ratio_5m:.2f}x "
+                        f"RR={plan.weighted_reward_r:.2f}"
+                    )
+                    _try_binance_d2_trade(symbol, plan)
+
+            if d3_active and d3_setup is not None:
+                d3_plan = evaluate_ma200_pullback_entry(
+                    d4h,
+                    d15,
+                    d5,
+                    setup=d3_setup,
+                    live_price=live_price,
+                    round_trip_cost=BINANCE_ROUND_TRIP_EXECUTION_COST,
+                    spread_pct=spread_pct,
+                    quote_volume_usd=quote_volume_usd,
+                    min_quote_volume_usd=BINANCE_MA200_PULLBACK_MIN_24H_VOLUME_USD,
+                )
+                if not d3_plan.eligible:
+                    log_trade_candidate(
+                        symbol, "4h", BINANCE_MA200_PULLBACK_STRATEGY,
+                        "LONG", "D3-PB", "blocked", d3_plan.reason,
+                        signal_type="d3_pb_4h_ma200_pullback_long",
+                        engine_version=BINANCE_MA200_PULLBACK_ENGINE_VERSION,
+                        engine_setup=d3_setup.to_dict(),
+                        engine_plan=d3_plan.to_dict(),
+                    )
+                else:
+                    stats["d3_trigger"] += 1
+                    print(
+                        f"  [D3후보] {symbol} LONG "
+                        f"{(d3_plan.metrics or {}).get('zone_label', '-')} "
+                        f"BREAKOUT_VOL={d3_setup.breakout_volume_ratio:.2f}x "
+                        f"RR={d3_plan.weighted_reward_r:.2f}"
+                    )
+                    _try_binance_ma200_pullback_trade(symbol, d3_plan)
+        except Exception as exc:
+            stats["errors"] += 1
+            print(f"  [D2+D3] {symbol} 평가 오류: {exc}")
+        if index % 100 == 0:
+            print(
+                f"  [D2 실행] {index}/{len(candidates)} "
+                f"setup={stats['setup']} A/B/C={stats['tier_a']}/"
+                f"{stats['tier_b']}/{stats['tier_c']} trigger={stats['trigger']} "
+                f"D3={stats['d3_setup']}/{stats['d3_trigger']} "
+                f"expired={stats['expired']} errors={stats['errors']}"
+            )
+
+    # Reload just before save because order placement may have updated the same
+    # state file during this scan.  Only replace the D2 pending-signal branch.
+    state = _load_state()
+    engine_state = state.setdefault("binance_d2_engine", {})
+    engine_state["pending_signals"] = pending_signals
+    engine_state["engine_version"] = BINANCE_D2_ENGINE_VERSION
+    engine_state["last_scan_ts"] = time.time()
+    d3_state = state.setdefault("binance_ma200_pullback_engine", {})
+    d3_state["engine_version"] = BINANCE_MA200_PULLBACK_ENGINE_VERSION
+    d3_state["last_scan_ts"] = time.time()
+    _save_state(state)
+    print(
+        f"  [D2+D3 완료] universe={stats['universe']} D2setup={stats['setup']} "
+        f"A/B/C={stats['tier_a']}/{stats['tier_b']}/{stats['tier_c']} "
+        f"D2trigger={stats['trigger']} D3setup/trigger="
+        f"{stats['d3_setup']}/{stats['d3_trigger']} "
+        f"expired={stats['expired']} stale={stats['stale']} "
+        f"errors={stats['errors']}"
+    )
+    return stats
+
+
 def scan():
     # ── Step 0: 포지션 모니터링 먼저 ───────────────────────────────────────────
     if AUTO_TRADE:
@@ -4774,15 +6167,56 @@ def scan():
             maybe_alert_execution_api_down()
             print(
                 f"  [API] {active_exchange()} private 인증 실패 — "
-                f"신규 진입 hard-stop (스캔/시그널은 계속)"
+                f"신규 진입 hard-stop"
             )
-        monitor_positions()
-        _reconcile_orphan_positions()
-        if not FAST_RADAR:
+            # Binance private API가 막힌 상태에서는 포지션/잔고/주문을 검증할 수 없다.
+            # 리서치 텔레그램도 비활성화되어 있으므로 수백 종목 public 스캔을 계속해
+            # 호출량과 로그만 늘리지 않고 이번 실행을 fail-closed 한다.
+            if active_exchange() == "binance":
+                print("  [API] private 상태 확인 불가 — 이번 Binance 스캔 종료")
+                return
+        position_manager_active = False
+        if active_exchange() == "binance":
+            try:
+                from service_status import heartbeat_is_fresh
+                position_manager_active = heartbeat_is_fresh(
+                    "binance_position_manager", 20, require_ok=False
+                )
+            except Exception:
+                position_manager_active = False
+        if position_manager_active:
+            print("  [포지션] 독립 Binance manager(5초) 정상 — 스캐너 중복감시 생략")
+        else:
+            # 독립 manager가 내려가도 기존 스캔 주기의 fallback은 유지한다.
+            monitor_positions()
+            _reconcile_orphan_positions()
+        if not FAST_RADAR and CANDIDATE_EVALUATION_IN_LIVE_LOOP_ENABLED:
             eval_notes = evaluate_trade_candidates()
             if eval_notes:
                 print(f"  [후보평가] {len(eval_notes)}개 완료 — MFE/MAE 학습 로그 누적")
+        if not FAST_RADAR:
             _maybe_send_periodic_report()
+
+    # Binance 실매매 프로세스는 D2+D3 전체 유니버스를 먼저 처리한다. 고정 종목
+    # 목록이나 거래량 Top-N으로 후보를 누락하지 않으며, 완료 뒤 legacy/S1 루프로
+    # 재진입하지 않아 같은 스캔에서 중복 주문이 발생하지 않는다.
+    if (
+        AUTO_TRADE
+        and not DRY_RUN
+        and not FAST_RADAR
+        and (
+            BINANCE_D2_ENGINE_ENABLED
+            or BINANCE_MA200_PULLBACK_ENGINE_ENABLED
+        )
+        and runtime_context()["execution_venue"] == "binance"
+    ):
+        try:
+            market_rows = fetch_all_usdt_perpetual_markets()
+        except Exception as exc:
+            print(f"  [D2+D3] Binance 전체 선물 유니버스 조회 실패: {exc}")
+            return
+        _run_binance_d2_primary_scan(market_rows)
+        return
 
     # ── Step 1: 바이빗 거래량 Top10 + 급증 거래량 조회 ─────────────────────────
     # 진입 전 항상 현재 시장 거래량 상위/급증 종목 파악 → 유동성 집중 종목 우선 스캔
@@ -4799,6 +6233,11 @@ def scan():
     hyperliquid_syms = [r["symbol"] for r in hyperliquid_radar[:HYPERLIQUID_SCAN_TOP_N]]
     hyperliquid_by_symbol = {r["symbol"]: r for r in hyperliquid_radar}
     btc_sync_syms = [r["symbol"] for r in btc_sync_radar[:BTC_SYNC_SCAN_TOP_N]]
+    spread_by_symbol = {
+        row["symbol"]: float(row.get("spread_pct") or 0.0)
+        for row in [*radar, *surge_radar]
+        if row.get("symbol") and float(row.get("spread_pct") or 0.0) > 0
+    }
 
     if fast_mode:
         open_syms = _open_position_symbols_for_fast_radar()
@@ -4877,6 +6316,20 @@ def scan():
         print("  [Radar] 데이터 없음 — 기본 종목으로 진행")
         scan_symbols = list(SYMBOLS)
 
+    if (
+        AUTO_TRADE
+        and not DRY_RUN
+        and SCALP_ENGINE_ENABLED
+        and not LEGACY_AUTO_TRADE_ENABLED
+    ):
+        evaluated = _run_s1_primary_scan(scan_symbols, spread_by_symbol)
+        print(f"  [S1 PRIMARY] 완료 {evaluated}/{len(scan_symbols)}종목")
+        if runtime_context()["state_namespace"] == "bybit":
+            maybe_send_bithumb_ma200_alert(send_bithumb)
+            maybe_send_krx_ma200_alert(send_market_screening)
+            maybe_send_kis_api_review_reminder(send)
+        return
+
     print()
     if AUTO_TRADE and not DRY_RUN and BTC_SYNC_DIRECT_TRADE_ENABLED:
         _run_btc_sync_direct_trades(btc_sync_radar)
@@ -4926,19 +6379,46 @@ def scan():
             {k: v for k, v in TIMEFRAMES.items() if k in FAST_RADAR_TIMEFRAMES}
             if fast_mode else TIMEFRAMES
         )
+        ohlcv_cache = {}
         for tf_key, tf_info in timeframes_to_scan.items():
             tf_label = tf_info["label"]
             limit    = tf_info["limit"]
             total_scanned += 1
 
             try:
-                df = fetch_ohlcv(symbol, tf_key, limit)
+                df = ohlcv_cache.get(tf_key)
+                if df is None:
+                    df = fetch_ohlcv(symbol, tf_key, limit)
+                    ohlcv_cache[tf_key] = df
             except Exception as e:
                 print(f"  [{tf_label}] 데이터 오류: {e}")
                 continue
 
             signals = detect(df)
             current_price = float(df["close"].iloc[-1])
+            if (
+                AUTO_TRADE
+                and SCALP_ENGINE_ENABLED
+                and tf_key == SCALP_ENGINE_TIMEFRAME
+            ):
+                try:
+                    trigger_df = ohlcv_cache.get(SCALP_ENGINE_TRIGGER_TIMEFRAME)
+                    if trigger_df is None:
+                        trigger_limit = TIMEFRAMES[SCALP_ENGINE_TRIGGER_TIMEFRAME]["limit"]
+                        trigger_df = fetch_ohlcv(
+                            symbol, SCALP_ENGINE_TRIGGER_TIMEFRAME, trigger_limit
+                        )
+                        ohlcv_cache[SCALP_ENGINE_TRIGGER_TIMEFRAME] = trigger_df
+                    _try_scalping_engine_trade(
+                        symbol,
+                        df,
+                        current_price,
+                        spread_pct=spread_by_symbol.get(symbol),
+                        df_5m=trigger_df,
+                    )
+                except Exception as scalp_err:
+                    # One malformed symbol may never abort the venue-wide scan.
+                    print(f"  [S1] {symbol} 엔진 평가 오류: {scalp_err}")
             for _sig in signals:
                 _sig["current_price"] = current_price
                 _attach_hyperliquid_lead(_sig, hl_lead)
@@ -5033,8 +6513,16 @@ def scan():
                 if DRY_RUN:
                     print(msg)
                 else:
-                    ok = send_signal(msg)
-                    print(f"  시그널 텔레그램: {'✅' if ok else '스킵'}")
+                    if TELEGRAM_RESEARCH_SIGNALS_ENABLED:
+                        dedupe_key = _signal_dedupe_key(symbol, tf_key, direction, best)
+                        ok = send_signal_once(
+                            msg,
+                            dedupe_key=dedupe_key,
+                            ttl_seconds=_SIGNAL_DEDUPE_SECONDS.get(tf_key, 300),
+                        )
+                        print(f"  시그널 텔레그램: {'✅' if ok else '스킵'}")
+                    else:
+                        print("  시그널 텔레그램: 연구신호 발송 비활성 (콘솔/JSONL만 기록)")
 
                     if AUTO_TRADE:
                         if tf_key in TIMING_ONLY_TF:
@@ -5056,8 +6544,9 @@ def scan():
                             print(f"  [MTF] 전 상위봉 역방향 → 자동매매 차단")
                             _log_gate_block(symbol, tf_key, best, direction,
                                             "MTF 전 상위봉 역방향")
-                            send_signal(f"⛔ <b>[MTF 차단]</b> {symbol.split('/')[0]} {tf_label}\n"
-                                        f"{mtf_summary(mtf_info)}\n역방향 추세 — 자동매매 스킵")
+                            if TELEGRAM_RESEARCH_SIGNALS_ENABLED:
+                                send_signal(f"⛔ <b>[MTF 차단]</b> {symbol.split('/')[0]} {tf_label}\n"
+                                            f"{mtf_summary(mtf_info)}\n역방향 추세 — 자동매매 스킵")
                         # 전략/방향 없는 초기 학습 필터. 실제 차단은 _try_auto_trade에서 수행.
                         elif not is_tradeable(symbol, tf_key)[0]:
                             _ok2, _why2 = is_tradeable(symbol, tf_key)
@@ -5483,7 +6972,11 @@ def scan():
 
                 # ── 2. 불타기 체크 ───────────────────────────────────────
                 # 이미 오픈 포지션 있는 경우: 수익 중이면 추가진입
-                ok_pyr, pyr_msg = can_pyramid(symbol, tf_key)
+                ok_pyr, pyr_msg = (
+                    can_pyramid(symbol, tf_key)
+                    if PYRAMID_ENABLED
+                    else (False, "불타기 안전 비활성화")
+                )
                 if ok_pyr:
                     open_pos = get_open_positions_detail()
                     for pos in open_pos:
@@ -5527,7 +7020,10 @@ def scan():
     if bb_mid_watch:
         print(f"  📌 BB중단 내림롱 관심종목: {', '.join(bb_mid_watch[:12])}")
 
-    if total_signals == 0 and not DRY_RUN and not fast_mode:
+    if (
+        TELEGRAM_RESEARCH_SIGNALS_ENABLED
+        and total_signals == 0 and not DRY_RUN and not fast_mode
+    ):
         send_signal(build_summary(total_scanned))
 
     print(f"\n{'='*55}")
@@ -5541,7 +7037,7 @@ def scan():
         and not fast_mode
         and runtime_context()["state_namespace"] == "bybit"
     ):
-        maybe_send_bithumb_ma200_alert(send_market_screening)
+        maybe_send_bithumb_ma200_alert(send_bithumb)
         maybe_send_krx_ma200_alert(send_market_screening)
         maybe_send_kis_api_review_reminder(send)
 
@@ -5557,17 +7053,20 @@ if __name__ == "__main__":
     elif KRX_ONLY:
         _lock = main_run_lock_name(venue=_venue, fast=False, special="krx_only")
     else:
-        _lock = main_run_lock_name(venue=_venue, fast=FAST_RADAR)
+        _lock = main_run_lock_name(
+            venue=_venue, fast=FAST_RADAR, auto_trade=AUTO_TRADE
+        )
     if not try_acquire(_lock):
         # exit 0: LaunchAgent 가 실패로 재시도 폭풍 일으키지 않게
         sys.exit(0)
 
     if not wait_for_network():
-        print("네트워크 연결 실패 — 종료")
-        sys.exit(1)
+        # VPN/프록시 환경은 직접 TCP probe만 막고 HTTPS API는 정상일 수 있다.
+        # 실제 주문 허용 여부는 scan() 첫 단계의 private API probe가 fail-closed 한다.
+        print("[네트워크] 직접 probe 실패 — 거래소 API 헬스체크로 최종 판정")
     if BITHUMB_ONLY:
         maybe_send_bithumb_ma200_alert(
-            send_market_screening, dry_run=DRY_RUN, force=True, limit=SCREEN_LIMIT
+            send_bithumb, dry_run=DRY_RUN, force=True, limit=SCREEN_LIMIT
         )
         sys.exit(0)
     if KRX_ONLY:

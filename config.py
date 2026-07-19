@@ -110,9 +110,21 @@ BTC_MACRO_SHORT_MARGIN_PCT = 0.20
 BTC_MACRO_SHORT_MAX_ACCOUNT_RISK_PCT = 0.025
 BTC_MACRO_SHORT_SWING_MIN_VOL = 1.00
 
-# ─── 수수료 ───────────────────────────────────────────────────────────────────
-BYBIT_TAKER_FEE = 0.00055   # 0.055%
-ROUND_TRIP_FEE  = BYBIT_TAKER_FEE * 2
+# ─── 체결비용 ─────────────────────────────────────────────────────────────────
+# 2026-07-15 계정 API 실측: Bybit taker 0.055%, Binance USD-M taker 0.050%.
+# 시장가 진입 + 시장가 SL 가능성을 보수적으로 가정하고 각 방향 3bp 슬리피지를 더한다.
+# 지정가 TP가 maker로 체결되면 실제 비용은 이 상한보다 낮아진다.
+BYBIT_TAKER_FEE = 0.00055
+BINANCE_TAKER_FEE = 0.00050
+EXPECTED_ONE_WAY_SLIPPAGE = 0.00030
+BYBIT_ROUND_TRIP_EXECUTION_COST = (
+    BYBIT_TAKER_FEE * 2 + EXPECTED_ONE_WAY_SLIPPAGE * 2
+)
+BINANCE_ROUND_TRIP_EXECUTION_COST = (
+    BINANCE_TAKER_FEE * 2 + EXPECTED_ONE_WAY_SLIPPAGE * 2
+)
+# Bybit adapter compatibility. Binance uses its venue-specific constant.
+ROUND_TRIP_FEE = BYBIT_ROUND_TRIP_EXECUTION_COST
 
 # ─── 타임프레임별 최소 TP1 수익률 (gross %, 수수료 전) ──────────────────────
 MIN_GROSS_PCT = {
@@ -224,10 +236,28 @@ MIN_FALLBACK_TRADE_MARGIN_USD = 1.0
 # 0 또는 None = 고정 override 없음.
 BINANCE_FIXED_MARGIN_USD = 0.0
 BINANCE_FIXED_MARGIN_DOUBLE_AT = 200.0  # 레거시 참고값(자동 동작 없음)
-# 단건 증거금 상한(위험기반 결과와 min). 2026-07-12: 40→15 (건당 -$30대 방지)
-BINANCE_MAX_MARGIN_USD = 15.0
-# 단건 최악손실(est SL) ≤ equity × 이 비율. 2026-07-12: 1.0%→0.45%
-BINANCE_MAX_TRADE_SL_LOSS_PCT = 0.0045
+# 단건 증거금 상한. 2026-07-13 계좌를 약 $170로 리베이스하면서 고정 $15 대신
+# equity 10%로 전환 — 현재는 약 $17, 계좌가 성장/축소하면 자동 복리 스케일링한다.
+# USD 값이 0이면 절대 달러 상한은 사용하지 않고 비율 상한만 적용한다.
+BINANCE_MAX_MARGIN_USD = 0.0
+BINANCE_MAX_MARGIN_PCT = 0.10
+# 단건 최악손실(est SL) ≤ equity × 0.5%. $174 기준 약 $0.87.
+# 변경 후 코호트 30건 PF>=1.25 확인 전에는 1% 이상으로 올리지 않는다.
+BINANCE_MAX_TRADE_SL_LOSS_PCT = 0.0050
+
+# v5는 과거 Binance 코호트가 음수라 정상 사이즈를 허용하지 않는다. 다만 새 체결·
+# 주문검증 스택의 실제 OOS 표본을 만들기 위해 승인 EMA-LONG만 초소액 canary로
+# 거래한다. 기본 위험의 10%(계좌위험 최대 약 0.15%), 일손실 0.5%, 동시 3개.
+# 8건 조기평가 또는 20건 정식평가에서 기대값이 나쁘면 governor가 다시 차단한다.
+# 2026-07-16 v6: 45일/10개 유동성 종목 비용후 재생에서 현재 EMA 조합과
+# 완화 후보가 모두 음의 OOS 기대값이었다. 과거 Binance 실체결 코호트도 PF 0.1
+# 수준이므로 "표본을 만들기 위한 실손실"을 더 허용하지 않는다. 신호/후보 기록은
+# 계속하되 신규 실주문은 governor가 shadow로 차단한다.
+BINANCE_CANARY_LIVE_ENABLED = False
+BINANCE_CANARY_RISK_MULT = 0.10
+BINANCE_CANARY_EARLY_REVIEW_CLOSED = 8
+BINANCE_CANARY_DAILY_LOSS_PCT = 0.0050
+BINANCE_CANARY_MAX_OPEN_POSITIONS = 3
 
 # 확신도 높은 자리는 "맞췄는데 수익금이 너무 작음"을 막기 위해 증거금 하한을 따로 둔다.
 # 목표 증거금 = max(고정 USD, 잔고 비율). 단, 일손실/DD 하드스톱은 그대로 유지한다.
@@ -329,7 +359,7 @@ PROFIT_SURGE_STOP_MIN_PCT = 0.025
 PROFIT_SURGE_MIN_LEVERAGE = 5
 
 # 후보 사후승률이 충분히 좋은 조합은 레버리지를 단계적으로 높인다.
-WINRATE_LEVERAGE_ENABLED = True
+WINRATE_LEVERAGE_ENABLED = False
 WINRATE_LEVERAGE_MIN_SAMPLES = 5
 WINRATE_LEVERAGE_GOOD_WR = 0.60
 WINRATE_LEVERAGE_GREAT_WR = 0.70
@@ -441,11 +471,21 @@ GOLDEN_ENTRY_RISK_PCT   = 0.0150
 MAX_ACCOUNT_RISK_PCT    = 0.0150
 MAX_DAILY_LOSS_PCT      = 0.0500
 AUTO_TRADE_DIAGNOSTICS  = True
+# 스캔 후보/차단 전 신호는 콘솔·JSONL 연구 데이터로만 보관한다. 텔레그램은
+# 실제 체결·청산·주기 결산·주문 실패처럼 운영에 필요한 이벤트만 발송한다.
+TELEGRAM_RESEARCH_SIGNALS_ENABLED = False
 CANDIDATE_LOG_FILE      = "trade_candidates.jsonl"
 EXECUTION_JOURNAL_FILE  = "trade_execution_journal.jsonl"
 
 # ─── 후보 신호 사후성과 기반 퀀트 필터 ─────────────────────────────────────
 # 실제 체결 여부와 무관하게 우리가 낸 후보 신호의 20봉 이후 MFE/MAE를 학습한다.
+# 2026-07-13 감사: 평가 데이터가 대부분 반복된 blocked 신호이고, 실제 주문의
+# 수수료/SL/TP 경로를 반영하지 않은 MFE+MAE 값이다. 연구 리포트에는 남기되
+# 깨끗한 체결 원장이 확보될 때까지 라이브 차단·증액에는 사용하지 않는다.
+CANDIDATE_QUALITY_LIVE_ADJUSTMENT_ENABLED = False
+# 후보 MFE/MAE 배치평가는 다수 OHLCV 호출을 발생시켜 실거래 스캔의 API 한도를
+# 잠식한다. 라이브 루프에서는 끄고, 필요할 때 오프라인 연구 작업으로만 실행한다.
+CANDIDATE_EVALUATION_IN_LIVE_LOOP_ENABLED = False
 SIGNAL_QUALITY_LOOKBACK_DAYS = 3
 SIGNAL_QUALITY_HORIZON = "20"
 SIGNAL_QUALITY_MIN_EXACT = 5
@@ -483,7 +523,10 @@ EXTENSION_HARD_BLOCK_PCT = 8.0
 # ─── 진입 품질 하드 게이트 (2026-07-11) ─────────────────────────────────────
 # 와이드 SL + 고정/고증거금 조합이 Binance에서 대형 단건 손실(HMSTR -67, CHIP -66,
 # US -21 등)을 반복. SL% 가 이 한도를 넘으면 타이트SL 예외 없이 진입 차단.
-MAX_ENTRY_SL_PCT = 10.0
+# 최근 1000PEPE/PIEVERSE/CC 손실은 7~9% 구조손절을 고거래량 예외가 통과시킨
+# 공통점이 있었다. 15m 신규진입은 가격폭과 ATR폭을 동시에 제한한다.
+MAX_ENTRY_SL_PCT = 5.0
+MAX_ENTRY_SL_ATR = 3.0
 # 히든 다이버전스 신선도: 5봉 전 진입(BTC 07/10 -$34) 재발 방지.
 HIDDEN_LIVE_MAX_BARS_AGO = 3
 # TradFi/특수 상품 — 계정 agreement 미서명 시 -4411, 일반 선물 전략과 분리.
@@ -516,6 +559,13 @@ SCALP_COMPOUND_STRATEGIES = {
 # (실측 부분익절 후 잔량 보호청산 다수). 55% 확정 + 45% 러너로 기대값 개선.
 SCALP_COMPOUND_TP1_PCT = 55
 
+# ─── 불타기(Pyramid) 안전 스위치 ─────────────────────────────────────────────
+# 2026-07-13 라이브 로그에서 불타기가 일반 execute()를 호출한 뒤
+# "이미 오픈 포지션 있음"으로 항상 실패하는 배선 확인. 중복검사를 우회하면 execute()의
+# _save_position()이 기존 수량/평단/SL 추적을 신규 포지션처럼 덮어쓰므로 더 위험하다.
+# 전용 add-position 실행기(전체 수량 기준 SL/TP 재구성 + 상태 원자 갱신) 전까지 비활성화.
+PYRAMID_ENABLED = False
+
 ASYMMETRIC_TF = {"15m", "1h", "4h", "1d"}
 ASYMMETRIC_TP_BY_STRENGTH = {
     "STRONG":      [{"pct": 35, "atr_mult": 1.4}, {"pct": 30, "atr_mult": 3.0}, {"pct": 35, "atr_mult": 5.0}],
@@ -529,7 +579,10 @@ ASYMMETRIC_TP_BY_STRENGTH = {
 DRAWDOWN_WARN_PCT       = 0.08
 DRAWDOWN_RISK_OFF_PCT   = 0.12
 DRAWDOWN_HARD_STOP_PCT  = 0.18
-DRAWDOWN_PAUSE_HOURS    = 6
+# 계좌 DD 18% 하드스톱은 성과판정이 아니라 고정 시간 냉각장치다.
+# 최초 발동 시각부터 정확히 4시간만 신규진입을 막고(반복 검사로 연장 금지),
+# 시간이 지나면 당시 equity를 새 실행 기준점으로 삼아 동일 사이즈로 자동 재개한다.
+DRAWDOWN_PAUSE_HOURS    = 4
 DRAWDOWN_RISK_MULT      = 0.25
 # True면 DD 하드스톱에서 신규매매를 멈춘다.
 # 25.89% DD에서도 계속 진입해 손실이 눈덩이처럼 커지던 문제 수정 → True로 변경.
@@ -592,13 +645,20 @@ LIVE_15M_STRATEGIES = {
     "EMA눌림목+돌파",
 }
 
+# v6 라이브는 거래소별 실체결 근거가 남은 15m EMA-LONG 코호트만 재검증한다.
+# 1h 고거래량 진입은 최근 손실 군집이고, 순수 EMA를 넓힌 45일 재생도 음수였다.
+LIVE_AUTO_TRADE_TIMEFRAMES = {"15m"}
+EMA_LIVE_MAX_VOL_RATIO = 12.0
+EMA_LIVE_REQUIRE_LOWER_TF = True
+EMA_LIVE_DISABLE_ASYMMETRIC = True
+
 # ─── EMA 전략 MACD 히스토그램 soft 필터 (2026-07-11) ─────────────────────────
 # 다이버전스 경로에는 MACD가 이미 포함. EMA 단타(_base_signal)는 macd ok=False 고정
 # 이었음. 크로스 필수(후행·신호급감) 대신 히스토그램 부호/기울기 정렬을 soft 적용.
 # HARD_BLOCK=False: 미정렬 시 리스크×SOFT_MULT 만. True면 진입 차단.
 EMA_MACD_FILTER_ENABLED = True
 EMA_MACD_SOFT_RISK_MULT = 0.70
-EMA_MACD_HARD_BLOCK = False
+EMA_MACD_HARD_BLOCK = True
 
 # ─── 레짐 라우터 (Principles P1, 2026-07-11) ─────────────────────────────────
 # 시장 국면(trend/range/high_vol/mixed)에 따라 전략 허용·사이즈를 분기한다.
@@ -617,7 +677,81 @@ REGIME_HIGH_VOL_BLOCK_MEANREV = True
 
 # 실거래 A/B 귀속 태그 (journal/history에 남겨 "기존 vs 신규 스택" 구분)
 # 2026-07-11 이후 진입은 이 버전 문자열로 묶어서 복기한다.
-LOGIC_STACK_VERSION = "2026-07-12-v3-ema-long-core"
+LOGIC_STACK_VERSION = "2026-07-16-v6-strict-15m-ema"
+
+# ─── S1 비용후 스캘핑 엔진 (2026-07-18 전면 교체) ─────────────────────────────
+# 기존 confirmed_count/예외 누적 엔진은 같은 과거 표본을 반복 선택해 과최적화됐고,
+# v6는 204개 후보를 모두 차단해 실체결 OOS 표본을 만들지 못했다. 새 엔진은
+# 완료된 15m 추세·눌림 + 완료된 5m 재가속만 사용하며 과거 버전 성과를 빌리지 않는다.
+SCALP_ENGINE_ENABLED = True
+LEGACY_AUTO_TRADE_ENABLED = False
+SCALP_ENGINE_TIMEFRAME = "15m"
+SCALP_ENGINE_TRIGGER_TIMEFRAME = "5m"
+SCALP_ENGINE_LEVERAGE = 3
+SCALP_ENGINE_MAX_MARGIN_PCT = 0.08
+SCALP_ENGINE_MIN_MARGIN_USD = 1.0
+SCALP_ENGINE_MAX_OPEN_POSITIONS = 2
+SCALP_ENGINE_MAX_HOLD_MINUTES = 90
+# Binance는 현재 -2015(API key/IP/permission) 상태다. API 복구 뒤에도 Bybit 성과를
+# 가져오지 않고 Binance 자체 0/8건 canary부터 시작하도록 기본 비활성화한다.
+SCALP_BINANCE_CANARY_ENABLED = False
+
+# ─── Binance D2 다이버전스·거래량 비대칭 실매매 엔진 ────────────────────────
+# 전체 USDⓈ-M USDT 무기한 종목의 15m/1h/4h 다이버전스를 함께 평가하고,
+# A(1h/4h 3-of-4), B(15m 4-of-4), C(15m 3-of-4)별로 5m 실행조건을 다르게 둔다.
+# 고정 동시 포지션 개수는 적용하지 않지만
+# 종목당 SL 위험과 계좌 전체 증거금/방향/합산 SL 위험 캡은 유지한다.
+BINANCE_D2_ENGINE_ENABLED = True
+# 2026-07-19: 현 버전 실체결은 비용후 음의 기대값이 확인됐다. 스캐너와
+# 후보 저널은 유지하되 신규 실주문만 중단한다. 이미 열린 D2 포지션은
+# binance_position_manager가 보호주문/청산을 계속 관리한다.
+BINANCE_D2_LIVE_ENABLED = False
+BINANCE_D2_SETUP_TIMEFRAME = "15m"
+BINANCE_D2_TRIGGER_TIMEFRAME = "5m"
+BINANCE_D2_CONTEXT_TIMEFRAMES = ("1h", "4h", "1d", "1w")
+BINANCE_D2_LEVERAGE = 5
+BINANCE_D2_MAX_MARGIN_PCT = 0.05
+BINANCE_D2_MIN_MARGIN_USD = 1.0
+BINANCE_D2_MIN_24H_VOLUME_USD = 5_000_000.0
+BINANCE_D2_MAX_HOLD_MINUTES = 90
+BINANCE_D2_PROGRESS_CHECK_MINUTES = 30
+BINANCE_D2_PROGRESS_MIN_R = 0.50
+BINANCE_D2_TRAIL_ACTIVATION_R = 2.0
+BINANCE_D2_TIER_TTL_MINUTES = {"A": 60, "B": 45, "C": 30}
+
+# ─── Binance D3 4h MA200 거래량 돌파 후 눌림롱 ──────────────────────────────
+# 4h MA200 아래에서 형성되던 가격이 거래량과 함께 종가 돌파한 뒤, 7일 안에
+# MA200 또는 볼린저 중단(20SMA)으로 되돌아와 15m/5m 반등을 확인할 때만 LONG 진입한다.
+# 볼린저 중단 접촉 자체는 신호로 사용하지 않는다.
+BINANCE_MA200_PULLBACK_ENGINE_ENABLED = True
+BINANCE_MA200_PULLBACK_LIVE_ENABLED = True
+BINANCE_MA200_PULLBACK_LEVERAGE = 5
+BINANCE_MA200_PULLBACK_MAX_MARGIN_PCT = 0.05
+BINANCE_MA200_PULLBACK_MIN_MARGIN_USD = 1.0
+BINANCE_MA200_PULLBACK_MIN_24H_VOLUME_USD = 5_000_000.0
+BINANCE_MA200_PULLBACK_MAX_HOLD_MINUTES = 720
+BINANCE_MA200_PULLBACK_PROGRESS_CHECK_MINUTES = 240
+BINANCE_MA200_PULLBACK_PROGRESS_MIN_R = 0.25
+BINANCE_MA200_PULLBACK_TRAIL_ACTIVATION_R = 1.50
+
+# ─── Binance C1 실시간 주문흐름 추세추종 Challenger ──────────────────────
+# 24h 거래대금 상위 종목의 aggTrade/bookTicker/depth5를 WebSocket으로 받고,
+# 완료 1h 추세 + 완료 5m 구조와 실시간 공격체결/호가가 같은 방향일 때만 진입한다.
+# 동일 신호는 PAPER와 소액 LIVE에 동시에 남겨 체결비용후 성과를 비교한다.
+BINANCE_C1_ENGINE_ENABLED = True
+# C1 v1 forward: LIVE 1W/5L PF 0.05, PAPER 2W/19L PF 0.054. 순간
+# 주문흐름을 추세로 오인한 음의 기대값이므로 v2 forward 졸업 전 신규 LIVE 금지.
+BINANCE_C1_LIVE_ENABLED = False
+BINANCE_C1_AUTO_PROMOTE_ENABLED = True
+BINANCE_C1_TOP_N = 40
+BINANCE_C1_ACCOUNT_RISK_PCT = 0.0010
+BINANCE_C1_LEVERAGE = 3
+BINANCE_C1_MAX_MARGIN_PCT = 0.03
+BINANCE_C1_MIN_MARGIN_USD = 1.0
+BINANCE_C1_MAX_HOLD_MINUTES = 30
+BINANCE_C1_PROGRESS_CHECK_MINUTES = 10
+BINANCE_C1_PROGRESS_MIN_R = 0.35
+BINANCE_C1_TRAIL_ACTIVATION_R = 1.50
 
 # ─── 일반 다이버전스 관찰모드 사이징 ────────────────────────────────────────
 # 2026-07-07: 일반(non-hidden) bullish/bearish 다이버전스를 화이트리스트에 편입하되,
@@ -714,13 +848,14 @@ RSI2_EXTREME_LONG               = 5      # 이 이하면 VERY STRONG(라이브),
 RSI2_EXTREME_SHORT              = 95     # 이 이상이면 VERY STRONG(라이브)
 RSI2_MIN_VOL                    = 1.0    # 최소 거래량 배수(완만)
 
-REALIZED_TRADE_LEARNING_ENABLED = True
-REALIZED_BLOCK_EXACT_MIN_TRADES = 2
-REALIZED_BLOCK_SYMBOL_MODE_MIN_TRADES = 2
-REALIZED_BLOCK_MODE_TF_MIN_TRADES = 5
+REALIZED_TRADE_LEARNING_ENABLED = False
+# 실체결 원장 복구 후 재활성화하더라도 2건으로 차단/증액하지 않는다.
+REALIZED_BLOCK_EXACT_MIN_TRADES = 30
+REALIZED_BLOCK_SYMBOL_MODE_MIN_TRADES = 30
+REALIZED_BLOCK_MODE_TF_MIN_TRADES = 50
 REALIZED_BLOCK_WIN_RATE = 0.35
 REALIZED_BLOCK_MIN_PNL_USD = -0.50
-REALIZED_BOOST_MIN_TRADES = 2
+REALIZED_BOOST_MIN_TRADES = 50
 REALIZED_BOOST_WIN_RATE = 0.60
 REALIZED_BOOST_MIN_PNL_USD = 0.50
 REALIZED_BOOST_MULT = 1.25

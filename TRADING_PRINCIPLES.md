@@ -104,6 +104,7 @@
 | 2026-07-11 | P1 | 레짐 라우터 v1 | 관측 중 |
 | 2026-07-11 | P8/P9 | 청산·SHORT 강화 | 관측 중 (SHORT 여전히 −EV) |
 | 2026-07-12 | P3/P9/P10 | **EMA 롱 코어만 라이브** + SHORT hard-off + Macro off + Binance 1R↓ | 반사실 Bybit exp −0.22→+0.31; 라이브 관측 |
+| 2026-07-15 | P2/P11/P12 | **거래소별 Quant Governor v5** + 비용/슬리피지 + 실레버리지 검증 | Bybit EMA-LONG probation, Binance 신규 shadow |
 
 ---
 

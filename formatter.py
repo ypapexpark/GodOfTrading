@@ -285,6 +285,7 @@ def _calc_targets(sig: dict, current_price: float,
     return {
         "entry": entry, "sl": sl,
         "sl_pct": round(abs(entry - sl) / entry * 100, 2),
+        "sl_atr": round(abs(entry - sl) / atr, 3),
         "tps": tps,
         "fee_pct": round(fee_total * 100, 3),
         "fast_exit": fast_exit,

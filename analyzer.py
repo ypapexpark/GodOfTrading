@@ -21,7 +21,7 @@ from config import (ACTIVE_MAX_MIN_RR, ACTIVE_MAX_MIN_VOL,
                     ASYMMETRIC_MIN_AVG_WIN, ASYMMETRIC_MIN_EDGE_FLOOR,
                     ASYMMETRIC_MIN_MFE_MAE, ASYMMETRIC_MIN_PAYOFF,
                     ASYMMETRIC_MIN_SAMPLES, ASYMMETRIC_RISK_MULT,
-                    CANDIDATE_LOG_FILE,
+                    CANDIDATE_LOG_FILE, CANDIDATE_QUALITY_LIVE_ADJUSTMENT_ENABLED,
                     DRAWDOWN_RISK_MULT, DRAWDOWN_RISK_OFF_PCT,
                     DRAWDOWN_WARN_PCT, MIN_DYNAMIC_RISK_MULT,
                     SYMBOL_COOLDOWN_HOURS,
@@ -858,6 +858,9 @@ def get_asymmetric_profile(symbol: str, tf_key: str,
     낮은 승률이어도 평균 수익폭이 손실폭보다 큰 양의 비대칭 신호군을 식별한다.
     반환: (risk_multiplier, notes, profile)
     """
+    if not CANDIDATE_QUALITY_LIVE_ADJUSTMENT_ENABLED:
+        return 1.0, [], {}
+
     rows = _candidate_eval_rows(comparable_only=True)
     if not rows:
         return 1.0, [], {}
@@ -898,6 +901,9 @@ def get_signal_quality_adjustment(symbol: str, tf_key: str,
     실제 체결되지 않은 후보까지 포함한 사후평가 기반 리스크 조정.
     20봉 이후 MFE/MAE edge가 반복적으로 음수인 조합은 paper-only 또는 감액한다.
     """
+    if not CANDIDATE_QUALITY_LIVE_ADJUSTMENT_ENABLED:
+        return 1.0, []
+
     rows = _candidate_eval_rows(comparable_only=True)
     if not rows:
         return 1.0, []
@@ -933,7 +939,11 @@ def get_signal_quality_adjustment(symbol: str, tf_key: str,
 def get_quality_leverage_adjustment(symbol: str, tf_key: str, strategy: str,
                                     direction: str, base_leverage: int) -> tuple[int, list[str]]:
     """후보 사후승률/edge가 충분히 좋은 조합만 레버리지를 단계적으로 높인다."""
-    if not WINRATE_LEVERAGE_ENABLED or base_leverage <= 0:
+    if (
+        not CANDIDATE_QUALITY_LIVE_ADJUSTMENT_ENABLED
+        or not WINRATE_LEVERAGE_ENABLED
+        or base_leverage <= 0
+    ):
         return base_leverage, []
 
     rows = _candidate_eval_rows(comparable_only=True)
