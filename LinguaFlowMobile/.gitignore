@@ -1,0 +1,12 @@
+# Android and Xcode build output
+android/.gradle/
+android/.gradle-bootstrap/
+android/build/
+android/app/build/
+ios/.derived-*/
+ios/build/
+
+# Xcode user-specific state and macOS metadata
+ios/**/xcuserdata/
+ios/**/*.xcuserstate
+**/.DS_Store

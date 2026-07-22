@@ -1,0 +1,8 @@
+<resources>
+    <color name="lf_ink">#18212F</color>
+    <color name="lf_muted">#5E6B7A</color>
+    <color name="lf_primary">#4263EB</color>
+    <color name="lf_surface">#F6F7FB</color>
+    <color name="lf_card">#FFFFFFFF</color>
+    <color name="lf_line">#E4E8F0</color>
+</resources>
