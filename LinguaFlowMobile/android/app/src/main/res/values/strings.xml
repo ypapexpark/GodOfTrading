@@ -1,7 +1,0 @@
-<resources>
-    <string name="app_name">LinguaFlow</string>
-    <string name="keyboard_name">LinguaFlow 키보드</string>
-    <string name="keyboard_subtype_english">LinguaFlow English</string>
-    <string name="process_text_label">LinguaFlow로 다듬기</string>
-    <string name="status_line">%1$s  %2$s\n     %3$s</string>
-</resources>
