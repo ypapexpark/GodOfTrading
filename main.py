@@ -108,6 +108,7 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     PAPER_ONLY_STRENGTHS, RISK_PCT_BY_STRENGTH, SCALP_RISK_MULT,
                     GOLDEN_ENTRY_RISK_PCT, MAX_ACCOUNT_RISK_PCT, AUTO_TRADE_DIAGNOSTICS,
                     TELEGRAM_RESEARCH_SIGNALS_ENABLED,
+                    TELEGRAM_LIVE_POSITION_ONLY, TELEGRAM_PERIODIC_REPORT_ENABLED,
                     CANDIDATE_EVALUATION_IN_LIVE_LOOP_ENABLED,
                     ACTIVE_STRONG_STRATEGIES, STRONG_LIVE_MAX_BARS_AGO, STRONG_LIVE_MIN_VOL,
                     ASYMMETRIC_SYMBOL_DAILY_LOSS_LIMIT, SYMBOL_STRATEGY_DAILY_LOSS_LIMIT,
@@ -142,11 +143,16 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     DRAWDOWN_RISK_OFF_PCT,
                     SCALP_COMPOUND_ENABLED, SCALP_COMPOUND_TF,
                     SCALP_COMPOUND_STRATEGIES, SCALP_COMPOUND_TP1_PCT,
+                    COMPOUND_ENGINE_ENABLED, COMPOUND_CORE_RISK_PCT,
+                    COMPOUND_CORE_RISK_MAX_PCT,
                     SCALP_ENGINE_ENABLED, LEGACY_AUTO_TRADE_ENABLED,
                     SCALP_ENGINE_TIMEFRAME, SCALP_ENGINE_TRIGGER_TIMEFRAME,
                     SCALP_ENGINE_LEVERAGE, SCALP_ENGINE_MAX_MARGIN_PCT,
                     SCALP_ENGINE_MIN_MARGIN_USD, SCALP_ENGINE_MAX_OPEN_POSITIONS,
                     SCALP_ENGINE_MAX_HOLD_MINUTES, SCALP_BINANCE_CANARY_ENABLED,
+                    SCALP_LONG_ONLY, SCALP_MIN_SCORE, SCALP_MIN_VOLUME_RATIO,
+                    SCALP_MIN_TREND_STRENGTH, SCALP_SYMBOL_DENYLIST,
+                    SCALP_SYMBOL_LOSS_STREAK_COOLDOWN_H, SCALP_SYMBOL_LOSS_STREAK_LIMIT,
                     BINANCE_D2_ENGINE_ENABLED, BINANCE_D2_LIVE_ENABLED,
                     BINANCE_D2_SETUP_TIMEFRAME, BINANCE_D2_TRIGGER_TIMEFRAME,
                     BINANCE_D2_CONTEXT_TIMEFRAMES, BINANCE_D2_LEVERAGE,
@@ -1678,6 +1684,25 @@ def _trend_min_confirm(tf_key: str, trend_score: int, is_continuation: bool) -> 
     return 6          # 반전 신호만 ELITE로 허용
 
 
+def _s1_symbol_loss_streak(state: dict, symbol: str) -> tuple[int, float]:
+    """Return (consecutive losses, last_loss_ts) for S1 on this symbol."""
+    streak = 0
+    last_loss_ts = 0.0
+    for row in reversed(state.get("trade_history") or []):
+        if row.get("strategy") != SCALP_ENGINE_STRATEGY:
+            continue
+        if row.get("symbol") != symbol:
+            continue
+        if row.get("status") not in {"win", "loss", "breakeven"}:
+            continue
+        if row.get("status") == "loss":
+            streak += 1
+            last_loss_ts = max(last_loss_ts, float(row.get("timestamp") or 0.0))
+            continue
+        break
+    return streak, last_loss_ts
+
+
 def _try_scalping_engine_trade(symbol: str, df_15m, current_price: float,
                                spread_pct: float | None = None,
                                df_5m=None) -> None:
@@ -1693,6 +1718,10 @@ def _try_scalping_engine_trade(symbol: str, df_15m, current_price: float,
     )
 
     venue = active_exchange()
+    if symbol in SCALP_SYMBOL_DENYLIST:
+        # 저유동/밈 반복손실 심볼 — 스캔 노이즈 줄이려 후보 로그도 생략
+        return
+
     if df_5m is None:
         try:
             df_5m = fetch_ohlcv(symbol, SCALP_ENGINE_TRIGGER_TIMEFRAME, 120)
@@ -1710,6 +1739,10 @@ def _try_scalping_engine_trade(symbol: str, df_15m, current_price: float,
         live_price=current_price,
         round_trip_cost=execution_cost,
         spread_pct=spread_pct,
+        long_only=bool(SCALP_LONG_ONLY),
+        min_score=float(SCALP_MIN_SCORE),
+        min_volume_ratio=float(SCALP_MIN_VOLUME_RATIO),
+        min_trend_strength=float(SCALP_MIN_TREND_STRENGTH),
     )
     direction = plan.direction
     signal_type = f"scalp_trend_pullback_{direction.lower()}"
@@ -1734,6 +1767,26 @@ def _try_scalping_engine_trade(symbol: str, df_15m, current_price: float,
     if last_bars.get(symbol) == plan.signal_bar:
         print(f"  [S1] {symbol} 동일 완료봉 재진입 차단 ({plan.signal_bar})")
         return
+
+    loss_streak, last_loss_ts = _s1_symbol_loss_streak(state, symbol)
+    if loss_streak >= int(SCALP_SYMBOL_LOSS_STREAK_LIMIT) and last_loss_ts > 0:
+        cool_s = float(SCALP_SYMBOL_LOSS_STREAK_COOLDOWN_H) * 3600.0
+        elapsed = time.time() - last_loss_ts
+        if elapsed < cool_s:
+            remain_h = (cool_s - elapsed) / 3600.0
+            reason = (
+                f"S1 심볼 연패 쿨다운 {loss_streak}연패 "
+                f"({remain_h:.1f}h 남음)"
+            )
+            print(f"  [S1] {symbol} {reason}")
+            log_trade_candidate(
+                symbol, SCALP_ENGINE_TIMEFRAME, SCALP_ENGINE_STRATEGY,
+                direction, "S1", "blocked", reason,
+                signal_type=signal_type,
+                engine_version=SCALP_ENGINE_VERSION,
+                engine_plan=plan.to_dict(),
+            )
+            return
 
     if not is_execution_api_healthy():
         maybe_alert_execution_api_down()
@@ -1770,9 +1823,16 @@ def _try_scalping_engine_trade(symbol: str, df_15m, current_price: float,
     stop = float(plan.stop)
     stop_fraction = abs(entry - stop) / entry
     loss_fraction = stop_fraction + execution_cost
-    risk_budget = equity * float(permission.account_risk_pct)
+    # S1도 equity% × 복리 스케일 (canary risk에 성장/DD 곡선 적용)
+    from trade_router import get_compound_risk_scale
+    c_scale, c_notes = get_compound_risk_scale(equity)
+    account_risk = float(permission.account_risk_pct) * float(c_scale)
+    risk_budget = equity * account_risk
     max_margin = min(balance, equity * float(SCALP_ENGINE_MAX_MARGIN_PCT))
     margin = min(risk_budget / (leverage * loss_fraction), max_margin)
+    if c_notes:
+        for note in c_notes:
+            print(f"  [S1복리] {note} (risk {account_risk*100:.3f}%)")
     if margin + 1e-9 < SCALP_ENGINE_MIN_MARGIN_USD:
         reason = (
             f"현재 시드 위험예산 ${risk_budget:.3f}에서 가능한 증거금 "
@@ -2597,12 +2657,14 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         max_position_pct = GOLDEN_ENTRY_POSITION_PCT
         print(f"  💰 [황금진입💎] ELITE + MTF전정렬 + EMA정렬")
         print(f"     → 레버리지 {leverage}x | 목표 리스크 {risk_pct*100:.1f}% | 복리 최대 베팅")
-        send_signal(
-            f"💰 <b>[황금 진입 발동 💎]</b> {symbol.split('/')[0]} {tf_key}\n"
-            f"ELITE 신호 + MTF 전정렬 + EMA 방향일치\n"
-            f"레버리지 <b>{leverage}x</b>  |  목표 계좌위험 <b>{risk_pct*100:.1f}%</b>\n"
-            f"복리 최대 베팅 모드"
-        )
+        # 황금진입 예고는 로그 전용. 텔레그램은 실제 체결 진입 메시지 1통만.
+        if not TELEGRAM_LIVE_POSITION_ONLY:
+            send_signal(
+                f"💰 <b>[황금 진입 발동 💎]</b> {symbol.split('/')[0]} {tf_key}\n"
+                f"ELITE 신호 + MTF 전정렬 + EMA 방향일치\n"
+                f"레버리지 <b>{leverage}x</b>  |  목표 계좌위험 <b>{risk_pct*100:.1f}%</b>\n"
+                f"복리 최대 베팅 모드"
+            )
     else:
         risk_pct = RISK_PCT_BY_STRENGTH.get(raw, 0.0)
         if risk_pct <= 0:
@@ -2675,6 +2737,32 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     if realized_mult != 1.0:
         risk_pct = min(risk_pct * realized_mult, MAX_ACCOUNT_RISK_PCT)
         print(f"  [실체결학습] {' | '.join(realized_notes)} → 목표리스크 {risk_pct*100:.2f}%")
+    # ── 복리 엔진: equity% 리스크 + DD/성장 스케일 (챔피언 15m EMA 코어) ──
+    if (
+        COMPOUND_ENGINE_ENABLED
+        and SCALP_COMPOUND_ENABLED
+        and tf_key in SCALP_COMPOUND_TF
+        and strategy in SCALP_COMPOUND_STRATEGIES
+        and direction == "LONG"
+    ):
+        from trade_router import get_compound_risk_scale, get_usdt_equity
+        base_core = float(COMPOUND_CORE_RISK_PCT)
+        risk_pct = max(risk_pct, base_core)
+        c_scale, c_notes = get_compound_risk_scale(get_usdt_equity())
+        risk_pct = min(
+            risk_pct * c_scale,
+            float(COMPOUND_CORE_RISK_MAX_PCT),
+            MAX_ACCOUNT_RISK_PCT,
+        )
+        for note in c_notes:
+            if note not in risk_notes:
+                risk_notes.append(note)
+            print(f"  [복리엔진] {note} → 목표리스크 {risk_pct*100:.2f}%")
+        if not c_notes:
+            print(
+                f"  [복리엔진] 코어 리스크 {risk_pct*100:.2f}% "
+                f"(floor {base_core*100:.2f}% / cap {COMPOUND_CORE_RISK_MAX_PCT*100:.2f}%)"
+            )
     if timing_risk_mult < 1.0:
         risk_pct *= timing_risk_mult
         risk_notes.append(timing_risk_note)
@@ -3127,14 +3215,8 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     if tf_key == "5m" and len(t["tps"]) > 1:
         tps = [{"price": t["tps"][0]["price"], "pct": 100}]
         print("  [스캘핑] 5분봉 → 단일 TP 강제 (빠른 확정)")
-    # 2026-07-07: 스캘핑 복리 모드 — 사용자 요청("방향만 먼저 잘 맞추고, 길게 안 들고
-    # 빠르게 복리로 굴리고 싶다"). 오늘 검증된 최고신뢰 신호(EMA눌림목+거래량급등 계열,
-    # 승률 63.6%+, 과열도 하드차단까지 통과한 자리)만 대상으로, 15m 한정, TP를 앞으로
-    # 크게 당겨(1차에서 대부분 확정) 보유시간을 최소화한다. 방향판단은 이미 검증된
-    # EMA엔진을 그대로 쓰고 여기선 "얼마나 오래 들고 있을지"만 바꾼다. SL은 기존
-    # ATR기반 그대로(임의 %로 조이지 않음 — 오늘 래칫 시뮬레이션에서 확인했듯 %기반
-    # 타이트 SL은 레버리지 노이즈에 취약). 사이징은 기존 %기반 그대로라 복리는
-    # 잔고 성장에 따라 자동 반영됨(별도 장치 불필요).
+    # 복리 모드: TP1에 과도 배분(55~70%)하면 잔량 BE 청산으로 avg win R이 무너짐.
+    # 40% 확정 + 60% 러너(2차 TP 또는 트레일)로 승자 금액을 키워 복리 곡선을 살린다.
     elif (
         SCALP_COMPOUND_ENABLED
         and tf_key in SCALP_COMPOUND_TF
@@ -3142,11 +3224,25 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         and len(t["tps"]) >= 2
     ):
         tp_prices = [tp["price"] for tp in t["tps"]]
-        tps = [
-            {"price": tp_prices[0], "pct": SCALP_COMPOUND_TP1_PCT},
-            {"price": tp_prices[1], "pct": 100 - SCALP_COMPOUND_TP1_PCT},
-        ]
-        print(f"  [스캘핑복리] {strategy} 15m → TP1 {SCALP_COMPOUND_TP1_PCT}% 앞당김 (빠른 확정/짧은 보유)")
+        runner_pct = 100 - int(SCALP_COMPOUND_TP1_PCT)
+        if len(tp_prices) >= 3:
+            # 3단: TP1 확정 / TP2 코어 / TP3 러너(트레일 대상)
+            mid = max(20, runner_pct // 2)
+            far = runner_pct - mid
+            tps = [
+                {"price": tp_prices[0], "pct": int(SCALP_COMPOUND_TP1_PCT)},
+                {"price": tp_prices[1], "pct": mid},
+                {"price": tp_prices[2], "pct": far},
+            ]
+        else:
+            tps = [
+                {"price": tp_prices[0], "pct": int(SCALP_COMPOUND_TP1_PCT)},
+                {"price": tp_prices[1], "pct": runner_pct},
+            ]
+        print(
+            f"  [복리TP] {strategy} 15m → TP1 {SCALP_COMPOUND_TP1_PCT}% 확정 + "
+            f"러너 {runner_pct}% (승자 금액·복리 곡선 우선)"
+        )
     else:
         tps = [{"price": tp["price"], "pct": tp["pct"]} for tp in t["tps"]]
 
@@ -3373,7 +3469,8 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
             result["error"], price=current_price, leverage=result["leverage"],
             position_pct=position_pct, risk_pct=risk_pct,
         )
-        if AUTO_TRADE_DIAGNOSTICS:
+        # 주문 실패는 JSONL+콘솔. 텔레그램은 실체결 진입/청산만.
+        if AUTO_TRADE_DIAGNOSTICS and not TELEGRAM_LIVE_POSITION_ONLY:
             err = escape(str(result["error"]))
             send_signal(
                 f"❌ <b>[자동매매 주문 실패]</b> {symbol.split('/')[0]} {tf_key} {direction}\n"
@@ -4136,7 +4233,7 @@ def _try_breakout_trade(symbol: str, tf_key: str, bsig: dict, current_price: flo
             result["error"], price=current_price, leverage=result["leverage"],
             position_pct=position_pct, risk_pct=risk_pct,
         )
-        if AUTO_TRADE_DIAGNOSTICS:
+        if AUTO_TRADE_DIAGNOSTICS and not TELEGRAM_LIVE_POSITION_ONLY:
             err = escape(str(result["error"]))
             send_signal(
                 f"❌ <b>[돌파 주문 실패]</b> {symbol.split('/')[0]} {tf_key} {direction}\n"
@@ -4220,11 +4317,12 @@ def _do_pyramid(symbol: str, tf_key: str, direction: str,
             symbol, direction, tf_key,
             pyramid_level, current_price, margin_r, profit_atr, balance_now,
         )
+        # 불타기도 실체결 추가진입이므로 진입 알림 유지
         send(notif)
-        print(f"  [불타기{pyramid_level}] ✅ 추가진입 완료 — 매매내역방 발송")
+        print(f"  [불타기{pyramid_level}] ✅ 추가진입 완료 — 텔레그램 진입 알림")
     else:
         print(f"  [불타기{pyramid_level}] ❌ 주문 실패: {result['error']}")
-        if AUTO_TRADE_DIAGNOSTICS:
+        if AUTO_TRADE_DIAGNOSTICS and not TELEGRAM_LIVE_POSITION_ONLY:
             err = escape(str(result["error"]))
             send_signal(
                 f"❌ <b>[불타기 주문 실패]</b> {symbol.split('/')[0]} {tf_key} {direction}\n"
@@ -4432,7 +4530,11 @@ def _build_trade_report(today_trades: list, cs: dict,
 
 
 def _maybe_send_periodic_report():
-    """4시간마다 거래 결산 + 학습 분석 텔레그램 발송."""
+    """4시간마다 학습 조정 + (옵션) 결산 텔레그램.
+
+    TELEGRAM_LIVE_POSITION_ONLY 기본값에서는 결산/학습 알림을 보내지 않고
+    콘솔·상태파일만 갱신한다. 텔레그램은 실포지션 진입/청산 쌍만 사용.
+    """
     from trade_router import (_load_state, _save_state,
                         get_today_trades, get_cumulative_stats, get_usdt_balance)
 
@@ -4440,15 +4542,18 @@ def _maybe_send_periodic_report():
     if time.time() - s.get("last_report_time", 0) < 4 * 3600:
         return
 
-    # 학습 파라미터 자동 조정
+    # 학습 파라미터 자동 조정 (항상 로컬 반영)
     adjustments = analyze_and_adjust()
     if adjustments:
-        adj_msg = (
-            "🔧 <b>[CryptoSignal 자동 학습]</b>\n" +
-            "\n".join(f"  • {a}" for a in adjustments)
-        )
-        send_signal(adj_msg)
-        print(f"  [학습] {len(adjustments)}개 파라미터 조정 → 텔레그램 발송")
+        print(f"  [학습] {len(adjustments)}개 파라미터 조정 (로그 전용):")
+        for a in adjustments:
+            print(f"    • {a}")
+        if not TELEGRAM_LIVE_POSITION_ONLY and TELEGRAM_PERIODIC_REPORT_ENABLED:
+            adj_msg = (
+                "🔧 <b>[CryptoSignal 자동 학습]</b>\n" +
+                "\n".join(f"  • {a}" for a in adjustments)
+            )
+            send_signal(adj_msg)
 
     today_trades = get_today_trades()
     cs           = get_cumulative_stats()
@@ -4456,12 +4561,21 @@ def _maybe_send_periodic_report():
     balance      = get_usdt_balance()
 
     msg = _build_trade_report(today_trades, cs, daily_loss, balance, adjustments)
-    delivered = send_review(msg) or send(msg)
+    # 결산 본문은 항상 로그에 남긴다
+    print("  [결산 초안 — 로그]")
+    for line in msg.splitlines()[:40]:
+        print(f"    {line}")
+
+    delivered = False
+    if TELEGRAM_PERIODIC_REPORT_ENABLED and not TELEGRAM_LIVE_POSITION_ONLY:
+        delivered = send_review(msg) or send(msg)
+    s = _load_state()
+    s["last_report_time"] = time.time()
+    _save_state(s)
     if delivered:
-        s = _load_state()
-        s["last_report_time"] = time.time()
-        _save_state(s)
-        print("  [결산] 4시간 거래 결산 발송 완료")
+        print("  [결산] 4시간 거래 결산 텔레그램 발송 완료")
+    else:
+        print("  [결산] 텔레그램 미발송(진입/청산 쌍 정책) — 상태 타임스탬프만 갱신")
 
 
 def _print_radar(radar: list[dict]) -> None:
@@ -5230,7 +5344,7 @@ def _try_btc_sync_direct_trade(candidate: dict) -> bool:
         strategy_mode=entry_context["strategy_mode"],
         asymmetric_mode=False,
     )
-    if AUTO_TRADE_DIAGNOSTICS:
+    if AUTO_TRADE_DIAGNOSTICS and not TELEGRAM_LIVE_POSITION_ONLY:
         err = escape(str(result["error"]))
         send_signal(
             f"❌ <b>[전략3 주문 실패]</b> {symbol.split('/')[0]} {tf_key} {direction}\n"
@@ -5360,7 +5474,12 @@ def _reconcile_orphan_positions():
         alerts[alert_key] = now
 
     lines.append(f"💡 관리 방법: {venue}에서 해당 포지션에 SL을 설정하거나 청산하세요.")
-    send("\n".join(lines))
+    # 고아 포지션 안내는 로그 전용 (텔레그램은 진입/청산 쌍만)
+    print("[조정] 미추적 포지션 안내 (텔레그램 스킵):")
+    for line in lines:
+        print(f"  {line}")
+    if not TELEGRAM_LIVE_POSITION_ONLY:
+        send("\n".join(lines))
     _save_state(s)
     print(f"[조정] 미추적 포지션 {len(fresh_orphans)}개 처리 완료")
 

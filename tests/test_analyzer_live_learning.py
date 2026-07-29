@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 import analyzer
+import config
 
 
 class AnalyzerLiveLearningGuardTest(unittest.TestCase):
@@ -25,6 +26,27 @@ class AnalyzerLiveLearningGuardTest(unittest.TestCase):
                 "BTC/USDT", "15m", "EMA눌림목+돌파", "LONG"
             )
         self.assertEqual((mult, notes), (1.0, []))
+
+    def test_realized_learning_is_enabled(self):
+        self.assertTrue(config.REALIZED_TRADE_LEARNING_ENABLED)
+
+    def test_high_winrate_negative_edge_is_blocked(self):
+        """승률 높아도 평균손실이 크면 차단 (실측 EMA 1h 함정)."""
+        rows = []
+        for _ in range(7):
+            rows.append({"pnl_usd": 0.3})
+        for _ in range(3):
+            rows.append({"pnl_usd": -1.5})
+        st = analyzer._realized_stat(rows)
+        self.assertGreaterEqual(st["win_rate"], 0.60)
+        self.assertLess(st["profit_factor"], 1.0)
+        self.assertTrue(analyzer._realized_is_losing(st))
+
+    def test_positive_edge_cohort_not_blocked(self):
+        rows = [{"pnl_usd": 1.0}] * 8 + [{"pnl_usd": -0.5}] * 4
+        st = analyzer._realized_stat(rows)
+        self.assertFalse(analyzer._realized_is_losing(st))
+        self.assertTrue(st["profit_factor"] >= 1.0)
 
 
 if __name__ == "__main__":

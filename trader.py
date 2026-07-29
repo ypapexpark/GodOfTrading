@@ -93,18 +93,20 @@ MAX_CONCURRENT   = 4      # legacy 호환값. 신규 진입 차단은 포트폴�
 MAX_MARGIN_PCT_CAP       = 1.00
 MAX_SCALP_MARGIN_PCT_CAP = 1.00
 
-# ─── 트레일링 스톱 파라미터 (ELITE 전용) ─────────────────────────────────────
+# ─── 트레일링 스톱 / 복리 청산 파라미터 ─────────────────────────────────────
+# 2026-07-30 원장: avg win R≈0.54 / avg loss R≈-1.06 → EV≈-0.26R.
+# 복리의 전제 = 양수 EV. 승자 평균 R↑ + 풀SL 빈도↓ 가 직접 수익에 연결된다.
 TRAIL_ATR_MULT    = 1.5   # ELITE: 현재가에서 SL까지 ATR 거리
-TRAIL_ATR_MULT_STANDARD = 2.0  # 2026-07-11: 일반(비-ELITE) TP1 이후 러너 트레일
-TRAIL_ADVANCE_MIN = 0.5   # SL 갱신 최소 이동량 (ATR 단위), 너무 자주 갱신 방지
-# 2026-07-11 R:R 개선: 0.8R에서 너무 일찍 잠그면 노이즈에 걸린 뒤 TP1을 못 먹는
-# 케이스가 있고, 잔량 BE 청산이 승리 금액을 깎음. 1.0R 도달 시 0.55R 잠금.
-PRE_TP_BE_TRIGGER_R = 1.0
+TRAIL_ATR_MULT_STANDARD = 1.55  # 2.0→1.55: 러너 이익 더 회수 (노이즈 여유 유지)
+TRAIL_ADVANCE_MIN = 0.45  # 0.5→0.45: 추세 진행 시 SL 갱신 반응성
+# 초록 구간에서 풀-1R로 뒤집히는 케이스 축소. 트리거는 너무 이르게 두지 않되
+# 1.0R까지 기다리면 이미 되돌림이 시작되는 경우가 많아 0.85R로 조정.
+PRE_TP_BE_TRIGGER_R = 0.85
 BE_FEE_CUSHION_MULT = 1.2 # 수수료까지 감안한 소폭 이익 보호
-PRE_TP_BE_LOCK_FRACTION = 0.55
-# TP1 부분익절 후 잔량을 순수 BE가 아니라 +0.35R에 잠가 얕은 승리 금액 개선
-# (실측: "부분익절 후 잔량 보호청산" 다수 → 잔량이 BE에서 죽으면 전체 기대값 악화)
-POST_TP1_LOCK_R = 0.35
+# 트리거를 당긴 만큼 잠금은 느슨히(0.25R) — 너무 타이트하면 TP1 전에 털림
+PRE_TP_BE_LOCK_FRACTION = 0.25
+# TP1 이후 잔량: 0.35R→0.50R 잠금으로 얕은 전체 승리 금액 개선
+POST_TP1_LOCK_R = 0.50
 # 일반 포지션도 TP1 이후 트레일 허용 (기존 ELITE only → 러너 기회 확대)
 TRAIL_AFTER_TP1_ALL = True
 PROFIT_LOCK_TRIGGER_MARGIN_ROI_PCT = 10.0 # 레버리지 포함 +10% 수익권 진입 시
@@ -365,6 +367,95 @@ def position_pct_for_risk(balance: float, leverage: int, entry_price: float,
     return round(pct, 4), round(est_loss, 4)
 
 
+def get_compound_risk_scale(
+    equity: float | None = None,
+    *,
+    state: dict | None = None,
+) -> tuple[float, list[str]]:
+    """복리 리스크 스케일.
+
+    - 리스크는 원래 equity% 기반이라 잔고가 늘면 자동 복리.
+    - 여기에 DD 구간 감액 + 신고가 근처 소폭 재가속만 얹어
+      "깎일 때 줄이고, 불릴 때 다시 키우는" 곡선을 만든다.
+    - 배율 상한 1.20 (폭주 방지), 하한 0.35.
+    """
+    try:
+        from config import (
+            COMPOUND_ENGINE_ENABLED,
+            COMPOUND_DD_SOFT_PCT,
+            COMPOUND_DD_HARD_PCT,
+            COMPOUND_DD_SOFT_MULT,
+            COMPOUND_DD_HARD_MULT,
+            COMPOUND_GROWTH_MULT_CAP,
+            MAX_ACCOUNT_RISK_PCT,
+        )
+    except Exception:
+        return 1.0, []
+
+    if not COMPOUND_ENGINE_ENABLED:
+        return 1.0, []
+
+    notes: list[str] = []
+    s = state if isinstance(state, dict) else _load_state()
+    eq = float(equity if equity is not None else (s.get("last_equity") or 0.0) or 0.0)
+    if eq <= 0:
+        try:
+            eq = float(get_usdt_equity() or 0.0)
+        except Exception:
+            eq = 0.0
+    if eq <= 0:
+        return 0.5, ["복리스케일: equity 미확인 → ×0.50"]
+
+    start = float(s.get("equity_start") or eq)
+    start = max(start, 1.0)
+    guard_peak = float(s.get("drawdown_guard_peak") or 0.0)
+    hist_peak = float(s.get("equity_peak") or start)
+    # 실행용 피크(시간제 재개 후 rebase)와 시즌 시작 피크 중 유효 DD를 본다.
+    peak = max(guard_peak, eq, start * 0.5)
+    peak = max(peak, eq)
+    dd_guard = max(0.0, (peak - eq) / peak) if peak > 0 else 0.0
+    # 시즌 시작 대비 미회복 구간은 별도 감액 (고점 리셋 후에도 복리 과열 방지)
+    dd_from_start = max(0.0, (start - eq) / start) if start > 0 else 0.0
+    dd = max(dd_guard, dd_from_start)
+
+    if dd >= float(COMPOUND_DD_HARD_PCT):
+        scale = float(COMPOUND_DD_HARD_MULT)
+        notes.append(
+            f"복리스케일 DD {dd*100:.1f}%≥{COMPOUND_DD_HARD_PCT*100:.0f}% → ×{scale:.2f}"
+        )
+    elif dd >= float(COMPOUND_DD_SOFT_PCT):
+        # soft~hard 구간 선형 보간
+        soft = float(COMPOUND_DD_SOFT_PCT)
+        hard = float(COMPOUND_DD_HARD_PCT)
+        soft_m = float(COMPOUND_DD_SOFT_MULT)
+        hard_m = float(COMPOUND_DD_HARD_MULT)
+        t = (dd - soft) / max(hard - soft, 1e-9)
+        scale = soft_m + (hard_m - soft_m) * min(max(t, 0.0), 1.0)
+        notes.append(f"복리스케일 DD {dd*100:.1f}% 감액 → ×{scale:.2f}")
+    else:
+        # 시즌 시작 대비 성장 + 신고가 근처일 때만 소폭 가속 (√곡선, 상한)
+        growth = max(1.0, eq / start)
+        growth_mult = min(float(COMPOUND_GROWTH_MULT_CAP), growth ** 0.5)
+        ref_peak = max(hist_peak, peak, eq)
+        near_peak = eq / ref_peak if ref_peak > 0 else 1.0
+        if near_peak >= 0.98 and growth_mult > 1.0 and eq >= start:
+            scale = 1.0 + (growth_mult - 1.0) * near_peak
+            notes.append(
+                f"복리스케일 성장 equity ${eq:.1f}/start ${start:.1f} "
+                f"→ ×{scale:.2f} (캡 {COMPOUND_GROWTH_MULT_CAP:.2f})"
+            )
+        else:
+            scale = 1.0
+            if dd > 0.01:
+                notes.append(f"복리스케일 정상(DD {dd*100:.1f}%) → ×1.00")
+
+    scale = max(0.35, min(float(COMPOUND_GROWTH_MULT_CAP), float(scale)))
+    # 방어: 스케일 적용 후에도 단건 위험 상한을 넘기지 않도록 호출측에서
+    # min(risk * scale, MAX_ACCOUNT_RISK_PCT) 사용. 여기선 참고만.
+    _ = MAX_ACCOUNT_RISK_PCT
+    return round(scale, 4), notes
+
+
 def _json_safe(value):
     """numpy/pandas 값이 섞여도 상태/저널 JSON 저장이 실패하지 않게 변환한다."""
     if isinstance(value, dict):
@@ -612,7 +703,7 @@ def notify_trade_block(symbol: str, tf_key: str, direction: str,
                        strength: str, reason: str,
                        strategy: str = "자동매매",
                        send_telegram: bool = False, **extra):
-    """콘솔 + 후보 로그 + 선택적 텔레그램 진단."""
+    """콘솔 + 후보 로그. 텔레그램 진단은 LIVE_POSITION_ONLY 정책에서 금지."""
     msg = f"  [{strategy}] {symbol} {tf_key} {direction} {strength} → {reason}"
     print(msg)
     profile = classify_strategy(
@@ -626,6 +717,13 @@ def notify_trade_block(symbol: str, tf_key: str, direction: str,
     extra.setdefault("strategy_mode", profile["family_key"])
     log_trade_candidate(symbol, tf_key, strategy, direction, strength,
                         "blocked", reason, **extra)
+    # 정책: 차단/진단은 텔레그램 미발송 (실진입·실청산 쌍만)
+    try:
+        from config import TELEGRAM_LIVE_POSITION_ONLY
+        if TELEGRAM_LIVE_POSITION_ONLY:
+            send_telegram = False
+    except Exception:
+        pass
     if send_telegram:
         try:
             from publisher import send_signal as tg_send
@@ -1294,15 +1392,11 @@ def execute(symbol: str, direction: str, leverage: int,
         if not sl_ok:
             # SL 설정 완전 실패 → 즉시 시장가 청산으로 무방비 포지션 제거
             print(f"  ❌ SL 설정 3회 모두 실패 — {symbol} 긴급 시장가 청산 시도")
-            try:
-                from publisher import send as tg_send_emergency
-                tg_send_emergency(
-                    f"⚠️ <b>SL 설정 실패 — 긴급 청산</b>\n"
-                    f"심볼: {symbol} {direction}\n"
-                    f"SL ${sl:,.4f} 설정 3회 실패 → 시장가 청산 실행"
-                )
-            except Exception:
-                pass
+            # 중간 긴급 알림은 로그 전용. 실제 청산 확정 시 청산 분석 1통 발송.
+            print(
+                f"  [긴급청산] {symbol} {direction} SL ${sl:,.4f} 설정 실패 "
+                f"→ 시장가 청산 (텔레그램은 청산 확정 후)"
+            )
             emergency_ok = _emergency_market_close(
                 ex, fsymbol, close_side, qty, symbol, "SL 설정 3회 실패",
             )
@@ -1607,10 +1701,10 @@ def _update_trail_sl(ex, symbol: str, fsym: str, info: dict,
             s["positions"][symbol]["sl_price"] = new_sl
         _save_state(s)
 
-        tg_send(
-            f"📈 <b>[트레일링 스톱 {move}]</b> {symbol}\n"
-            f"SL {current_sl:,.4f} → <b>{new_sl:,.4f}</b>\n"
-            f"현재가 ${current_price:,.4f}  |  수익 보호 강화 중"
+        # 중간 관리 이벤트는 텔레그램 미발송 (진입/청산 쌍 정책)
+        print(
+            f"[트레일] 텔레그램 스킵(로그전용) {symbol} SL "
+            f"{current_sl:,.4f} → {new_sl:,.4f}"
         )
     except Exception as e:
         print(f"[트레일] {symbol} SL 갱신 실패: {e}")
@@ -1619,9 +1713,9 @@ def _update_trail_sl(ex, symbol: str, fsym: str, info: dict,
 def monitor_positions():
     """
     스캔마다 호출.
-    ① 포지션 청산 감지 → PnL 기록
-    ② TP1 체결 감지 → SL 손익분기 이동
-    ③ ELITE + be_done → 트레일링 스톱 래칫 갱신
+    ① 포지션 청산 감지 → PnL 기록 + 텔레그램 청산 분석(승/패)
+    ② TP1 체결 감지 → SL 손익분기 이동 (로그 전용)
+    ③ ELITE + be_done → 트레일링 스톱 래칫 갱신 (로그 전용)
     """
     from publisher import send as tg_send
 
@@ -1725,12 +1819,8 @@ def monitor_positions():
                     _save_state(s2)
                 print(
                     f"[시간청산] {symbol} {direction} "
-                    f"{age_seconds/60:.0f}분 >= {max_hold_minutes:.0f}분"
-                )
-                tg_send(
-                    f"⏱️ <b>[S1 시간청산]</b> {symbol} {direction}\n"
-                    f"보유 {age_seconds/60:.0f}분 — 계획된 "
-                    f"{max_hold_minutes:.0f}분 한도 도달, reduce-only 청산"
+                    f"{age_seconds/60:.0f}분 >= {max_hold_minutes:.0f}분 "
+                    f"(텔레그램은 청산 확정 후 1통)"
                 )
                 continue
             except Exception as time_exit_err:
@@ -1788,13 +1878,7 @@ def monitor_positions():
                     )
                     print(
                         f"[+10%락] {symbol} {direction} 증거금ROI {margin_roi_pct:+.1f}% "
-                        f"→ SL ${protect_sl:,.4f}"
-                    )
-                    tg_send(
-                        f"🛡️ <b>[+10% 수익락 SL 이동]</b> {symbol} {direction}\n"
-                        f"증거금ROI <b>{margin_roi_pct:+.1f}%</b> 도달 → "
-                        f"SL <b>${protect_sl:,.4f}</b>\n"
-                        f"수익권을 손실 거래로 돌려보내지 않도록 이익 보호"
+                        f"→ SL ${protect_sl:,.4f} (텔레그램 스킵·로그전용)"
                     )
                     s = _load_state()
                     if symbol in s.get("positions", {}):
@@ -1853,12 +1937,7 @@ def monitor_positions():
                         )
                         print(
                             f"[수익보호] {symbol} {direction} {PRE_TP_BE_TRIGGER_R:.1f}R 도달 "
-                            f"→ SL ${protect_sl:,.4f}"
-                        )
-                        tg_send(
-                            f"🛡️ <b>[수익보호 SL 이동]</b> {symbol} {direction}\n"
-                            f"{PRE_TP_BE_TRIGGER_R:.1f}R 도달 → SL <b>${protect_sl:,.4f}</b>\n"
-                            f"TP1 전 되돌림에도 손실 방어"
+                            f"→ SL ${protect_sl:,.4f} (텔레그램 스킵·로그전용)"
                         )
                         s = _load_state()
                         if symbol in s.get("positions", {}):
@@ -1935,11 +2014,9 @@ def monitor_positions():
                 )
 
                 elite_tag = " 💎 트레일링 모드 진입" if is_elite else " 🏃 러너 트레일 대기"
-                print(f"[모니터] {symbol} TP1 체결 → {trail_note}{elite_tag}")
-                tg_send(
-                    f"🔄 <b>[TP1 체결{'  💎 트레일' if is_elite else '  러너 보호'}]</b> {symbol}\n"
-                    f"SL → <b>${init_sl:,.4f}</b>  남은수량 {current_qty}\n"
-                    f"{'ELITE: 수익 따라 SL 자동 상향' if is_elite else f'잔량 +{lock_r:.2f}R 잠금 후 트레일'}"
+                print(
+                    f"[모니터] {symbol} TP1 체결 → {trail_note}{elite_tag} "
+                    f"(텔레그램 스킵·로그전용)"
                 )
 
                 s = _load_state()
@@ -2382,10 +2459,18 @@ def build_trade_close_notification(record: dict) -> str:
     header_icon = "✅" if status == "win" else "❌" if status == "loss" else "〰"
     venue = venue_label(record.get("venue", VENUE))
 
+    result_tag = (
+        "WIN 승" if status == "win"
+        else "LOSS 패" if status == "loss"
+        else "BE 본전"
+    )
     lines = [
-        f"{header_icon} <b>[{venue} 매매 종료 #{record.get('num')}] {coin} {direction} {pnl_label}</b>",
-        f"결과: <b>{_fmt_signed_usd(pnl)}</b>  |  사유: {escape(record.get('exit_reason', '청산'))}",
-        f"보유시간: {_holding_time(record)}  |  전략: {escape(str(record.get('strategy', '')))} / {record.get('tf','')}",
+        f"{header_icon} <b>[{venue} 포지션 청산 #{record.get('num')}] "
+        f"{coin} {direction} · {result_tag}</b>",
+        f"기록: <b>{pnl_label}</b>  <b>{_fmt_signed_usd(pnl)}</b>",
+        f"청산사유: {escape(record.get('exit_reason', '청산'))}",
+        f"보유: {_holding_time(record)}  |  "
+        f"전략: {escape(str(record.get('strategy', '')))} / {record.get('tf','')}",
         f"전략군: <b>{escape(format_profile(profile))}</b>",
         "",
         "📌 <b>계획 대비 결과</b>",
@@ -2406,50 +2491,60 @@ def build_trade_close_notification(record: dict) -> str:
 
     lines += [
         "",
-        "🧠 <b>진입 당시 판단</b>",
+        "🧠 <b>진입 당시 근거 (복기)</b>",
         f"   {_strategy_plain_summary(record.get('strategy',''), record.get('signal_type',''), bool(record.get('is_divergence', True)), direction)}",
     ]
-    for reason in (record.get("entry_reasons") or ctx.get("reasons") or [])[:4]:
+    for reason in (record.get("entry_reasons") or ctx.get("reasons") or [])[:5]:
         lines.append(f"   • {escape(str(reason))}")
 
     pm = record.get("postmortem")
-    if isinstance(pm, dict) and pm.get("causes"):
-        lines += ["", f"🔎 <b>{escape(str(pm.get('headline') or '포스트모템'))}</b>"]
+    analysis_title = (
+        "✅ 성공 이유 분석" if status == "win"
+        else "❌ 실패 이유 분석" if status == "loss"
+        else "〰 본전 처리 분석"
+    )
+    lines += ["", f"🔎 <b>{analysis_title}</b>"]
+
+    if isinstance(pm, dict) and (pm.get("causes") or pm.get("lessons")):
         if pm.get("r_multiple") is not None:
             lines.append(
                 f"   R배수: <b>{pm['r_multiple']:+.2f}R</b>  |  보유 {pm.get('hold_minutes')}분"
             )
-        for c in (pm.get("causes") or [])[:4]:
-            lines.append(f"   • {escape(str(c.get('text') or ''))}")
+        if pm.get("headline"):
+            lines.append(f"   요약: {escape(str(pm.get('headline')))}")
+        primary = pm.get("primary_hypothesis") or pm.get("primary_cause") or {}
+        if primary.get("text"):
+            lines.append(f"   핵심: {escape(str(primary.get('text')))}")
+        for c in (pm.get("causes") or [])[:5]:
+            text = str(c.get("text") or "").strip()
+            if text:
+                lines.append(f"   • {escape(text)}")
         if pm.get("lessons"):
             lines.append("")
-            lines.append("💡 <b>교훈</b>")
-            for lesson in pm["lessons"][:3]:
+            lines.append("💡 <b>다음에 살릴 점</b>")
+            for lesson in pm["lessons"][:4]:
                 lines.append(f"   • {escape(str(lesson))}")
         la = pm.get("logic_attribution") or {}
         if la.get("summary_ko"):
             lines.append("")
             lines.append(f"🏷 {escape(str(la['summary_ko']))}")
     elif status == "loss":
-        lines += ["", "🔎 <b>실패 원인 추정</b>"]
         for reason in _loss_diagnostics(record):
             lines.append(f"   • {escape(reason)}")
+        lines.append("   • 청산 사유·SL/TP 경로를 다음 진입 필터에 반영")
     elif status == "win":
-        lines += [
-            "",
-            "🔎 <b>성공 원인</b>",
-            "   • 진입 가정이 유효했고 가격이 목표 방향으로 먼저 이동함",
-            "   • 다음 복기에서는 어떤 조건이 반복 가능한 승리 패턴인지 기록",
-        ]
+        lines.append("   • 진입 가정이 유효했고 가격이 목표 방향으로 먼저 이동")
+        lines.append(f"   • 청산 경로: {escape(record.get('exit_reason', '수익 실현'))}")
+        if exit_move:
+            lines.append(f"   • 실현 이동폭 {exit_move:+.2f}% — 목표가/러너 배분 점검 대상")
+        lines.append("   • 동일 전략·TF 조건을 주력 후보로 유지 관찰")
     else:
-        lines += [
-            "",
-            "🔎 <b>본전 처리</b>",
-            "   • 수익보호 또는 손익분기 방어가 작동해 큰 손실을 피한 거래",
-        ]
+        lines.append("   • 수익보호/손익분기 방어로 큰 손실을 피한 거래")
+        lines.append(f"   • 청산 사유: {escape(record.get('exit_reason', '본전 청산'))}")
 
     lines.append("")
-    lines.append("🧾 trade_history + journal + <b>trade_postmortem.jsonl</b> 저장")
+    lines.append("🧾 로컬 저장: trade_history · journal · trade_postmortem.jsonl")
+    lines.append("📎 이 메시지는 청산 확정 시에만 발송 (중간 SL/TP 알림 없음)")
     return "\n".join(lines)
 
 
@@ -2565,8 +2660,9 @@ def build_trade_notification(symbol: str, direction: str, leverage: int,
         risk_line += f"  |  최대 R:R 1:{rr}"
 
     lines = [
-        f"✅ <b>[{venue_label()} 매매 체결되었습니다{title_num}] {coin} {dir_label}</b>",
+        f"✅ <b>[{venue_label()} 포지션 진입{title_num}] {coin} {dir_label}</b>",
         f"{emoji} 방향: <b>{dir_label}</b>  |  시간: {now}",
+        "📎 실주문 체결 확정 — 청산 시 승/패 분석 1통이 이어서 발송됩니다",
     ]
     if meta_bits:
         lines.append(f"전략: {' / '.join(escape(str(bit)) for bit in meta_bits)}")

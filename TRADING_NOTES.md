@@ -1,5 +1,42 @@
 # GodOfTrading Trading Notes
 
+## 2026-07-30 복리 엔진 v1 (수익 직결)
+
+**목표:** 승률 집착이 아니라 EV>0 + equity% 복리.
+**원장 근거:** avg win R 0.54 / avg loss R -1.06 → EV -0.26R. 이 상태로는 복리 불가.
+**청산:** PRE_TP 0.85R 보호, POST_TP1 +0.50R 잠금, 트레일 1.55ATR, 복리TP 40/60 러너.
+**사이징:** COMPOUND 스케일(DD 감액·신고가 소폭 가속) + 코어 리스크 0.90%(캡 1.20%).
+**S1:** TP 1.35R/2.40R × 40/60, 비용후 손익분기 강화.
+
+## 2026-07-30 실체결 학습 재활성 (승률 함정 수정)
+
+**오해 정리:** 후보 로그 ≈7.8만 건 ≠ 체결. Bybit 실제 청산 ≈131건(WR≈50%).
+**진짜 문제:** 승률보다 **평균손실($1.17) ≫ 평균이익($0.69), PF 0.59**.
+**학습 상태 (수정 전):**
+- `analyze_and_adjust` 소프트 적응 ON (쿨다운/confirmed) — 하지만 "손익학습 반영" 문구와 불일치
+- `REALIZED_TRADE_LEARNING_ENABLED=False` → 실체결 차단/부스트 **꺼짐**
+- 후보 품질 학습은 의도적으로 라이브 사이징에 미연결 (오염 방지)
+
+**조치:** REALIZED ON + PF/기대값 차단(고승률·저R:R 포함) + 전략×TF 코호트 + 현실적 표본 하한.
+
+## 2026-07-29 Bybit 재개 — S1 v2 + EMA-LONG 레거시 병행
+
+**중지 원인 (프로세스는 살아 있었음):**
+- `main.py --auto-trade` LaunchAgent 정상 가동 중.
+- S1 v1 canary 8건 후 승격게이트 조기중단: PF 0.64, E −$0.027 → 신규 진입 전부 차단.
+- `LEGACY_AUTO_TRADE_ENABLED=False` 로 검증된 EMA 롱 코어까지 같이 꺼져 있었음.
+
+**수익 부진 원인 (거래소/로컬 원장):**
+- 전기간 로컬 PnL 합 ≈ −$31. 주 손실: BTC Sync/Macro Short, 광범위 SHORT, RSI2 등.
+- 유일 명확 +EV: `EMA눌림목+거래량급등` / `+돌파` LONG 15m (n≈21, WR≈67%, +$8.8).
+- S1 v1 손실 집중: PUMPFUN/1000PEPE/LAB 반복 + 저거래량(0.23x) 통과.
+
+**조치:**
+- S1 `ENGINE_VERSION=2026-07-29-s1v2-quality-liquid` (canary 리셋, 과거 성과 미차용).
+- S1: LONG-only, min_score 78, volume≥0.90x, 심볼 denylist, 연패 쿨다운.
+- `LEGACY_AUTO_TRADE_ENABLED=True` + `BLOCK_SHORT` + EMA 화이트리스트 유지.
+- 계좌위험은 canary 0.25% / governor probation 경로 유지 (시드 확대 없음).
+
 ## 2026-07-15 Venue Quant Governor v5
 
 - Bybit/Binance는 같은 신호여도 별도 실체결 코호트로 승격한다.

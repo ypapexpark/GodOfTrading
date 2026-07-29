@@ -164,16 +164,16 @@ TP_BY_STRENGTH = {
 }
 
 # 15분봉 추가전략(EMA눌림목/마이크로돌파/BB스퀴즈)은 방향은 맞아도 짧게 되돌리는 경우가 많다.
-# TP1을 빠르게 당겨 수익을 잠그고, 이후 잔량만 추세 연장에 맡긴다.
+# 2026-07-30: "너무 빠른 TP1"이 avg win R 0.54로 복리를 죽임 → TP1을 약간 뒤로,
+# 러너 비중을 늘려 가중 R을 올린다. (손절은 좁히지 않음 — 노이즈 SL 방지)
 FAST_TP_TF = {"15m"}
-# 2026-07-11: TP1 비중 소폭 축소·러너 확대 (15m 얕은 승리 개선)
 FAST_TP_BY_STRENGTH = {
-    "STRONG":      [{"pct": 45, "atr_mult": 1.0}, {"pct": 30, "atr_mult": 1.6}, {"pct": 25, "atr_mult": 2.4}],
-    "VERY STRONG": [{"pct": 40, "atr_mult": 1.0}, {"pct": 35, "atr_mult": 1.8}, {"pct": 25, "atr_mult": 2.8}],
-    "ELITE":       [{"pct": 35, "atr_mult": 1.1}, {"pct": 40, "atr_mult": 2.0}, {"pct": 25, "atr_mult": 3.0}],
+    "STRONG":      [{"pct": 40, "atr_mult": 1.25}, {"pct": 35, "atr_mult": 2.05}, {"pct": 25, "atr_mult": 3.10}],
+    "VERY STRONG": [{"pct": 35, "atr_mult": 1.30}, {"pct": 40, "atr_mult": 2.25}, {"pct": 25, "atr_mult": 3.40}],
+    "ELITE":       [{"pct": 30, "atr_mult": 1.35}, {"pct": 40, "atr_mult": 2.40}, {"pct": 30, "atr_mult": 3.70}],
 }
-FAST_TP1_MIN_RR = 0.65
-FAST_EXIT_MIN_BEST_RR = 0.70
+FAST_TP1_MIN_RR = 0.90          # 0.65→0.90: 첫 TP조차 SL보다 작은 자리 배제
+FAST_EXIT_MIN_BEST_RR = 0.85
 
 # TP는 ATR 목표가를 기본으로 하되, 피봇 손절이 멀어져 R:R이 무너지는 경우
 # 최소 R-multiple 목표가를 같이 적용한다. 손절을 억지로 좁히지 않고,
@@ -186,9 +186,9 @@ TP_RR_FLOOR_BY_STRENGTH = {
     "ELITE":       [1.20, 2.20, 3.20],
 }
 FAST_TP_RR_FLOOR_BY_STRENGTH = {
-    "STRONG":      [1.20, 1.70, 2.30],
-    "VERY STRONG": [1.00, 1.60, 2.40],
-    "ELITE":       [1.00, 1.80, 2.80],
+    "STRONG":      [1.00, 1.85, 2.70],
+    "VERY STRONG": [1.05, 1.95, 2.90],
+    "ELITE":       [1.10, 2.10, 3.10],
 }
 ASYMMETRIC_TP_RR_FLOOR_BY_STRENGTH = {
     "STRONG":      [1.20, 2.20, 3.50],
@@ -470,10 +470,14 @@ SCALP_RISK_MULT         = 0.55
 GOLDEN_ENTRY_RISK_PCT   = 0.0150
 MAX_ACCOUNT_RISK_PCT    = 0.0150
 MAX_DAILY_LOSS_PCT      = 0.0500
-AUTO_TRADE_DIAGNOSTICS  = True
-# 스캔 후보/차단 전 신호는 콘솔·JSONL 연구 데이터로만 보관한다. 텔레그램은
-# 실제 체결·청산·주기 결산·주문 실패처럼 운영에 필요한 이벤트만 발송한다.
+# 2026-07-30: 진단/차단/주문실패 텔레그램 끄기. 전부 trade_candidates.jsonl + 콘솔.
+AUTO_TRADE_DIAGNOSTICS  = False
+# 스캔 후보/차단 전 신호는 콘솔·JSONL 연구 데이터로만 보관한다.
 TELEGRAM_RESEARCH_SIGNALS_ENABLED = False
+# 텔레그램 정책: 실포지션 진입 1통 + 청산(승/패 분석) 1통 쌍만 발송.
+# 트레일/TP1/수익보호/황금진입예고/학습/4h결산/차단진단은 로그 전용.
+TELEGRAM_LIVE_POSITION_ONLY = True
+TELEGRAM_PERIODIC_REPORT_ENABLED = False
 CANDIDATE_LOG_FILE      = "trade_candidates.jsonl"
 EXECUTION_JOURNAL_FILE  = "trade_execution_journal.jsonl"
 
@@ -545,19 +549,28 @@ SCALP_TIMING_HARD_BLOCK_SIGNAL_TYPES = {
 OBSERVATION_MODE_PAPER_ONLY = True
 
 # ─── 스캘핑 복리 모드 ────────────────────────────────────────────────────────
-# 2026-07-07 사용자 요청: 방향판단은 가장 신뢰도 높은 신호(EMA눌림목+거래량급등 계열,
-# 오늘 검증 승률 63.6%+)에 맡기고, 포지션은 길게 안 들고 빠르게 TP1 위주로 확정해서
-# 복리 회전을 빠르게 한다. SL은 임의 %로 조이지 않고 기존 ATR 기반 그대로 사용
-# (오늘 확인: %/레버리지 기반 타이트 SL·래칫은 캔들 노이즈에 취약해 효과 불확실했음).
-# 사이징은 기존 %기반 그대로 유지 — 잔고 성장에 따라 자동 복리 반영(별도 장치 불필요).
+# 방향은 EMA 롱 코어(검증 +EV)에 맡기고, 사이징·청산은 복리 곡선으로 운용한다.
+# 2026-07-30 재설계:
+#   1) 리스크 = equity% (잔고 증가 → 베팅 자동 증가 = 기본 복리)
+#   2) COMPOUND 스케일: DD 시 감액, 신고가 근처 소폭 재가속
+#   3) TP1 비중 과다(55~70%)는 얕은 승리(avg win R 0.54)를 만들어 복리 파괴
+#      → 40% 확정 + 60% 러너. SL은 ATR 구조 유지(임의 % 타이트닝 금지).
 SCALP_COMPOUND_ENABLED = True
 SCALP_COMPOUND_TF = {"15m"}
 SCALP_COMPOUND_STRATEGIES = {
     "EMA눌림목+거래량급등", "EMA눌림목+돌파",
 }
-# 2026-07-11: 70→55. TP1에 너무 많이 실어 잔량 BE 청산 시 전체 승리가 얕아짐
-# (실측 부분익절 후 잔량 보호청산 다수). 55% 확정 + 45% 러너로 기대값 개선.
-SCALP_COMPOUND_TP1_PCT = 55
+SCALP_COMPOUND_TP1_PCT = 40
+# 복리 코어 단건 위험 (healthy equity). STRONG 기본 0.60%보다 소폭 상향하되
+# MAX_ACCOUNT_RISK_PCT(1.5%) 안에서만.
+COMPOUND_ENGINE_ENABLED = True
+COMPOUND_CORE_RISK_PCT = 0.0090          # 0.90% — 챔피언 15m EMA 롱 기본
+COMPOUND_CORE_RISK_MAX_PCT = 0.0120      # 성장 가속 시 상한 1.20%
+COMPOUND_DD_SOFT_PCT = 0.06              # 6% DD부터 감액 시작
+COMPOUND_DD_HARD_PCT = 0.12              # 12% DD 강한 감액
+COMPOUND_DD_SOFT_MULT = 0.70
+COMPOUND_DD_HARD_MULT = 0.40
+COMPOUND_GROWTH_MULT_CAP = 1.20          # 신고가 가속 상한
 
 # ─── 불타기(Pyramid) 안전 스위치 ─────────────────────────────────────────────
 # 2026-07-13 라이브 로그에서 불타기가 일반 execute()를 호출한 뒤
@@ -677,14 +690,20 @@ REGIME_HIGH_VOL_BLOCK_MEANREV = True
 
 # 실거래 A/B 귀속 태그 (journal/history에 남겨 "기존 vs 신규 스택" 구분)
 # 2026-07-11 이후 진입은 이 버전 문자열로 묶어서 복기한다.
-LOGIC_STACK_VERSION = "2026-07-16-v6-strict-15m-ema"
+LOGIC_STACK_VERSION = "2026-07-30-compound-rr-v1"
 
-# ─── S1 비용후 스캘핑 엔진 (2026-07-18 전면 교체) ─────────────────────────────
+# ─── S1 비용후 스캘핑 엔진 (2026-07-18 도입, 2026-07-29 품질 v2) ─────────────
 # 기존 confirmed_count/예외 누적 엔진은 같은 과거 표본을 반복 선택해 과최적화됐고,
 # v6는 204개 후보를 모두 차단해 실체결 OOS 표본을 만들지 못했다. 새 엔진은
 # 완료된 15m 추세·눌림 + 완료된 5m 재가속만 사용하며 과거 버전 성과를 빌리지 않는다.
+#
+# 2026-07-29 실측:
+#   - S1 v1 canary 8건 PF0.64 E-$0.027 → 승격게이트 조기중단 (신규 진입 0)
+#   - 손실 집중: PUMPFUN/1000PEPE/LAB (저유동·밈 반복진입) + SHORT 혼재
+#   - 레거시 EMA눌림목 계열 LONG 15m n=21 WR67% pnl+$8.84 PF~2.5 (유일 명확 +EV)
+# 조치: S1 버전 리셋(품질 게이트) + 레거시 EMA-LONG 화이트리스트 병행 재개.
 SCALP_ENGINE_ENABLED = True
-LEGACY_AUTO_TRADE_ENABLED = False
+LEGACY_AUTO_TRADE_ENABLED = True  # EMA 롱 코어 재개 (BLOCK_SHORT + 화이트리스트 유지)
 SCALP_ENGINE_TIMEFRAME = "15m"
 SCALP_ENGINE_TRIGGER_TIMEFRAME = "5m"
 SCALP_ENGINE_LEVERAGE = 3
@@ -692,6 +711,27 @@ SCALP_ENGINE_MAX_MARGIN_PCT = 0.08
 SCALP_ENGINE_MIN_MARGIN_USD = 1.0
 SCALP_ENGINE_MAX_OPEN_POSITIONS = 2
 SCALP_ENGINE_MAX_HOLD_MINUTES = 90
+# S1 v2 품질 게이트 (v1 canary 실패 원인 대응)
+SCALP_LONG_ONLY = True                 # S1 SHORT 표본 부진 → 롱만 (시그널 평가는 유지)
+SCALP_MIN_SCORE = 78.0                 # v1 72 → 78 (약한 구조 차단)
+SCALP_MIN_VOLUME_RATIO = 0.90          # v1은 0.23x 거래량도 통과 → 하드 하한
+SCALP_MIN_TREND_STRENGTH = 0.25        # EMA20-50 이격 ATR 배수 하한
+SCALP_SYMBOL_LOSS_STREAK_COOLDOWN_H = 12  # 동일심볼 연패 후 쿨다운
+SCALP_SYMBOL_LOSS_STREAK_LIMIT = 2
+# v1 canary에서 반복 손실 + 지역 미지원/노이즈 심볼
+SCALP_SYMBOL_DENYLIST: set = {
+    "PUMPFUN/USDT",
+    "1000PEPE/USDT",
+    "LAB/USDT",
+    "1000BONK/USDT",
+    "WIF/USDT",
+    "HMSTR/USDT",
+    "BREV/USDT",
+    "XPIN/USDT",
+    "TAC/USDT",
+    "PIEVERSE/USDT",
+    "FARTCOIN/USDT",
+}
 # Binance는 현재 -2015(API key/IP/permission) 상태다. API 복구 뒤에도 Bybit 성과를
 # 가져오지 않고 Binance 자체 0/8건 canary부터 시작하도록 기본 비활성화한다.
 SCALP_BINANCE_CANARY_ENABLED = False
@@ -848,18 +888,25 @@ RSI2_EXTREME_LONG               = 5      # 이 이하면 VERY STRONG(라이브),
 RSI2_EXTREME_SHORT              = 95     # 이 이상이면 VERY STRONG(라이브)
 RSI2_MIN_VOL                    = 1.0    # 최소 거래량 배수(완만)
 
-REALIZED_TRADE_LEARNING_ENABLED = False
-# 실체결 원장 복구 후 재활성화하더라도 2건으로 차단/증액하지 않는다.
-REALIZED_BLOCK_EXACT_MIN_TRADES = 30
-REALIZED_BLOCK_SYMBOL_MODE_MIN_TRADES = 30
-REALIZED_BLOCK_MODE_TF_MIN_TRADES = 50
-REALIZED_BLOCK_WIN_RATE = 0.35
+# 2026-07-30: 실체결 학습 재활성.
+# 배경 — 후보로그 7만+건 vs 실제 청산 ~130건. 소프트 적응(analyze_and_adjust)만
+# 돌고 REALIZED 차단/부스트는 꺼져 있어 "학습한다" 로그와 실제 진입 게이트가 불일치.
+# 승률만 보면 EMA 1h LONG WR70%도 누적 손실 — 반드시 PF/기대값을 같이 본다.
+# 표본 하한은 현재 시드·표본 규모에 맞게 낮추되, 2~3건으로 과차단하지 않는다.
+REALIZED_TRADE_LEARNING_ENABLED = True
+REALIZED_BLOCK_EXACT_MIN_TRADES = 8       # 동일 심볼+TF+전략
+REALIZED_BLOCK_SYMBOL_MODE_MIN_TRADES = 10  # 동일 심볼+전략군
+REALIZED_BLOCK_STRATEGY_TF_MIN_TRADES = 10  # 동일 전략+방향+TF (핵심 코호트)
+REALIZED_BLOCK_MODE_TF_MIN_TRADES = 15    # 동일 봉+전략군
+REALIZED_BLOCK_WIN_RATE = 0.40            # WR만으로 차단할 때 상한
 REALIZED_BLOCK_MIN_PNL_USD = -0.50
-REALIZED_BOOST_MIN_TRADES = 50
-REALIZED_BOOST_WIN_RATE = 0.60
-REALIZED_BOOST_MIN_PNL_USD = 0.50
-REALIZED_BOOST_MULT = 1.25
-REALIZED_MODE_BOOST_MULT = 1.12
+REALIZED_BLOCK_MAX_PF = 0.90              # PF 미달 + 기대값 음수면 WR 높아도 차단
+REALIZED_BOOST_MIN_TRADES = 20
+REALIZED_BOOST_WIN_RATE = 0.55
+REALIZED_BOOST_MIN_PNL_USD = 1.00
+REALIZED_BOOST_MIN_PF = 1.20
+REALIZED_BOOST_MULT = 1.15                # 소액 시드: 부스트 과격 금지
+REALIZED_MODE_BOOST_MULT = 1.08
 
 # STRONG 실거래는 "늦게 뜬 다이버전스"가 아니라 현재봉 기반 전략만 허용한다.
 ACTIVE_STRONG_STRATEGIES = {

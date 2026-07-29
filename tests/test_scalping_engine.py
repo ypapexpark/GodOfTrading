@@ -57,10 +57,13 @@ class ScalpingEngineTest(unittest.TestCase):
         )
 
         self.assertTrue(plan.eligible, plan.reason)
-        self.assertGreaterEqual(plan.score, 72)
+        self.assertGreaterEqual(plan.score, 78)
         self.assertLessEqual(plan.stop_atr, 2.0)
-        self.assertLessEqual(plan.required_win_rate, 0.47)
+        self.assertLessEqual(plan.required_win_rate, 0.46)
         self.assertEqual(sum(int(tp["pct"]) for tp in plan.tps), 100)
+        # 복리형 R:R — 러너 비중이 TP1 이상
+        self.assertGreaterEqual(int(plan.tps[1]["pct"]), int(plan.tps[0]["pct"]))
+        self.assertGreaterEqual(float(plan.tps[0]["rr"]), 1.3)
 
     def test_live_extension_is_not_chased(self):
         d15, d5, now = _valid_frames()
@@ -146,9 +149,48 @@ class ScalpingEngineTest(unittest.TestCase):
         self.assertEqual(permission.mode, "shadow")
         self.assertEqual(permission.closed, 8)
 
-    def test_replacement_switch_disables_legacy_live_entries(self):
+    def test_dual_engine_mode_keeps_s1_and_legacy_ema_long(self):
+        """v1 canary 실패 후: S1 v2 + 검증된 EMA-LONG 레거시를 병행."""
         self.assertTrue(config.SCALP_ENGINE_ENABLED)
-        self.assertFalse(config.LEGACY_AUTO_TRADE_ENABLED)
+        self.assertTrue(config.LEGACY_AUTO_TRADE_ENABLED)
+        self.assertTrue(config.BLOCK_SHORT_AUTO_TRADE)
+        self.assertTrue(config.SCALP_LONG_ONLY)
+        self.assertIn("EMA눌림목+거래량급등", config.AUTO_TRADE_STRATEGY_WHITELIST)
+
+    def test_low_volume_is_hard_blocked(self):
+        d15, d5, now = _valid_frames()
+        d15.iloc[-1, d15.columns.get_loc("volume")] = 5.0  # << median 100
+        plan = evaluate_scalp(
+            d15,
+            d5,
+            live_price=float(d15["close"].iloc[-1]),
+            round_trip_cost=config.BYBIT_ROUND_TRIP_EXECUTION_COST,
+            spread_pct=0.02,
+            now=now,
+            min_volume_ratio=0.90,
+        )
+        self.assertFalse(plan.eligible)
+        self.assertIn("거래량", plan.reason)
+
+    def test_long_only_blocks_short_plans(self):
+        d15 = _trend_frame(120, "2024-01-01", "15min", -0.10)
+        d15[["open", "close"]] = d15[["close", "open"]].to_numpy()
+        ema20 = d15["close"].ewm(span=20, adjust=False).mean()
+        d15.iloc[-4, d15.columns.get_loc("high")] = float(ema20.iloc[-4]) - 0.05
+        d5 = _trend_frame(120, "2024-01-02", "5min", -0.05)
+        d5[["open", "close"]] = d5[["close", "open"]].to_numpy()
+        now = d15.index[-1].to_pydatetime() + timedelta(minutes=16)
+
+        plan = evaluate_scalp(
+            d15,
+            d5,
+            live_price=float(d15["close"].iloc[-1]),
+            round_trip_cost=config.BYBIT_ROUND_TRIP_EXECUTION_COST,
+            now=now,
+            long_only=True,
+        )
+        self.assertFalse(plan.eligible)
+        self.assertIn("LONG-only", plan.reason)
 
     def test_primary_scan_fetches_only_engine_timeframes(self):
         frame = _trend_frame(120, "2024-01-01", "5min", 0.01)

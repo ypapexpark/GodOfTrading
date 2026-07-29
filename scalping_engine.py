@@ -17,7 +17,9 @@ from typing import Any
 import pandas as pd
 
 
-ENGINE_VERSION = "2026-07-18-s1-cost-aware-pullback"
+# v2: 저유동 밈 반복진입·저거래량 통과를 차단하고 canary를 깨끗이 재시작한다.
+# 이전 버전 성과를 절대 차용하지 않는다 (evaluate_live_permission).
+ENGINE_VERSION = "2026-07-29-s1v2-quality-liquid"
 STRATEGY = "SCALP_TREND_PULLBACK"
 
 
@@ -116,12 +118,16 @@ def evaluate_scalp(
     round_trip_cost: float = 0.0011,
     spread_pct: float | None = None,
     now: datetime | None = None,
+    long_only: bool = False,
+    min_score: float = 78.0,
+    min_volume_ratio: float = 0.90,
+    min_trend_strength: float = 0.25,
 ) -> ScalpPlan:
     """Evaluate one symmetric, closed-candle trend/pullback setup.
 
-    Hard gates are limited to market structure, executable stop distance and
-    cost.  The remaining evidence is additive so a single lagging indicator
-    cannot silently turn the engine into a no-trade system.
+    Hard gates cover market structure, executable stop distance, cost, and
+    (v2) minimum participation/trend strength so thin meme prints cannot pass
+    on structure alone.  Remaining evidence is additive.
     """
     d15 = _closed_bars(df_15m, "15m", now)
     d5 = _closed_bars(df_5m, "5m", now)
@@ -155,8 +161,19 @@ def evaluate_scalp(
             False, "15m 방향성 추세 미확인", atr=atr15,
             atr_pct=atr_pct, signal_bar=signal_bar,
         )
+    if long_only and direction != "LONG":
+        return ScalpPlan(
+            False, "S1 LONG-only 게이트 (SHORT 실측 부진)",
+            direction=direction, atr=atr15, atr_pct=atr_pct, signal_bar=signal_bar,
+        )
     trend_strength = abs(signed_trend_strength)
     ema20_slope = abs(signed_ema20_slope)
+    if trend_strength < float(min_trend_strength):
+        return ScalpPlan(
+            False,
+            f"추세강도 {trend_strength:.2f}ATR < {float(min_trend_strength):.2f}",
+            direction=direction, atr=atr15, atr_pct=atr_pct, signal_bar=signal_bar,
+        )
 
     # Hard market-structure gates: trade in the established direction and do
     # not buy a volatility shock or an already extended print.
@@ -253,8 +270,28 @@ def evaluate_scalp(
         return ScalpPlan(False, "방향 추세 내 눌림 구조 미확인", score=score, direction=direction, atr=atr15, atr_pct=atr_pct, signal_bar=signal_bar)
     if not directional_reclaim or not trigger_ok or not trigger_not_chased:
         return ScalpPlan(False, "15m 방향재개 또는 5m 재가속 미확인", score=score, direction=direction, atr=atr15, atr_pct=atr_pct, signal_bar=signal_bar)
-    if score < 72.0:
-        return ScalpPlan(False, f"비용후 진입점수 {score:.0f}/100 < 72", score=score, direction=direction, atr=atr15, atr_pct=atr_pct, signal_bar=signal_bar)
+    # v1 canary: 1000PEPE volume_ratio 0.23x 가 score 93으로 통과 → 하드 하한 필수
+    if volume_ratio < float(min_volume_ratio):
+        return ScalpPlan(
+            False,
+            f"15m 거래량 {volume_ratio:.2f}x < {float(min_volume_ratio):.2f}x (참여 부족)",
+            score=score, direction=direction, atr=atr15, atr_pct=atr_pct,
+            volume_ratio=round(volume_ratio, 4), signal_bar=signal_bar,
+        )
+    if vol5_ratio < 0.70:
+        return ScalpPlan(
+            False,
+            f"5m 트리거 거래량 {vol5_ratio:.2f}x < 0.70x",
+            score=score, direction=direction, atr=atr15, atr_pct=atr_pct,
+            volume_ratio=round(volume_ratio, 4), signal_bar=signal_bar,
+        )
+    score_floor = float(min_score)
+    if score < score_floor:
+        return ScalpPlan(
+            False,
+            f"비용후 진입점수 {score:.0f}/100 < {score_floor:.0f}",
+            score=score, direction=direction, atr=atr15, atr_pct=atr_pct, signal_bar=signal_bar,
+        )
 
     if direction == "LONG":
         swing_extreme = float(d15["low"].iloc[-7:].min())
@@ -273,22 +310,24 @@ def evaluate_scalp(
     if stop <= 0 or stop_atr > 2.0 or stop_pct > 2.5:
         return ScalpPlan(False, f"구조손절 과대 {stop_atr:.2f}ATR/{stop_pct:.2f}%", score=score, direction=direction, atr=atr15, atr_pct=atr_pct, signal_bar=signal_bar)
 
-    # A 60/40 split gives 1.52R gross weighted reward.  Entry is rejected if
-    # fees make the implied break-even win rate too demanding.
+    # 2026-07-30 복리형 R:R — 40%@1.35R + 60%@2.40R → 가중 ≈1.98R gross.
+    # (구 60/40@1.2/2.0 = 1.52R, 얕은 확정 과다). 손익분기 승률 하한은 유지.
     side = 1.0 if direction == "LONG" else -1.0
-    tp1 = entry + side * 1.20 * risk
-    tp2 = entry + side * 2.00 * risk
-    weighted_gain = 0.60 * abs(tp1 - entry) + 0.40 * abs(tp2 - entry)
+    tp1_r, tp2_r = 1.35, 2.40
+    tp1_pct, tp2_pct = 0.40, 0.60
+    tp1 = entry + side * tp1_r * risk
+    tp2 = entry + side * tp2_r * risk
+    weighted_gain = tp1_pct * abs(tp1 - entry) + tp2_pct * abs(tp2 - entry)
     cost_cash = entry * max(round_trip_cost, 0.0)
     net_gain = max(weighted_gain - cost_cash, 0.0)
     net_loss = risk + cost_cash
     required_wr = net_loss / (net_loss + net_gain) if net_gain > 0 else 1.0
-    if required_wr > 0.47:
+    if required_wr > 0.46:
         return ScalpPlan(False, f"비용후 손익분기 승률 {required_wr*100:.1f}% 과다", score=score, direction=direction, atr=atr15, atr_pct=atr_pct, signal_bar=signal_bar)
 
     tps = (
-        {"price": tp1, "pct": 60, "rr": 1.2},
-        {"price": tp2, "pct": 40, "rr": 2.0},
+        {"price": tp1, "pct": int(tp1_pct * 100), "rr": tp1_r},
+        {"price": tp2, "pct": int(tp2_pct * 100), "rr": tp2_r},
     )
     return ScalpPlan(
         True,

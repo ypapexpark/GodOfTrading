@@ -27,9 +27,12 @@ from config import (ACTIVE_MAX_MIN_RR, ACTIVE_MAX_MIN_VOL,
                     SYMBOL_COOLDOWN_HOURS,
                     REALIZED_BLOCK_EXACT_MIN_TRADES,
                     REALIZED_BLOCK_MIN_PNL_USD,
+                    REALIZED_BLOCK_MAX_PF,
                     REALIZED_BLOCK_MODE_TF_MIN_TRADES,
+                    REALIZED_BLOCK_STRATEGY_TF_MIN_TRADES,
                     REALIZED_BLOCK_SYMBOL_MODE_MIN_TRADES,
                     REALIZED_BLOCK_WIN_RATE,
+                    REALIZED_BOOST_MIN_PF,
                     REALIZED_BOOST_MIN_PNL_USD, REALIZED_BOOST_MIN_TRADES,
                     REALIZED_BOOST_MULT, REALIZED_BOOST_WIN_RATE,
                     REALIZED_MODE_BOOST_MULT,
@@ -626,6 +629,15 @@ def _realized_stat(rows: list[dict]) -> dict:
     pnl = sum(float(t.get("pnl_usd", 0) or 0) for t in rows)
     avg_win = sum(float(t.get("pnl_usd", 0) or 0) for t in wins) / len(wins) if wins else 0.0
     avg_loss = sum(float(t.get("pnl_usd", 0) or 0) for t in losses) / len(losses) if losses else 0.0
+    gross_win = sum(float(t.get("pnl_usd", 0) or 0) for t in wins)
+    gross_loss = -sum(float(t.get("pnl_usd", 0) or 0) for t in losses)
+    if gross_loss > 0:
+        pf = gross_win / gross_loss
+    elif gross_win > 0:
+        pf = 99.0
+    else:
+        pf = 0.0
+    expectancy = pnl / n if n else 0.0
     return {
         "samples": n,
         "wins": len(wins),
@@ -634,7 +646,36 @@ def _realized_stat(rows: list[dict]) -> dict:
         "pnl": pnl,
         "avg_win": avg_win,
         "avg_loss": avg_loss,
+        "profit_factor": pf,
+        "expectancy": expectancy,
     }
+
+
+def _realized_is_losing(st: dict) -> bool:
+    """승률 함정 방지: 고승률·저R:R 코호트도 차단 가능."""
+    if st["samples"] <= 0:
+        return False
+    wr_loss = (
+        st["pnl"] <= REALIZED_BLOCK_MIN_PNL_USD
+        and st["win_rate"] <= REALIZED_BLOCK_WIN_RATE
+    )
+    # 기대값 음수 + PF 미달이면 승률이 높아도 구조적 손실 (예: WR70%·avgL≫avgW)
+    edge_loss = (
+        st["pnl"] < 0
+        and st["expectancy"] < 0
+        and st["profit_factor"] < REALIZED_BLOCK_MAX_PF
+    )
+    return wr_loss or edge_loss
+
+
+def _realized_is_winning(st: dict) -> bool:
+    return (
+        st["samples"] >= REALIZED_BOOST_MIN_TRADES
+        and st["pnl"] >= REALIZED_BOOST_MIN_PNL_USD
+        and st["win_rate"] >= REALIZED_BOOST_WIN_RATE
+        and st["profit_factor"] >= REALIZED_BOOST_MIN_PF
+        and st["expectancy"] > 0
+    )
 
 
 def _realized_quality_groups(symbol: str, tf_key: str, strategy: str,
@@ -651,6 +692,10 @@ def _realized_quality_groups(symbol: str, tf_key: str, strategy: str,
         t for t in same_direction
         if t.get("symbol") == symbol and _trade_family_key(t) == family_key
     ]
+    strategy_tf = [
+        t for t in same_direction
+        if t.get("tf") == tf_key and t.get("strategy", "") == strategy
+    ]
     mode_tf = [
         t for t in same_direction
         if t.get("tf") == tf_key and _trade_family_key(t) == family_key
@@ -658,6 +703,7 @@ def _realized_quality_groups(symbol: str, tf_key: str, strategy: str,
     return [
         ("동일조건", exact, REALIZED_BLOCK_EXACT_MIN_TRADES),
         ("동일심볼전략군", symbol_mode, REALIZED_BLOCK_SYMBOL_MODE_MIN_TRADES),
+        ("동일전략TF", strategy_tf, REALIZED_BLOCK_STRATEGY_TF_MIN_TRADES),
         ("동일봉전략군", mode_tf, REALIZED_BLOCK_MODE_TF_MIN_TRADES),
     ]
 
@@ -667,47 +713,63 @@ def get_realized_trade_adjustment(symbol: str, tf_key: str,
                                   signal_type: str = "",
                                   is_divergence: bool = True,
                                   asymmetric: bool = False) -> tuple[float, list[str]]:
-    """실제 체결 손익 기반 차단/강화 필터."""
+    """실제 체결 손익 기반 차단/강화 필터. 원장 손상 시 fail-open(1.0)."""
     if not REALIZED_TRADE_LEARNING_ENABLED:
         return 1.0, []
 
-    family_key = _input_family_key(strategy, direction, signal_type, is_divergence, asymmetric)
-    block_notes: list[str] = []
-    boost_candidates: list[tuple[float, str]] = []
+    try:
+        family_key = _input_family_key(
+            strategy, direction, signal_type, is_divergence, asymmetric
+        )
+        block_notes: list[str] = []
+        boost_candidates: list[tuple[float, str]] = []
 
-    for scope, group, min_samples in _realized_quality_groups(
-        symbol, tf_key, strategy, direction, family_key
-    ):
-        if len(group) < min_samples:
-            continue
-        st = _realized_stat(group)
-        note = (
-            f"실체결학습 {scope} {st['samples']}건: "
-            f"{st['wins']}승 {st['losses']}패, 승률 {st['win_rate']*100:.0f}%, "
-            f"누적손익 ${st['pnl']:+.2f}"
-        )
-        losing = (
-            st["pnl"] <= REALIZED_BLOCK_MIN_PNL_USD
-            and st["win_rate"] <= REALIZED_BLOCK_WIN_RATE
-        )
-        if losing:
-            block_notes.append(note + " → 손실 우위 반복, 실거래 차단")
-            continue
-        winning = (
-            st["samples"] >= REALIZED_BOOST_MIN_TRADES
-            and st["pnl"] >= REALIZED_BOOST_MIN_PNL_USD
-            and st["win_rate"] >= REALIZED_BOOST_WIN_RATE
-        )
-        if winning:
-            mult = REALIZED_BOOST_MULT if scope != "동일봉전략군" else REALIZED_MODE_BOOST_MULT
-            boost_candidates.append((mult, note + f" → 승리 패턴 강화 리스크×{mult:.2f}"))
+        for scope, group, min_samples in _realized_quality_groups(
+            symbol, tf_key, strategy, direction, family_key
+        ):
+            if len(group) < min_samples:
+                continue
+            st = _realized_stat(group)
+            note = (
+                f"실체결학습 {scope} {st['samples']}건: "
+                f"{st['wins']}승 {st['losses']}패, 승률 {st['win_rate']*100:.0f}%, "
+                f"PF {st['profit_factor']:.2f}, E ${st['expectancy']:+.3f}, "
+                f"누적손익 ${st['pnl']:+.2f}"
+            )
+            if _realized_is_losing(st):
+                # 넓은 전략군(family) 차단은 이질 전략을 한꺼번에 죽일 수 있어
+                # 전략명 정합 코호트(동일조건/동일전략TF/동일심볼전략군)에만 적용.
+                if scope == "동일봉전략군":
+                    continue
+                why = (
+                    "승률·손익 열위"
+                    if st["win_rate"] <= REALIZED_BLOCK_WIN_RATE
+                    else f"기대값 음수(PF {st['profit_factor']:.2f}<{REALIZED_BLOCK_MAX_PF})"
+                )
+                block_notes.append(note + f" → {why}, 실거래 차단")
+                continue
+            # 부스트도 전략명 정합만 — family 묶음 성과를 RSI2 등에 빌려주지 않음
+            if scope == "동일봉전략군":
+                continue
+            if _realized_is_winning(st):
+                mult = (
+                    REALIZED_MODE_BOOST_MULT
+                    if scope == "동일전략TF"
+                    else REALIZED_BOOST_MULT
+                )
+                boost_candidates.append(
+                    (mult, note + f" → 승리 패턴 강화 리스크×{mult:.2f}")
+                )
 
-    if block_notes:
-        return 0.0, block_notes
-    if boost_candidates:
-        mult, note = max(boost_candidates, key=lambda x: x[0])
-        return mult, [note]
-    return 1.0, []
+        if block_notes:
+            return 0.0, block_notes
+        if boost_candidates:
+            mult, note = max(boost_candidates, key=lambda x: x[0])
+            return mult, [note]
+        return 1.0, []
+    except Exception:
+        # 손상된 원장/분류 오류가 신규 진입 전체를 깨지 않게 fail-open
+        return 1.0, []
 
 
 def is_tradeable_with_strategy(symbol: str, tf_key: str,
