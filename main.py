@@ -157,6 +157,8 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     SCALP_MIN_TREND_STRENGTH, SCALP_SYMBOL_DENYLIST,
                     SCALP_MAX_STOP_ATR, SCALP_MAX_STOP_PCT,
                     SCALP_MAX_ENTRIES_PER_SYMBOL_PER_DAY,
+                    S1_DISABLE_PRE_TP_BE, S1_BLOCK_LONG_WHEN_HTF_SHORT,
+                    S1_MIN_TP1_NET_FEE_MULT,
                     SCALP_SYMBOL_LOSS_STREAK_COOLDOWN_H, SCALP_SYMBOL_LOSS_STREAK_LIMIT,
                     BINANCE_D2_ENGINE_ENABLED, BINANCE_D2_LIVE_ENABLED,
                     BINANCE_D2_SETUP_TIMEFRAME, BINANCE_D2_TRIGGER_TIMEFRAME,
@@ -1750,6 +1752,7 @@ def _try_scalping_engine_trade(symbol: str, df_15m, current_price: float,
         min_trend_strength=float(SCALP_MIN_TREND_STRENGTH),
         max_stop_atr=float(SCALP_MAX_STOP_ATR),
         max_stop_pct=float(SCALP_MAX_STOP_PCT),
+        min_tp1_net_fee_mult=float(S1_MIN_TP1_NET_FEE_MULT),
     )
     direction = plan.direction
     signal_type = f"scalp_trend_pullback_{direction.lower()}"
@@ -1764,6 +1767,35 @@ def _try_scalping_engine_trade(symbol: str, df_15m, current_price: float,
                 engine_plan=plan.to_dict(),
             )
         return
+
+    # 약세장 역행 롱 차단: 주봉+일봉 모두 SHORT이면 S1 롱 canary 스킵
+    if (
+        S1_BLOCK_LONG_WHEN_HTF_SHORT
+        and direction == "LONG"
+    ):
+        try:
+            _macro = get_macro_bias(symbol)
+            _daily = get_daily_bias(symbol)
+            if (
+                _macro.get("direction") == "SHORT"
+                and _daily.get("direction") == "SHORT"
+            ):
+                reason = (
+                    f"S1 HTF 더블숏 롱차단 "
+                    f"(주봉 {_macro.get('note', 'SHORT')} / "
+                    f"일봉 {_daily.get('note', 'SHORT')})"
+                )
+                print(f"  [S1] {symbol} {reason}")
+                log_trade_candidate(
+                    symbol, SCALP_ENGINE_TIMEFRAME, SCALP_ENGINE_STRATEGY,
+                    direction, "S1", "blocked", reason,
+                    signal_type=signal_type,
+                    engine_version=SCALP_ENGINE_VERSION,
+                    engine_plan=plan.to_dict(),
+                )
+                return
+        except Exception as e:
+            print(f"  [S1] {symbol} HTF 바이어스 조회 실패(진입 계속): {e}")
 
     if has_open_position(symbol):
         print(f"  [S1] {symbol} 기존 포지션 보유 — 중복진입 스킵")
@@ -1966,6 +1998,7 @@ def _try_scalping_engine_trade(symbol: str, df_15m, current_price: float,
             "strategy": SCALP_ENGINE_STRATEGY,
             "signal_bar": plan.signal_bar,
             "max_hold_minutes": SCALP_ENGINE_MAX_HOLD_MINUTES,
+            "disable_pre_tp_be": bool(S1_DISABLE_PRE_TP_BE),
         },
         require_full_protection=True,
     )

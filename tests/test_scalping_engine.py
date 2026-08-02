@@ -181,6 +181,42 @@ class ScalpingEngineTest(unittest.TestCase):
         self.assertTrue(config.EMA_LIVE_LOWER_TF_SOFT_ENABLED)
         self.assertIn("TSLA/USDT", config.SCALP_SYMBOL_DENYLIST)
         self.assertEqual(config.SCALP_MAX_ENTRIES_PER_SYMBOL_PER_DAY, 1)
+        self.assertTrue(config.S1_DISABLE_PRE_TP_BE)
+        self.assertTrue(config.S1_BLOCK_LONG_WHEN_HTF_SHORT)
+        self.assertGreaterEqual(config.S1_MIN_TP1_NET_FEE_MULT, 2.0)
+
+    def test_tp1_below_fee_floor_is_blocked(self):
+        d15, d5, now = _valid_frames()
+        # Extreme fee: either required-WR gate or explicit TP1 fee floor must fire.
+        plan = evaluate_scalp(
+            d15,
+            d5,
+            live_price=float(d15["close"].iloc[-1]),
+            round_trip_cost=0.05,
+            spread_pct=0.02,
+            now=now,
+            min_tp1_net_fee_mult=2.0,
+        )
+        self.assertFalse(plan.eligible)
+        self.assertTrue(
+            "TP1" in plan.reason or "손익분기" in plan.reason,
+            plan.reason,
+        )
+
+    def test_tp1_fee_floor_blocks_tight_stop_plan(self):
+        """정상 수수료라도 fee mult를 크게 올리면 TP1 필터가 차단한다."""
+        d15, d5, now = _valid_frames()
+        plan = evaluate_scalp(
+            d15,
+            d5,
+            live_price=float(d15["close"].iloc[-1]),
+            round_trip_cost=config.BYBIT_ROUND_TRIP_EXECUTION_COST,
+            spread_pct=0.02,
+            now=now,
+            min_tp1_net_fee_mult=500.0,
+        )
+        self.assertFalse(plan.eligible)
+        self.assertIn("TP1", plan.reason)
 
     def test_low_volume_is_hard_blocked(self):
         d15, d5, now = _valid_frames()

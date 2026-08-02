@@ -17,11 +17,10 @@ from typing import Any
 import pandas as pd
 
 
-# v3: v2 canary(n=8 PF0.84) 조기중단 후 리셋.
-# - 주식 무기한/당일 반복진입은 main/config denylist·일일 한도로 차단
-# - stop% 상한 소폭 완화(유동 알트 과차단), canary 평가는 12건
+# v3.1: 익절 잘림·약세장 역행 보정 (v3 2건 SL 후 버전 리셋).
+# - TP1 전 BE 금지 / HTF 더블숏 롱차단 / TP1≥2×수수료
 # 이전 버전 성과를 절대 차용하지 않는다 (evaluate_live_permission).
-ENGINE_VERSION = "2026-08-02-s1v3-liquid-rr"
+ENGINE_VERSION = "2026-08-03-s1v3-exit-fix"
 STRATEGY = "SCALP_TREND_PULLBACK"
 CANARY_MIN_CLOSED = 12
 
@@ -127,6 +126,7 @@ def evaluate_scalp(
     min_trend_strength: float = 0.25,
     max_stop_atr: float = 2.0,
     max_stop_pct: float = 3.2,
+    min_tp1_net_fee_mult: float = 2.0,
 ) -> ScalpPlan:
     """Evaluate one symmetric, closed-candle trend/pullback setup.
 
@@ -335,6 +335,18 @@ def evaluate_scalp(
     required_wr = net_loss / (net_loss + net_gain) if net_gain > 0 else 1.0
     if required_wr > 0.46:
         return ScalpPlan(False, f"비용후 손익분기 승률 {required_wr*100:.1f}% 과다", score=score, direction=direction, atr=atr15, atr_pct=atr_pct, signal_bar=signal_bar)
+
+    # TP1 순이득이 왕복수수료 대비 너무 작으면 스캘핑 함정 (마이크로 시드 보호)
+    tp1_move = abs(tp1 - entry)
+    fee_floor = cost_cash * max(float(min_tp1_net_fee_mult), 0.0)
+    if fee_floor > 0 and tp1_move + 1e-12 < fee_floor:
+        return ScalpPlan(
+            False,
+            f"TP1 이득 {tp1_move/entry*100:.3f}% < 수수료×{float(min_tp1_net_fee_mult):.1f}"
+            f"({fee_floor/entry*100:.3f}%)",
+            score=score, direction=direction, atr=atr15, atr_pct=atr_pct,
+            signal_bar=signal_bar, volume_ratio=round(volume_ratio, 4),
+        )
 
     tps = (
         {"price": tp1, "pct": int(tp1_pct * 100), "rr": tp1_r},

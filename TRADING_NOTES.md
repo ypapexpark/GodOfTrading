@@ -1,5 +1,16 @@
 # GodOfTrading Trading Notes
 
+## 2026-08-03 S1 마이너스 구조 보정 (exit asymmetry)
+
+**원장 답:** S1 n=18 WR 33% (필요 ~44%), 승은 본전/부분TP로 잘리고 패는 풀 SL.
+**조치 (ENGINE `2026-08-03-s1v3-exit-fix` — canary 리셋):**
+1. S1 **TP1 전 PRE_TP BE 금지** (`S1_DISABLE_PRE_TP_BE`)
+2. 주봉+일봉 **더블 SHORT이면 롱 S1 차단**
+3. TP1 이득 < 왕복수수료×2 진입 금지
+4. 리포트: `python3 tools/daily_realized_r_report.py --days 3`
+
+자동화 수익은 “불가능”이 아니라 **EV>0 버킷만 키우는 느린 게임**. EMA 롱 +EV / S1은 실험.
+
 ## 2026-08-02 목표 스타일: Cupsey형 복리 단타 (매핑)
 
 **레퍼런스:** [Cupsey / Solana grinder](https://x.com/0xeduu/status/2083537722187166044)

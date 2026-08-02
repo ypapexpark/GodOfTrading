@@ -1532,6 +1532,7 @@ def _save_position(symbol: str, direction: str, entry_price: float,
         "tp1_lock_r",
         "trail_atr_mult", "trail_activation_r",
         "progress_check_minutes", "progress_min_r",
+        "disable_pre_tp_be",
     ):
         if key in safe_meta:
             record[key] = safe_meta[key]
@@ -1893,7 +1894,26 @@ def monitor_positions():
                     print(f"[+10%락] {symbol} SL 이동 실패: {e}")
 
         # TP1 전이라도 충분히 수익권이면 손실 거래로 되돌아가지 않게 SL을 당긴다.
-        if not info.get("pre_tp_be_done") and not info.get("be_done"):
+        # S1 스캘프는 실측상 PRE_TP BE가 승을 +$0.00x로 깎아 EV를 죽임 → TP1 전 금지.
+        _s1_skip_pre_tp = False
+        try:
+            from config import S1_DISABLE_PRE_TP_BE
+            _strat = str(info.get("strategy") or "")
+            _s1_skip_pre_tp = bool(
+                S1_DISABLE_PRE_TP_BE
+                and (
+                    _strat == "SCALP_TREND_PULLBACK"
+                    or str(info.get("engine_version") or "").startswith("2026-08-03-s1")
+                    or info.get("disable_pre_tp_be")
+                )
+            )
+        except Exception:
+            _s1_skip_pre_tp = False
+        if (
+            not info.get("pre_tp_be_done")
+            and not info.get("be_done")
+            and not _s1_skip_pre_tp
+        ):
             direction = info["direction"]
             entry_price = float(info.get("entry_price", 0) or 0)
             initial_sl = float(info.get("initial_sl_price") or info.get("sl_price") or 0)

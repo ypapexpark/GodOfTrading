@@ -690,7 +690,7 @@ REGIME_HIGH_VOL_BLOCK_MEANREV = True
 
 # 실거래 A/B 귀속 태그 (journal/history에 남겨 "기존 vs 신규 스택" 구분)
 # 2026-07-11 이후 진입은 이 버전 문자열로 묶어서 복기한다.
-LOGIC_STACK_VERSION = "2026-08-02-compound-scalp-v3"
+LOGIC_STACK_VERSION = "2026-08-03-s1-exit-fix"
 
 # ─── S1 비용후 스캘핑 엔진 (2026-07-18 도입, 2026-07-29 품질 v2) ─────────────
 # 기존 confirmed_count/예외 누적 엔진은 같은 과거 표본을 반복 선택해 과최적화됐고,
@@ -729,6 +729,13 @@ SCALP_SYMBOL_LOSS_STREAK_COOLDOWN_H = 12  # 동일심볼 연패 후 쿨다운
 SCALP_SYMBOL_LOSS_STREAK_LIMIT = 2
 SCALP_MAX_ENTRIES_PER_SYMBOL_PER_DAY = 1  # v2 TSLA/UNI 당일 3회 재진입 방지
 SCALP_CANARY_MIN_CLOSED = 12           # 미소 시드 노이즈: 8→12건 후 조기평가
+# 2026-08-03: 마이너스 구조 보정 (실현 WR 33% < 필요 ~44%, 익절 잘림)
+# 1) TP1 전 PRE_TP BE 금지 — 승이 +$0.006 같은 쓰레기 승 방지
+# 2) 주봉+일봉 둘 다 SHORT이면 롱 S1 차단 (약세장 역행)
+# 3) TP1 순이득 < 왕복수수료×N 이면 진입 금지 (수수료 함정)
+S1_DISABLE_PRE_TP_BE = True
+S1_BLOCK_LONG_WHEN_HTF_SHORT = True
+S1_MIN_TP1_NET_FEE_MULT = 2.0
 # v1/v2 반복 손실 + 주식 무기한 + 저유동 밈
 SCALP_SYMBOL_DENYLIST: set = {
     "PUMPFUN/USDT",
