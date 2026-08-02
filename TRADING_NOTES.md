@@ -1,5 +1,45 @@
 # GodOfTrading Trading Notes
 
+## 2026-08-02 목표 스타일: Cupsey형 복리 단타 (매핑)
+
+**레퍼런스:** [Cupsey / Solana grinder](https://x.com/0xeduu/status/2083537722187166044)
+- 시작 ~$2k → 순익 수천만$, 262k+ trades, WR ~68%, 95% 포지션 **1분 이내** 청산
+- 초소액 반복 (≈3 SOL), 신규 런치 스캔, pump.fun snipes
+
+**우리 시스템에 그대로 복제할 수 없는 이유:**
+- Cupsey 엣지는 **Solana 밈 런치 초단위 스나이프** (정보·지연·유동성 구조).
+- GodOfTrading Bybit 코어는 **15m/5m 완료봉 선물** + 비용후 R:R. 초단위 온체인 스나이프와 시장 구조가 다름.
+- 초단위 스나이프를 Bybit 15m 게이트에 억지로 넣으면 노이즈·수수료로 EV가 음수가 된다 (S1 v1/v2 canary가 증명).
+
+**대신 채택하는 동일 원칙 (이미 코드에 반영/유지):**
+1. **소액 고정 위험% 복리** — canary 0.25% → probation → champion, `COMPOUND_ENGINE` equity% 스케일
+2. **고빈도 품질 필터** — 많이 치는 게 아니라 **많이 스캔하고 적게 체결** (Cupsey도 하루 수백 스캔)
+3. **빠른 확정 + 러너** — S1 40/60 @ 1.35R/2.40R, EMA FAST_TP 복리형, PRE_TP 0.85R 보호
+4. **당일 반복 금지** — 동일 심볼 과매매 차단 (grinder의 “한 방에 몰빵” 반대)
+5. **−EV 버킷 제거** — SHORT/비-EMA 실주문 차단, +EV EMA 롱만 사이즈 유지
+
+**다음 단계 (별도 제품, 이 PR 범위 밖):**
+- 진짜 초단위 밈 스나이프는 pump.fun/DEX 전용 러너 + 별도 시드·리스크 한도가 필요.
+- Bybit에서는 S1 v3 OOS 12건 + EMA 15m 챔피언 유지가 복리 경로.
+
+## 2026-08-02 Bybit 무체결 복구 + S1 v3 / EMA soft
+
+**증상:** `main.py --auto-trade` 정상 가동, 포지션 0, 7/31 이후 체결 0.
+**원인 (프로세스가 죽은 게 아님):**
+1. S1 v2 canary 8건 PF 0.84 E −$0.002 → 승격게이트 shadow (신규 0).
+2. EMA 롱 퀀트게이트는 allow(probation×0.5)인데 5m VWAP **hard-block** + 역추세 **6/6** 요구로 실주문 굶주림.
+3. 전기간 손실의 주범은 여전히 SHORT/BTC Sync 등 (−$25 숏). 유일 +EV는 EMA 롱 15m.
+
+**전기간 로컬 원장 (Bybit, n=142):** WR 50% · PF 0.59 · pnl −$31 · equity 76.55→59.71 (−22%).
+- EMA 롱 화이트리스트 15m: n=22 WR~64–78% pnl **+$8.84**
+- S1 전체: n=16 WR 37.5% pnl −$0.24 (v2 8건 ≈본전 미소)
+
+**조치:**
+- S1 `ENGINE_VERSION=2026-08-02-s1v3-liquid-rr` 리셋 (과거 버전 성과 미차용).
+- 주식 무기한 denylist(TSLA 등) · 당일 심볼 1회 · stop% 2.5→3.2 · canary 평가 12건.
+- EMA 5m 보조: 강한역방향/과열 hard 유지, EMA OK+경미 VWAP만 risk×0.70 soft.
+- 화이트리스트 EMA LONG 15m 역추세 confirmed 6→5 (vol≥1.25, 실측 conf=5 +EV).
+
 ## 2026-07-30 복리 엔진 v1 (수익 직결)
 
 **목표:** 승률 집착이 아니라 EV>0 + equity% 복리.

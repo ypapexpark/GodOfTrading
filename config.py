@@ -690,7 +690,7 @@ REGIME_HIGH_VOL_BLOCK_MEANREV = True
 
 # 실거래 A/B 귀속 태그 (journal/history에 남겨 "기존 vs 신규 스택" 구분)
 # 2026-07-11 이후 진입은 이 버전 문자열로 묶어서 복기한다.
-LOGIC_STACK_VERSION = "2026-07-30-compound-rr-v1"
+LOGIC_STACK_VERSION = "2026-08-02-compound-scalp-v3"
 
 # ─── S1 비용후 스캘핑 엔진 (2026-07-18 도입, 2026-07-29 품질 v2) ─────────────
 # 기존 confirmed_count/예외 누적 엔진은 같은 과거 표본을 반복 선택해 과최적화됐고,
@@ -702,6 +702,12 @@ LOGIC_STACK_VERSION = "2026-07-30-compound-rr-v1"
 #   - 손실 집중: PUMPFUN/1000PEPE/LAB (저유동·밈 반복진입) + SHORT 혼재
 #   - 레거시 EMA눌림목 계열 LONG 15m n=21 WR67% pnl+$8.84 PF~2.5 (유일 명확 +EV)
 # 조치: S1 버전 리셋(품질 게이트) + 레거시 EMA-LONG 화이트리스트 병행 재개.
+#
+# 2026-08-02 진단 (Bybit 2일 무체결):
+#   - 프로세스/API 정상, hard-stop 아님. S1 v2 n=8 PF0.84 E-$0.002 → 조기중단 shadow.
+#   - 레거시 EMA 퀀트게이트 allow(probation×0.5) 인데 5m VWAP hard-block + 역추세 6/6
+#     요구로 실체결 0. EMA 롱 코호트는 여전히 유일 +EV.
+# 조치: S1 v3 리셋(주식/반복진입 차단·stop% 소폭완화·canary 12건) + EMA 경미 soft.
 SCALP_ENGINE_ENABLED = True
 LEGACY_AUTO_TRADE_ENABLED = True  # EMA 롱 코어 재개 (BLOCK_SHORT + 화이트리스트 유지)
 SCALP_ENGINE_TIMEFRAME = "15m"
@@ -710,15 +716,20 @@ SCALP_ENGINE_LEVERAGE = 3
 SCALP_ENGINE_MAX_MARGIN_PCT = 0.08
 SCALP_ENGINE_MIN_MARGIN_USD = 1.0
 SCALP_ENGINE_MAX_OPEN_POSITIONS = 2
-SCALP_ENGINE_MAX_HOLD_MINUTES = 90
-# S1 v2 품질 게이트 (v1 canary 실패 원인 대응)
+# Cupsey형 빠른 회전: 90→45분. 구조 SL/TP는 유지, 죽은 포지션 자본 묶임만 줄임.
+SCALP_ENGINE_MAX_HOLD_MINUTES = 45
+# S1 v3 품질 게이트 (v2 canary: TSLA/UNI 당일 반복·stop% 2.5 과차단)
 SCALP_LONG_ONLY = True                 # S1 SHORT 표본 부진 → 롱만 (시그널 평가는 유지)
 SCALP_MIN_SCORE = 78.0                 # v1 72 → 78 (약한 구조 차단)
 SCALP_MIN_VOLUME_RATIO = 0.90          # v1은 0.23x 거래량도 통과 → 하드 하한
 SCALP_MIN_TREND_STRENGTH = 0.25        # EMA20-50 이격 ATR 배수 하한
+SCALP_MAX_STOP_ATR = 2.0               # 구조손절 ATR 상한 유지
+SCALP_MAX_STOP_PCT = 3.2               # v2 2.5 → 3.2 (유동 알트 2.6~3.1% 과차단 완화)
 SCALP_SYMBOL_LOSS_STREAK_COOLDOWN_H = 12  # 동일심볼 연패 후 쿨다운
 SCALP_SYMBOL_LOSS_STREAK_LIMIT = 2
-# v1 canary에서 반복 손실 + 지역 미지원/노이즈 심볼
+SCALP_MAX_ENTRIES_PER_SYMBOL_PER_DAY = 1  # v2 TSLA/UNI 당일 3회 재진입 방지
+SCALP_CANARY_MIN_CLOSED = 12           # 미소 시드 노이즈: 8→12건 후 조기평가
+# v1/v2 반복 손실 + 주식 무기한 + 저유동 밈
 SCALP_SYMBOL_DENYLIST: set = {
     "PUMPFUN/USDT",
     "1000PEPE/USDT",
@@ -731,7 +742,31 @@ SCALP_SYMBOL_DENYLIST: set = {
     "TAC/USDT",
     "PIEVERSE/USDT",
     "FARTCOIN/USDT",
+    # v2 canary 손실 군집 (주식 무기한 — 야간/갭 노이즈)
+    "TSLA/USDT",
+    "NVDA/USDT",
+    "AAPL/USDT",
+    "META/USDT",
+    "AMZN/USDT",
+    "MSFT/USDT",
+    "GOOGL/USDT",
+    "COIN/USDT",
+    "MSTR/USDT",
+    "HOOD/USDT",
 }
+# EMA 라이브 5m 보조: 완전 hard → 경미 불일치 soft 감액 (2026-08-02)
+# 강한역방향·최신봉 역방향·과열(VWAP ext)은 계속 hard.
+# EMA OK + 최신봉 순방향 + 소폭 VWAP 이격만 soft (리스크×SOFT_MULT).
+# 2026-08-02 재조정: 1.20%는 NEAR 실측(1.59%)·CL(1.77%) 같은 건강한
+# 눌림 반등(캔들 순방향)을 전부 굶김 → 2.0%로 상향. EXTENSION_HARD(8%)와 여유 유지.
+EMA_LIVE_LOWER_TF_SOFT_ENABLED = True
+EMA_LIVE_LOWER_TF_SOFT_MULT = 0.70
+EMA_LIVE_LOWER_TF_MAX_VWAP_EXT_PCT = 2.00  # 1.20 → 2.00 (경미 반등 허용)
+# 화이트리스트 EMA LONG 15m: 역추세(0/2) 시 confirmed 6→5 완화
+# 실측 conf=5 n=9 WR78% +$0.80 (전체 conf=5 화이트리스트 +EV)
+# 로컬 EMA 방향 일치 + 최소 참여거래량 있을 때만 (무방향 추격 방지)
+EMA_LIVE_COUNTERTREND_MIN_CONFIRMED = 5
+EMA_LIVE_COUNTERTREND_MIN_VOL = 1.15  # 1.25 → 1.15 (STRONG_LIVE 1.10과 정합)
 # Binance는 현재 -2015(API key/IP/permission) 상태다. API 복구 뒤에도 Bybit 성과를
 # 가져오지 않고 Binance 자체 0/8건 canary부터 시작하도록 기본 비활성화한다.
 SCALP_BINANCE_CANARY_ENABLED = False

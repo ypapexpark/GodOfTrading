@@ -128,14 +128,15 @@ class ScalpingEngineTest(unittest.TestCase):
         self.assertEqual(permission.closed, 0)
         self.assertEqual(permission.account_risk_pct, 0.0025)
 
-    def test_eight_current_version_losses_stop_live_orders(self):
+    def test_canary_still_open_after_eight_micro_samples(self):
+        """v3: 미소 시드 노이즈 방지 — n=8은 아직 canary 유지."""
         rows = [
             {
                 "status": "loss",
                 "strategy": STRATEGY,
                 "engine_version": ENGINE_VERSION,
-                "pnl_usd": -1.0,
-                "est_sl_loss": 1.0,
+                "pnl_usd": -0.02,
+                "est_sl_loss": 0.03,
             }
             for _ in range(8)
         ]
@@ -145,17 +146,41 @@ class ScalpingEngineTest(unittest.TestCase):
             )
             permission = evaluate_live_permission(root=Path(tmp), venue="bybit")
 
-        self.assertFalse(permission.allow)
-        self.assertEqual(permission.mode, "shadow")
+        self.assertTrue(permission.allow)
+        self.assertEqual(permission.mode, "canary")
         self.assertEqual(permission.closed, 8)
 
+    def test_twelve_current_version_losses_stop_live_orders(self):
+        rows = [
+            {
+                "status": "loss",
+                "strategy": STRATEGY,
+                "engine_version": ENGINE_VERSION,
+                "pnl_usd": -1.0,
+                "est_sl_loss": 1.0,
+            }
+            for _ in range(12)
+        ]
+        with TemporaryDirectory() as tmp:
+            Path(tmp, "trade_state.json").write_text(
+                json.dumps({"trade_history": rows}), encoding="utf-8"
+            )
+            permission = evaluate_live_permission(root=Path(tmp), venue="bybit")
+
+        self.assertFalse(permission.allow)
+        self.assertEqual(permission.mode, "shadow")
+        self.assertEqual(permission.closed, 12)
+
     def test_dual_engine_mode_keeps_s1_and_legacy_ema_long(self):
-        """v1 canary 실패 후: S1 v2 + 검증된 EMA-LONG 레거시를 병행."""
+        """S1 + 검증된 EMA-LONG 레거시 병행 (v3 리셋 포함)."""
         self.assertTrue(config.SCALP_ENGINE_ENABLED)
         self.assertTrue(config.LEGACY_AUTO_TRADE_ENABLED)
         self.assertTrue(config.BLOCK_SHORT_AUTO_TRADE)
         self.assertTrue(config.SCALP_LONG_ONLY)
         self.assertIn("EMA눌림목+거래량급등", config.AUTO_TRADE_STRATEGY_WHITELIST)
+        self.assertTrue(config.EMA_LIVE_LOWER_TF_SOFT_ENABLED)
+        self.assertIn("TSLA/USDT", config.SCALP_SYMBOL_DENYLIST)
+        self.assertEqual(config.SCALP_MAX_ENTRIES_PER_SYMBOL_PER_DAY, 1)
 
     def test_low_volume_is_hard_blocked(self):
         d15, d5, now = _valid_frames()

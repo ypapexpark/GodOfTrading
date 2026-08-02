@@ -120,6 +120,9 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     LIVE_15M_STRATEGIES, LIVE_AUTO_TRADE_TIMEFRAMES,
                     EMA_LIVE_MAX_VOL_RATIO, EMA_LIVE_REQUIRE_LOWER_TF,
                     EMA_LIVE_DISABLE_ASYMMETRIC,
+                    EMA_LIVE_LOWER_TF_SOFT_ENABLED, EMA_LIVE_LOWER_TF_SOFT_MULT,
+                    EMA_LIVE_LOWER_TF_MAX_VWAP_EXT_PCT,
+                    EMA_LIVE_COUNTERTREND_MIN_CONFIRMED, EMA_LIVE_COUNTERTREND_MIN_VOL,
                     EMA_MACD_FILTER_ENABLED, EMA_MACD_SOFT_RISK_MULT,
                     EMA_MACD_HARD_BLOCK,
                     REGIME_ROUTER_ENABLED, LOGIC_STACK_VERSION,
@@ -152,6 +155,8 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     SCALP_ENGINE_MAX_HOLD_MINUTES, SCALP_BINANCE_CANARY_ENABLED,
                     SCALP_LONG_ONLY, SCALP_MIN_SCORE, SCALP_MIN_VOLUME_RATIO,
                     SCALP_MIN_TREND_STRENGTH, SCALP_SYMBOL_DENYLIST,
+                    SCALP_MAX_STOP_ATR, SCALP_MAX_STOP_PCT,
+                    SCALP_MAX_ENTRIES_PER_SYMBOL_PER_DAY,
                     SCALP_SYMBOL_LOSS_STREAK_COOLDOWN_H, SCALP_SYMBOL_LOSS_STREAK_LIMIT,
                     BINANCE_D2_ENGINE_ENABLED, BINANCE_D2_LIVE_ENABLED,
                     BINANCE_D2_SETUP_TIMEFRAME, BINANCE_D2_TRIGGER_TIMEFRAME,
@@ -1743,6 +1748,8 @@ def _try_scalping_engine_trade(symbol: str, df_15m, current_price: float,
         min_score=float(SCALP_MIN_SCORE),
         min_volume_ratio=float(SCALP_MIN_VOLUME_RATIO),
         min_trend_strength=float(SCALP_MIN_TREND_STRENGTH),
+        max_stop_atr=float(SCALP_MAX_STOP_ATR),
+        max_stop_pct=float(SCALP_MAX_STOP_PCT),
     )
     direction = plan.direction
     signal_type = f"scalp_trend_pullback_{direction.lower()}"
@@ -1767,6 +1774,34 @@ def _try_scalping_engine_trade(symbol: str, df_15m, current_price: float,
     if last_bars.get(symbol) == plan.signal_bar:
         print(f"  [S1] {symbol} 동일 완료봉 재진입 차단 ({plan.signal_bar})")
         return
+
+    # v3: 동일 심볼 당일 1회 한도 (v2 TSLA/UNI 당일 다중 재진입 손실 방지)
+    daily_cap = int(SCALP_MAX_ENTRIES_PER_SYMBOL_PER_DAY or 0)
+    if daily_cap > 0:
+        today_kst = time.strftime("%m/%d", time.localtime())
+        today_entries = 0
+        for row in state.get("trade_history") or []:
+            if row.get("strategy") != SCALP_ENGINE_STRATEGY:
+                continue
+            if row.get("symbol") != symbol:
+                continue
+            row_time = str(row.get("time") or "")
+            if row_time.startswith(today_kst):
+                today_entries += 1
+        if today_entries >= daily_cap:
+            reason = (
+                f"S1 당일 심볼 진입한도 {today_entries}/{daily_cap}회 "
+                f"— 재진입 보류"
+            )
+            print(f"  [S1] {symbol} {reason}")
+            log_trade_candidate(
+                symbol, SCALP_ENGINE_TIMEFRAME, SCALP_ENGINE_STRATEGY,
+                direction, "S1", "blocked", reason,
+                signal_type=signal_type,
+                engine_version=SCALP_ENGINE_VERSION,
+                engine_plan=plan.to_dict(),
+            )
+            return
 
     loss_streak, last_loss_ts = _s1_symbol_loss_streak(state, symbol)
     if loss_streak >= int(SCALP_SYMBOL_LOSS_STREAK_LIMIT) and last_loss_ts > 0:
@@ -2219,81 +2254,113 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
     timing_risk_note = ""
     timing = _check_lower_tf_timing(symbol, tf_key, direction)
     if not timing["ok"]:
+        ema_live_timing_soft = False
         if (
             EMA_LIVE_REQUIRE_LOWER_TF
             and strategy in AUTO_TRADE_STRATEGY_WHITELIST
         ):
-            _block(
-                f"v6 EMA {timing['tf']} 보조봉 필수확인 불일치 — "
-                f"예외 진입 금지 | {timing['note']}",
-                send_diag=True,
+            # 2026-08-02: 완전 hard-block이 EMA +EV 코호트를 2일간 0체결로 굶김.
+            # 강한역방향·최신봉 역방향·과열은 유지 hard.
+            # EMA OK + 최신봉 순방향 + 경미 VWAP 이격만 soft 감액.
+            note = str(timing.get("note") or "")
+            vwap_ext = abs(float(timing.get("vwap_ext_pct") or 0.0))
+            strong_against = (
+                "강한역방향" in note
+                or "하위봉 EMA 역방향" in note
+                or "최신봉❌" in note
             )
-            return
-        vol_r = float(best.get("vol", {}).get("value", 0) or 0)
-        sig_type = str(best.get("signal_type", "") or "")
-        # 2026-07-11: RSI2/VWAP회귀/마이크로돌파 — 하위TF 타이밍 실패·강한역방향 시
-        # soft×0.70 금지. 07/10 XRP RSI2가 5m 강한역방향인데 soft 진입 후 SL.
-        if (
-            sig_type in SCALP_TIMING_HARD_BLOCK_SIGNAL_TYPES
-            or strategy in ("RSI2반전", "VWAP회귀", "마이크로돌파")
-        ):
-            _block(
-                f"{timing['tf']} 스캘핑 타이밍 hard-block "
-                f"({sig_type or strategy}) — {timing['note']}"
+            candle_ok = "최신봉✅" in note and "최신봉❌" not in note
+            mild_ext = vwap_ext <= float(EMA_LIVE_LOWER_TF_MAX_VWAP_EXT_PCT)
+            ema_ok = "EMA OK" in note
+            soft_ok = (
+                EMA_LIVE_LOWER_TF_SOFT_ENABLED
+                and ema_ok
+                and candle_ok
+                and not strong_against
+                and mild_ext
+                and vwap_ext < float(EXTENSION_HARD_BLOCK_PCT)
             )
-            return
-        high_quality_additional = (
-            not best.get("is_divergence", True)
-            and best.get("confirmed_count", 0) >= 5
-            and vol_r >= ACTIVE_HIGH_VOL
-            and (ema_aligned or mtf_boost >= 1.0 or vol_r >= ACTIVE_ULTRA_VOL)
-        )
-        vwap_chasing = "VWAP추격" in timing["note"] or "VWAP NO" in timing["note"]
-        if high_quality_additional and vwap_chasing and vol_r < ACTIVE_ULTRA_VOL:
-            _block(
-                f"{timing['tf']} 보조봉 VWAP 추격 — 고거래량이라도 타점 과열 차단 | "
-                f"{timing['note']}"
-            )
-            return
-        # 2026-07-07: 과열도(VWAP 이격) 하드 차단 — asymmetric_mode/고거래량 예외를
-        # 전부 우회해서라도 막는다. 실제 손실사례(US/USDT, EMA눌림목+거래량급등,
-        # vol11.44x, 비대칭러너모드): 진입 시점에 이미 1h VWAP 대비 +26.8% 이격
-        # (건강한 눌림목 허용치 0.6%의 40배+) 상태였는데, asymmetric_mode가
-        # vwap_chasing 하드차단을 우회하고 리스크×0.70 소프트오버라이드로 그대로
-        # 진입시켜 -$21 손실. "눌림목"은 초입 되돌림이어야지, 이미 다 오른 뒤의
-        # 되돌림(블로우오프 탑 직전)이면 안 된다 — 봇이 3~5분마다 스캔하므로 건강한
-        # 초입 눌림목은 어차피 곧 놓치지 않고 잡힌다. 과열 자리를 놓쳐도 손실이 아니다.
-        if vwap_chasing and abs(timing.get("vwap_ext_pct", 0.0)) >= EXTENSION_HARD_BLOCK_PCT:
-            _block(
-                f"{timing['tf']} 과열 진입 차단(VWAP 이격 {timing['vwap_ext_pct']:+.1f}% "
-                f">= 한도 {EXTENSION_HARD_BLOCK_PCT:.1f}%) — 눌림목 아닌 추격매수/매도 | "
-                f"{timing['note']}"
-            )
-            return
-        high_conviction_timing = (
-            raw in {"VERY STRONG", "ELITE"}
-            and (premium_mtf_entry or btc_macro_short or ema_aligned or mtf_boost >= 1.2 or vol_r >= ACTIVE_HIGH_VOL)
-            and "VWAP OK" in timing["note"]
-            and "EMA OK" in timing["note"]
-        )
-        if high_quality_additional or asymmetric_mode or high_conviction_timing:
-            if asymmetric_mode:
-                label = "비대칭 러너형"
-            elif high_quality_additional:
-                label = "고거래량 추가전략"
-            elif btc_macro_short:
-                label = "BTC 월봉 숏 고확신"
+            if soft_ok:
+                timing_risk_mult = float(EMA_LIVE_LOWER_TF_SOFT_MULT)
+                timing_risk_note = (
+                    f"v6 EMA {timing['tf']} 보조 경미불일치 soft "
+                    f"×{timing_risk_mult:.2f} | {note}"
+                )
+                print(f"  [보조확인완화] {timing_risk_note}")
+                ema_live_timing_soft = True
             else:
-                label = "고확신 판단봉"
-            timing_risk_mult = ASYMMETRIC_TIMING_OVERRIDE_MULT
-            timing_risk_note = (
-                f"{label}: {timing['tf']} 보조봉 미일치 → "
-                f"차단 대신 리스크×{timing_risk_mult:.2f}"
+                _block(
+                    f"v6 EMA {timing['tf']} 보조봉 필수확인 불일치 — "
+                    f"예외 진입 금지 | {timing['note']}",
+                    send_diag=True,
+                )
+                return
+        if not ema_live_timing_soft:
+            vol_r = float(best.get("vol", {}).get("value", 0) or 0)
+            sig_type = str(best.get("signal_type", "") or "")
+            # 2026-07-11: RSI2/VWAP회귀/마이크로돌파 — 하위TF 타이밍 실패·강한역방향 시
+            # soft×0.70 금지. 07/10 XRP RSI2가 5m 강한역방향인데 soft 진입 후 SL.
+            if (
+                sig_type in SCALP_TIMING_HARD_BLOCK_SIGNAL_TYPES
+                or strategy in ("RSI2반전", "VWAP회귀", "마이크로돌파")
+            ):
+                _block(
+                    f"{timing['tf']} 스캘핑 타이밍 hard-block "
+                    f"({sig_type or strategy}) — {timing['note']}"
+                )
+                return
+            high_quality_additional = (
+                not best.get("is_divergence", True)
+                and best.get("confirmed_count", 0) >= 5
+                and vol_r >= ACTIVE_HIGH_VOL
+                and (ema_aligned or mtf_boost >= 1.0 or vol_r >= ACTIVE_ULTRA_VOL)
             )
-            print(f"  [보조확인완화] {timing_risk_note} | {timing['note']}")
-        else:
-            _block(f"{timing['tf']} 보조봉 확인 불일치 — {timing['note']}")
-            return
+            vwap_chasing = "VWAP추격" in timing["note"] or "VWAP NO" in timing["note"]
+            if high_quality_additional and vwap_chasing and vol_r < ACTIVE_ULTRA_VOL:
+                _block(
+                    f"{timing['tf']} 보조봉 VWAP 추격 — 고거래량이라도 타점 과열 차단 | "
+                    f"{timing['note']}"
+                )
+                return
+            # 2026-07-07: 과열도(VWAP 이격) 하드 차단 — asymmetric_mode/고거래량 예외를
+            # 전부 우회해서라도 막는다. 실제 손실사례(US/USDT, EMA눌림목+거래량급등,
+            # vol11.44x, 비대칭러너모드): 진입 시점에 이미 1h VWAP 대비 +26.8% 이격
+            # (건강한 눌림목 허용치 0.6%의 40배+) 상태였는데, asymmetric_mode가
+            # vwap_chasing 하드차단을 우회하고 리스크×0.70 소프트오버라이드로 그대로
+            # 진입시켜 -$21 손실. "눌림목"은 초입 되돌림이어야지, 이미 다 오른 뒤의
+            # 되돌림(블로우오프 탑 직전)이면 안 된다 — 봇이 3~5분마다 스캔하므로 건강한
+            # 초입 눌림목은 어차피 곧 놓치지 않고 잡힌다. 과열 자리를 놓쳐도 손실이 아니다.
+            if vwap_chasing and abs(timing.get("vwap_ext_pct", 0.0)) >= EXTENSION_HARD_BLOCK_PCT:
+                _block(
+                    f"{timing['tf']} 과열 진입 차단(VWAP 이격 {timing['vwap_ext_pct']:+.1f}% "
+                    f">= 한도 {EXTENSION_HARD_BLOCK_PCT:.1f}%) — 눌림목 아닌 추격매수/매도 | "
+                    f"{timing['note']}"
+                )
+                return
+            high_conviction_timing = (
+                raw in {"VERY STRONG", "ELITE"}
+                and (premium_mtf_entry or btc_macro_short or ema_aligned or mtf_boost >= 1.2 or vol_r >= ACTIVE_HIGH_VOL)
+                and "VWAP OK" in timing["note"]
+                and "EMA OK" in timing["note"]
+            )
+            if high_quality_additional or asymmetric_mode or high_conviction_timing:
+                if asymmetric_mode:
+                    label = "비대칭 러너형"
+                elif high_quality_additional:
+                    label = "고거래량 추가전략"
+                elif btc_macro_short:
+                    label = "BTC 월봉 숏 고확신"
+                else:
+                    label = "고확신 판단봉"
+                timing_risk_mult = ASYMMETRIC_TIMING_OVERRIDE_MULT
+                timing_risk_note = (
+                    f"{label}: {timing['tf']} 보조봉 미일치 → "
+                    f"차단 대신 리스크×{timing_risk_mult:.2f}"
+                )
+                print(f"  [보조확인완화] {timing_risk_note} | {timing['note']}")
+            else:
+                _block(f"{timing['tf']} 보조봉 확인 불일치 — {timing['note']}")
+                return
     if timing["tf"]:
         print(f"  [보조확인] {timing['note']}")
 
@@ -6952,25 +7019,55 @@ def scan():
                 active_strategy_name = any(
                     base in strategy_tag for base in ACTIVE_STRONG_STRATEGIES
                 )
+                _ad_vol = float(asig.get("vol", {}).get("value", 0) or 0)
                 high_vol_current = (
                     active_strategy_name
                     and tf_key in {"15m", "1h"}
                     and asig["confirmed_count"] >= 5
-                    and float(asig.get("vol", {}).get("value", 0) or 0) >= ACTIVE_HIGH_VOL
+                    and _ad_vol >= ACTIVE_HIGH_VOL
                     and asig.get("bars_ago", 0) <= 1
                 )
-                if (_ad_min is None or asig["confirmed_count"] < _ad_min) and not high_vol_current:
+                # 2026-08-02: 화이트리스트 EMA LONG 라이브 TF에서 역추세 6요구가
+                # conf=5 +EV 표본(WR78% +$0.80)을 전부 스킵 → 하한 5로 완화.
+                # 로컬 EMA 방향이 신호와 같을 때만 (ema_trend 역행 conf=5는 유지 차단).
+                _eff_min = _ad_min
+                _ema_dir = asig.get("ema_trend")
+                _ema_dir_ok = (
+                    (adirection == "LONG" and _ema_dir == 1)
+                    or (adirection == "SHORT" and _ema_dir == -1)
+                )
+                if (
+                    strategy_tag in AUTO_TRADE_STRATEGY_WHITELIST
+                    and adirection == "LONG"
+                    and tf_key in LIVE_AUTO_TRADE_TIMEFRAMES
+                    and _ema_dir_ok
+                    and _ad_vol >= float(EMA_LIVE_COUNTERTREND_MIN_VOL)
+                    and _eff_min is not None
+                    and _eff_min > int(EMA_LIVE_COUNTERTREND_MIN_CONFIRMED)
+                ):
+                    _eff_min = int(EMA_LIVE_COUNTERTREND_MIN_CONFIRMED)
+                if (_eff_min is None or asig["confirmed_count"] < _eff_min) and not high_vol_current:
                     _ts_tag = ["❌역추세", "⭐단일일치", "⭐⭐이중일치"][_ad_ts]
                     print(f"  [{tf_label}] {strategy_tag} {_ts_tag} — "
-                          f"{asig['confirmed_count']}/{_ad_min or 6} 미달 스킵")
+                          f"{asig['confirmed_count']}/{_eff_min or 6} 미달 스킵")
                     _log_gate_block(symbol, tf_key, asig, adirection,
-                                    f"{strategy_tag} 추세 기준 미달 {asig['confirmed_count']}/{_ad_min or 6}",
+                                    f"{strategy_tag} 추세 기준 미달 {asig['confirmed_count']}/{_eff_min or 6}",
                                     strategy=strategy_tag)
                     continue
-                if high_vol_current and (_ad_min is None or asig["confirmed_count"] < _ad_min):
+                if high_vol_current and (_eff_min is None or asig["confirmed_count"] < _eff_min):
                     print(
                         f"  [{tf_label}] {strategy_tag} 고거래량 현재봉 예외 허용 — "
-                        f"{asig['confirmed_count']}/{_ad_min or 6}, VOL {asig['vol']['value']:.1f}x"
+                        f"{asig['confirmed_count']}/{_eff_min or 6}, VOL {asig['vol']['value']:.1f}x"
+                    )
+                elif (
+                    _ad_min is not None
+                    and _eff_min is not None
+                    and _eff_min < _ad_min
+                    and asig["confirmed_count"] >= _eff_min
+                ):
+                    print(
+                        f"  [{tf_label}] {strategy_tag} EMA라이브 역추세 완화 — "
+                        f"{asig['confirmed_count']}/{_ad_min}→{_eff_min}, VOL {_ad_vol:.2f}x"
                     )
 
                 print(f"  [{tf_label}] ⚡ {strategy_tag} {adirection}  "

@@ -75,3 +75,11 @@ def test_v6_live_scope_is_narrow_and_binance_is_shadow():
     assert config.BINANCE_CANARY_LIVE_ENABLED is False
     assert config.MAX_ENTRY_SL_PCT == 5.0
     assert config.MAX_ENTRY_SL_ATR == 3.0
+
+
+def test_ema_lower_tf_soft_config_is_bounded():
+    """경미 soft는 감액만 하고, 과열 한도보다 작아야 한다."""
+    assert config.EMA_LIVE_LOWER_TF_SOFT_ENABLED is True
+    assert 0.4 <= config.EMA_LIVE_LOWER_TF_SOFT_MULT <= 0.85
+    assert config.EMA_LIVE_LOWER_TF_MAX_VWAP_EXT_PCT < config.EXTENSION_HARD_BLOCK_PCT
+    assert config.EMA_LIVE_COUNTERTREND_MIN_CONFIRMED == 5

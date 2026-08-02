@@ -17,10 +17,13 @@ from typing import Any
 import pandas as pd
 
 
-# v2: 저유동 밈 반복진입·저거래량 통과를 차단하고 canary를 깨끗이 재시작한다.
+# v3: v2 canary(n=8 PF0.84) 조기중단 후 리셋.
+# - 주식 무기한/당일 반복진입은 main/config denylist·일일 한도로 차단
+# - stop% 상한 소폭 완화(유동 알트 과차단), canary 평가는 12건
 # 이전 버전 성과를 절대 차용하지 않는다 (evaluate_live_permission).
-ENGINE_VERSION = "2026-07-29-s1v2-quality-liquid"
+ENGINE_VERSION = "2026-08-02-s1v3-liquid-rr"
 STRATEGY = "SCALP_TREND_PULLBACK"
+CANARY_MIN_CLOSED = 12
 
 
 _TF_SECONDS = {"5m": 300, "15m": 900, "1h": 3600}
@@ -122,6 +125,8 @@ def evaluate_scalp(
     min_score: float = 78.0,
     min_volume_ratio: float = 0.90,
     min_trend_strength: float = 0.25,
+    max_stop_atr: float = 2.0,
+    max_stop_pct: float = 3.2,
 ) -> ScalpPlan:
     """Evaluate one symmetric, closed-candle trend/pullback setup.
 
@@ -307,8 +312,14 @@ def evaluate_scalp(
         risk = stop - entry
     stop_atr = risk / atr15
     stop_pct = risk / entry * 100
-    if stop <= 0 or stop_atr > 2.0 or stop_pct > 2.5:
-        return ScalpPlan(False, f"구조손절 과대 {stop_atr:.2f}ATR/{stop_pct:.2f}%", score=score, direction=direction, atr=atr15, atr_pct=atr_pct, signal_bar=signal_bar)
+    max_atr = float(max_stop_atr)
+    max_pct = float(max_stop_pct)
+    if stop <= 0 or stop_atr > max_atr or stop_pct > max_pct:
+        return ScalpPlan(
+            False,
+            f"구조손절 과대 {stop_atr:.2f}ATR/{stop_pct:.2f}%",
+            score=score, direction=direction, atr=atr15, atr_pct=atr_pct, signal_bar=signal_bar,
+        )
 
     # 2026-07-30 복리형 R:R — 40%@1.35R + 60%@2.40R → 가중 ≈1.98R gross.
     # (구 60/40@1.2/2.0 = 1.52R, 얕은 확정 과다). 손익분기 승률 하한은 유지.
@@ -419,12 +430,15 @@ def evaluate_live_permission(
     if venue == "binance" and not binance_canary_enabled:
         return LivePermission(False, "shadow", 0.0, "Binance 신규 엔진은 API 복구·별도 승인 전 shadow", **base)
 
-    if len(rows) < 8:
+    # 미소 시드($0.02~0.05) canary는 n=8에서 노이즈로 조기중단되기 쉽다.
+    # v3: 12건까지 canary 유지 후 1차 평가.
+    canary_n = int(CANARY_MIN_CLOSED)
+    if len(rows) < canary_n:
         return LivePermission(
             True,
             "canary",
             0.0025,
-            f"현 버전 실체결 OOS {len(rows)}/8건 — 계좌위험 0.25% 고정",
+            f"현 버전 실체결 OOS {len(rows)}/{canary_n}건 — 계좌위험 0.25% 고정",
             **base,
         )
     if len(rows) < 20:
