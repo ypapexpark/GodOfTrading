@@ -249,11 +249,10 @@ BINANCE_MAX_TRADE_SL_LOSS_PCT = 0.0050
 # 주문검증 스택의 실제 OOS 표본을 만들기 위해 승인 EMA-LONG만 초소액 canary로
 # 거래한다. 기본 위험의 10%(계좌위험 최대 약 0.15%), 일손실 0.5%, 동시 3개.
 # 8건 조기평가 또는 20건 정식평가에서 기대값이 나쁘면 governor가 다시 차단한다.
-# 2026-07-16 v6: 45일/10개 유동성 종목 비용후 재생에서 현재 EMA 조합과
-# 완화 후보가 모두 음의 OOS 기대값이었다. 과거 Binance 실체결 코호트도 PF 0.1
-# 수준이므로 "표본을 만들기 위한 실손실"을 더 허용하지 않는다. 신호/후보 기록은
-# 계속하되 신규 실주문은 governor가 shadow로 차단한다.
-BINANCE_CANARY_LIVE_ENABLED = False
+# 2026-08-03: Bybit +EV EMA 코어 재활성과 함께 Binance도 동일 게이트 + 현 버전
+# canary를 연다. 과거 PF 0.09 표본은 무시하고 logic_stack 버전 OOS만 집계.
+# private API -2015면 probe가 진입 hard-stop (키/IP 화이트리스트 복구 필요).
+BINANCE_CANARY_LIVE_ENABLED = True
 BINANCE_CANARY_RISK_MULT = 0.10
 BINANCE_CANARY_EARLY_REVIEW_CLOSED = 8
 BINANCE_CANARY_DAILY_LOSS_PCT = 0.0050
@@ -671,7 +670,8 @@ EMA_LIVE_DISABLE_ASYMMETRIC = True
 # HARD_BLOCK=False: 미정렬 시 리스크×SOFT_MULT 만. True면 진입 차단.
 EMA_MACD_FILTER_ENABLED = True
 EMA_MACD_SOFT_RISK_MULT = 0.70
-EMA_MACD_HARD_BLOCK = True
+# 2026-08-03: hard-block이 EMA 코어 통과를 과도하게 줄임 → soft 감액만
+EMA_MACD_HARD_BLOCK = False
 
 # ─── 레짐 라우터 (Principles P1, 2026-07-11) ─────────────────────────────────
 # 시장 국면(trend/range/high_vol/mixed)에 따라 전략 허용·사이즈를 분기한다.
@@ -690,7 +690,8 @@ REGIME_HIGH_VOL_BLOCK_MEANREV = True
 
 # 실거래 A/B 귀속 태그 (journal/history에 남겨 "기존 vs 신규 스택" 구분)
 # 2026-07-11 이후 진입은 이 버전 문자열로 묶어서 복기한다.
-LOGIC_STACK_VERSION = "2026-08-03-s1-exit-fix"
+# 2026-08-03: EMA 코어 체결 재활성 — Bybit/Binance 공통 게이트 완화 + BN canary.
+LOGIC_STACK_VERSION = "2026-08-03-ema-core-fill"
 
 # ─── S1 비용후 스캘핑 엔진 (2026-07-18 도입, 2026-07-29 품질 v2) ─────────────
 # 기존 confirmed_count/예외 누적 엔진은 같은 과거 표본을 반복 선택해 과최적화됐고,
@@ -768,14 +769,21 @@ SCALP_SYMBOL_DENYLIST: set = {
 # 눌림 반등(캔들 순방향)을 전부 굶김 → 2.0%로 상향. EXTENSION_HARD(8%)와 여유 유지.
 EMA_LIVE_LOWER_TF_SOFT_ENABLED = True
 EMA_LIVE_LOWER_TF_SOFT_MULT = 0.70
-EMA_LIVE_LOWER_TF_MAX_VWAP_EXT_PCT = 2.00  # 1.20 → 2.00 (경미 반등 허용)
-# 화이트리스트 EMA LONG 15m: 역추세(0/2) 시 confirmed 6→5 완화
-# 실측 conf=5 n=9 WR78% +$0.80 (전체 conf=5 화이트리스트 +EV)
-# 로컬 EMA 방향 일치 + 최소 참여거래량 있을 때만 (무방향 추격 방지)
-EMA_LIVE_COUNTERTREND_MIN_CONFIRMED = 5
-EMA_LIVE_COUNTERTREND_MIN_VOL = 1.15  # 1.25 → 1.15 (STRONG_LIVE 1.10과 정합)
-# Binance는 현재 -2015(API key/IP/permission) 상태다. API 복구 뒤에도 Bybit 성과를
-# 가져오지 않고 Binance 자체 0/8건 canary부터 시작하도록 기본 비활성화한다.
+EMA_LIVE_LOWER_TF_MAX_VWAP_EXT_PCT = 2.50  # 경미 반등 허용 소폭 확대
+# 화이트리스트 EMA LONG 15m: 역추세 confirmed 하한 (실측 conf=5 +EV, conf=4 관찰 확대)
+EMA_LIVE_COUNTERTREND_MIN_CONFIRMED = 4
+EMA_LIVE_COUNTERTREND_MIN_VOL = 1.0
+# 로컬 EMA 중립(0)도 허용 — 완전 역행(-1)만 제외
+EMA_LIVE_ALLOW_NEUTRAL_EMA_TREND = True
+# MTF 완전역방향: EMA 롱 화이트리스트도 고품질이면 soft 감액 (전면 금지가 공백 원인)
+EMA_LIVE_MTF_SOFT_ENABLED = True
+EMA_LIVE_MTF_SOFT_MULT = 0.55
+EMA_LIVE_MTF_SOFT_MIN_CONFIRMED = 5
+EMA_LIVE_MTF_SOFT_MIN_VOL = 1.15
+# 스캘핑복리 HTF: 한쪽만 반대면 soft, 주봉+일봉 둘 다 반대만 hard
+EMA_COMPOUND_HTF_SOFT_MULT = 0.60
+EMA_COMPOUND_HTF_DOUBLE_BLOCK = True
+# S1 Binance canary는 EMA 코어와 분리 — 당분간 OFF (EMA 우선)
 SCALP_BINANCE_CANARY_ENABLED = False
 
 # ─── Binance D2 다이버전스·거래량 비대칭 실매매 엔진 ────────────────────────

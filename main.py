@@ -123,6 +123,10 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     EMA_LIVE_LOWER_TF_SOFT_ENABLED, EMA_LIVE_LOWER_TF_SOFT_MULT,
                     EMA_LIVE_LOWER_TF_MAX_VWAP_EXT_PCT,
                     EMA_LIVE_COUNTERTREND_MIN_CONFIRMED, EMA_LIVE_COUNTERTREND_MIN_VOL,
+                    EMA_LIVE_ALLOW_NEUTRAL_EMA_TREND,
+                    EMA_LIVE_MTF_SOFT_ENABLED, EMA_LIVE_MTF_SOFT_MULT,
+                    EMA_LIVE_MTF_SOFT_MIN_CONFIRMED, EMA_LIVE_MTF_SOFT_MIN_VOL,
+                    EMA_COMPOUND_HTF_SOFT_MULT, EMA_COMPOUND_HTF_DOUBLE_BLOCK,
                     EMA_MACD_FILTER_ENABLED, EMA_MACD_SOFT_RISK_MULT,
                     EMA_MACD_HARD_BLOCK,
                     REGIME_ROUTER_ENABLED, LOGIC_STACK_VERSION,
@@ -1569,15 +1573,40 @@ def _mtf_soft_override(signal: dict, mtf_info: dict, tf_key: str,
     if not mtf_info.get("block"):
         return denied
 
-    # v6: 실제 손실군(PIEVERSE/TRUST)은 "고거래량" 하나로 상위봉 완전역방향을
-    # 통과했다. 승인 EMA 추세전략에서 MTF 역행은 반전 선행신호가 아니라 전략
-    # 전제 위반이므로 거래량/비대칭 예외를 허용하지 않는다.
+    # 2026-08-03: EMA 롱 화이트리스트 체결 공백 해소.
+    # 완전 금지는 유지하되, 고품질( conf·거래량 ) LONG 15m만 soft 감액 허용.
+    # 그 외 EMA/비대칭 예외는 기존처럼 거부 (PIEVERSE/TRUST 손실군 방어).
     if (
         EMA_LIVE_DISABLE_ASYMMETRIC
         and strategy in AUTO_TRADE_STRATEGY_WHITELIST
         and signal.get("signal_type") not in _DIVERGENCE_SIGNAL_TYPES
     ):
-        return denied
+        if not (
+            EMA_LIVE_MTF_SOFT_ENABLED
+            and direction == "LONG"
+            and tf_key in LIVE_AUTO_TRADE_TIMEFRAMES
+        ):
+            return denied
+        try:
+            conf = int(signal.get("confirmed_count", 0) or 0)
+            vol = float((signal.get("vol") or {}).get("value", 0) or 0)
+        except Exception:
+            conf, vol = 0, 0.0
+        if (
+            conf < int(EMA_LIVE_MTF_SOFT_MIN_CONFIRMED)
+            or vol < float(EMA_LIVE_MTF_SOFT_MIN_VOL)
+        ):
+            return denied
+        return {
+            "allow": True,
+            "kind": "EMA-MTF soft",
+            "risk_mult": float(EMA_LIVE_MTF_SOFT_MULT),
+            "note": (
+                f"EMA 화이트리스트 MTF 역방향 soft "
+                f"conf {conf} vol {vol:.2f}x → 리스크×{float(EMA_LIVE_MTF_SOFT_MULT):.2f}"
+            ),
+            "elite": False,
+        }
 
     # 2026-07-03 리뷰: MTF 완전역방향 소프트 통과는 LONG 전용.
     # 통과 SHORT 실측 5건 2승 3패 -$3.39 (PYTH -2.95, TAIKO -1.96) → 하드 차단.
@@ -2292,15 +2321,14 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
             EMA_LIVE_REQUIRE_LOWER_TF
             and strategy in AUTO_TRADE_STRATEGY_WHITELIST
         ):
-            # 2026-08-02: 완전 hard-block이 EMA +EV 코호트를 2일간 0체결로 굶김.
-            # 강한역방향·최신봉 역방향·과열은 유지 hard.
-            # EMA OK + 최신봉 순방향 + 경미 VWAP 이격만 soft 감액.
+            # 2026-08-03: 체결 공백 축소.
+            # hard: 강한역방향 / 하위봉 EMA 역방향 / 과열.
+            # soft: EMA OK + (최신봉 순방향 또는 약한 불일치) + 경미 VWAP.
             note = str(timing.get("note") or "")
             vwap_ext = abs(float(timing.get("vwap_ext_pct") or 0.0))
             strong_against = (
                 "강한역방향" in note
                 or "하위봉 EMA 역방향" in note
-                or "최신봉❌" in note
             )
             candle_ok = "최신봉✅" in note and "최신봉❌" not in note
             mild_ext = vwap_ext <= float(EMA_LIVE_LOWER_TF_MAX_VWAP_EXT_PCT)
@@ -2308,10 +2336,11 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
             soft_ok = (
                 EMA_LIVE_LOWER_TF_SOFT_ENABLED
                 and ema_ok
-                and candle_ok
                 and not strong_against
                 and mild_ext
                 and vwap_ext < float(EXTENSION_HARD_BLOCK_PCT)
+                # 최신봉 역방향이어도 강한역방향 문구 없으면 soft (리스크 감액)
+                and (candle_ok or "최신봉❌" in note)
             )
             if soft_ok:
                 timing_risk_mult = float(EMA_LIVE_LOWER_TF_SOFT_MULT)
@@ -2501,12 +2530,9 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
                 return
             regime_risk_mult = float(_rg.get("risk_mult") or 1.0)
 
-    # 스캘핑 복리 모드: 주봉/일봉 바이어스가 진입방향과 반대면 차단.
-    # 2026-07-07: get_macro_bias/get_daily_bias는 이미 계산되고 있었지만 화면출력
-    # 용도로만 쓰이고 실제 게이트에 반영된 적이 없었다 — 사용자 지적으로 발견.
-    # 짧게 들고 빠르게 회전하는 스캘핑 모드일수록 상위 추세를 거스르면 위험이 커서
-    # (역추세 스캘핑은 반등 타이밍에 더 예민) 이 모드에 한해 하드 게이트로 승격한다.
-    # 다른 기존 전략(RSI반전/마이크로돌파 등)은 검증 안 된 채로 건드리지 않는다.
+    # 스캘핑 복리 모드 HTF: 2026-08-03 체결 공백 수정.
+    # 예전: 주봉 OR 일봉 한쪽만 반대여도 hard-block → EMA +EV 코어가 약세장에 전멸.
+    # 지금: 주봉+일봉 둘 다 반대만 hard. 한쪽만 반대면 risk×soft (진입은 허용).
     if (
         SCALP_COMPOUND_ENABLED
         and tf_key in SCALP_COMPOUND_TF
@@ -2515,14 +2541,26 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         macro_bias = get_macro_bias(symbol)
         daily_bias = get_daily_bias(symbol)
         opposite = {"LONG": "SHORT", "SHORT": "LONG"}.get(direction)
-        if macro_bias["direction"] == opposite or daily_bias["direction"] == opposite:
+        macro_opp = macro_bias["direction"] == opposite
+        daily_opp = daily_bias["direction"] == opposite
+        if EMA_COMPOUND_HTF_DOUBLE_BLOCK and macro_opp and daily_opp:
             _block(
-                f"스캘핑복리 — 상위추세 역행 차단 | 주봉 {macro_bias['note']} "
+                f"스캘핑복리 — 상위추세 더블역행 차단 | 주봉 {macro_bias['note']} "
                 f"{macro_bias['direction']} / 일봉 {daily_bias['note']} {daily_bias['direction']}",
                 paper_only=True,
             )
             return
-        print(f"  [스캘핑복리] 상위추세 확인: 주봉 {macro_bias['direction']} / 일봉 {daily_bias['direction']}")
+        if macro_opp or daily_opp:
+            regime_risk_mult *= float(EMA_COMPOUND_HTF_SOFT_MULT)
+            print(
+                f"  [스캘핑복리] HTF 부분역행 soft×{float(EMA_COMPOUND_HTF_SOFT_MULT):.2f} | "
+                f"주봉 {macro_bias['direction']} / 일봉 {daily_bias['direction']}"
+            )
+        else:
+            print(
+                f"  [스캘핑복리] 상위추세 확인: 주봉 {macro_bias['direction']} / "
+                f"일봉 {daily_bias['direction']}"
+            )
 
     # MODERATE는 후보만 기록한다.
     # STRONG은 현재봉 기반 전략 + 거래량 + 방향성까지 맞을 때만 실거래로 승격한다.
@@ -7065,10 +7103,16 @@ def scan():
                 # 로컬 EMA 방향이 신호와 같을 때만 (ema_trend 역행 conf=5는 유지 차단).
                 _eff_min = _ad_min
                 _ema_dir = asig.get("ema_trend")
-                _ema_dir_ok = (
-                    (adirection == "LONG" and _ema_dir == 1)
-                    or (adirection == "SHORT" and _ema_dir == -1)
-                )
+                if EMA_LIVE_ALLOW_NEUTRAL_EMA_TREND:
+                    _ema_dir_ok = (
+                        (adirection == "LONG" and _ema_dir in (1, 0))
+                        or (adirection == "SHORT" and _ema_dir in (-1, 0))
+                    )
+                else:
+                    _ema_dir_ok = (
+                        (adirection == "LONG" and _ema_dir == 1)
+                        or (adirection == "SHORT" and _ema_dir == -1)
+                    )
                 if (
                     strategy_tag in AUTO_TRADE_STRATEGY_WHITELIST
                     and adirection == "LONG"

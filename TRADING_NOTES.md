@@ -1,5 +1,15 @@
 # GodOfTrading Trading Notes
 
+## 2026-08-03 EMA 코어 체결 재활성 (Bybit + Binance)
+
+**문제:** +EV `EMA눌림목+거래량급등/돌파` LONG 15m 가 7/14 이후 사실상 0체결.
+원인: HTF OR-차단, MTF 완전금지, conf 6, 5m hard, Binance canary OFF + API -2015.
+**조치 (`LOGIC 2026-08-03-ema-core-fill`):**
+- HTF: 주봉+일봉 **더블** 역행만 hard / 한쪽 soft×0.60
+- MTF: 고품질 EMA 롱 soft×0.55
+- conf 하한 4, EMA 중립 허용, 5m soft 확대, MACD hard→soft
+- Binance: `BINANCE_CANARY_LIVE_ENABLED=True` (현 버전 초소액 OOS). API -2015면 probe 차단 유지.
+
 ## 2026-08-03 S1 마이너스 구조 보정 (exit asymmetry)
 
 **원장 답:** S1 n=18 WR 33% (필요 ~44%), 승은 본전/부분TP로 잘리고 패는 풀 SL.
