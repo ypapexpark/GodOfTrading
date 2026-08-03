@@ -383,7 +383,12 @@ def _history_path(root: Path, venue: str) -> Path:
     return root / ("trade_state_binance.json" if venue == "binance" else "trade_state.json")
 
 
-def _current_version_rows(root: Path, venue: str, engine_version: str) -> list[dict]:
+def _current_version_rows(
+    root: Path,
+    venue: str,
+    engine_version: str,
+    strategy: str = STRATEGY,
+) -> list[dict]:
     path = _history_path(root, venue)
     if not path.exists():
         return []
@@ -397,7 +402,7 @@ def _current_version_rows(root: Path, venue: str, engine_version: str) -> list[d
             continue
         ctx = row.get("entry_context") or {}
         version = row.get("engine_version") or ctx.get("engine_version")
-        if version == engine_version and row.get("strategy") == STRATEGY:
+        if version == engine_version and row.get("strategy") == strategy:
             result.append(row)
     return result
 
@@ -407,11 +412,15 @@ def evaluate_live_permission(
     root: Path,
     venue: str,
     engine_version: str = ENGINE_VERSION,
+    strategy: str = STRATEGY,
+    canary_min_closed: int | None = None,
     binance_canary_enabled: bool = False,
 ) -> LivePermission:
     """Current-version-only canary/probation/champion gate."""
     venue = str(venue or "bybit").lower()
-    rows = _current_version_rows(root, venue, engine_version)
+    rows = _current_version_rows(
+        root, venue, engine_version, strategy=strategy
+    )
     pnls = [float(row.get("pnl_usd") or 0.0) for row in rows]
     gross_win = sum(p for p in pnls if p > 0)
     gross_loss = -sum(p for p in pnls if p < 0)
@@ -444,7 +453,7 @@ def evaluate_live_permission(
 
     # 미소 시드($0.02~0.05) canary는 n=8에서 노이즈로 조기중단되기 쉽다.
     # v3: 12건까지 canary 유지 후 1차 평가.
-    canary_n = int(CANARY_MIN_CLOSED)
+    canary_n = int(canary_min_closed if canary_min_closed is not None else CANARY_MIN_CLOSED)
     if len(rows) < canary_n:
         return LivePermission(
             True,

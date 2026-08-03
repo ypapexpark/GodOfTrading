@@ -164,6 +164,22 @@ from config import (SYMBOLS, TIMEFRAMES, STRICT_TF, SCALP_FRESHNESS, SWING_FRESH
                     S1_DISABLE_PRE_TP_BE, S1_BLOCK_LONG_WHEN_HTF_SHORT,
                     S1_MIN_TP1_NET_FEE_MULT,
                     SCALP_SYMBOL_LOSS_STREAK_COOLDOWN_H, SCALP_SYMBOL_LOSS_STREAK_LIMIT,
+                    EMA_1M_TRIGGER_ENABLED, EMA_1M_TRIGGER_TIMEFRAME,
+                    EMA_1M_TRIGGER_MIN_VOLUME, EMA_1M_TRIGGER_MAX_EXTENSION_ATR,
+                    EMA_1M_TRIGGER_REQUIRE_STACK, EMA_1M_TRIGGER_SOFT_MULT,
+                    MICRO_SCALP_ENABLED, MICRO_SCALP_SETUP_TIMEFRAME,
+                    MICRO_SCALP_TRIGGER_TIMEFRAME, MICRO_SCALP_LEVERAGE,
+                    MICRO_SCALP_MAX_MARGIN_PCT, MICRO_SCALP_MIN_MARGIN_USD,
+                    MICRO_SCALP_ACCOUNT_RISK_PCT, MICRO_SCALP_MAX_OPEN_POSITIONS,
+                    MICRO_SCALP_MAX_HOLD_MINUTES, MICRO_SCALP_LONG_ONLY,
+                    MICRO_SCALP_MIN_SCORE, MICRO_SCALP_MIN_VOLUME_5M,
+                    MICRO_SCALP_MIN_TRIGGER_VOLUME, MICRO_SCALP_MAX_STOP_ATR,
+                    MICRO_SCALP_MAX_STOP_PCT, MICRO_SCALP_MAX_SPREAD_PCT,
+                    MICRO_SCALP_MIN_TP1_FEE_MULT, MICRO_SCALP_CANARY_MIN_CLOSED,
+                    MICRO_SCALP_MAX_ENTRIES_PER_SYMBOL_PER_DAY,
+                    MICRO_SCALP_SYMBOL_LOSS_STREAK_LIMIT,
+                    MICRO_SCALP_SYMBOL_LOSS_STREAK_COOLDOWN_H,
+                    MICRO_SCALP_SYMBOL_ALLOWLIST, MICRO_SCALP_SYMBOL_DENYLIST,
                     BINANCE_D2_ENGINE_ENABLED, BINANCE_D2_LIVE_ENABLED,
                     BINANCE_D2_SETUP_TIMEFRAME, BINANCE_D2_TRIGGER_TIMEFRAME,
                     BINANCE_D2_CONTEXT_TIMEFRAMES, BINANCE_D2_LEVERAGE,
@@ -217,6 +233,12 @@ from quant_governor import evaluate_live_candidate
 from scalping_engine import (ENGINE_VERSION as SCALP_ENGINE_VERSION,
                              STRATEGY as SCALP_ENGINE_STRATEGY,
                              evaluate_live_permission, evaluate_scalp)
+from timing_trigger import evaluate_reaccel_trigger
+from micro_scalp_engine import (
+    ENGINE_VERSION as MICRO_SCALP_ENGINE_VERSION,
+    STRATEGY as MICRO_SCALP_STRATEGY,
+    evaluate_micro_scalp,
+)
 from binance_divergence_engine import (
     ENGINE_VERSION as BINANCE_D2_ENGINE_VERSION,
     STRATEGY as BINANCE_D2_STRATEGY,
@@ -2116,6 +2138,369 @@ def _try_scalping_engine_trade(symbol: str, df_15m, current_price: float,
     )
 
 
+def _micro_symbol_loss_streak(state: dict, symbol: str) -> tuple[int, float]:
+    streak = 0
+    last_loss_ts = 0.0
+    for row in reversed(state.get("trade_history") or []):
+        if row.get("strategy") != MICRO_SCALP_STRATEGY:
+            continue
+        if row.get("symbol") != symbol:
+            continue
+        if row.get("status") not in {"win", "loss", "breakeven"}:
+            continue
+        if row.get("status") == "loss":
+            streak += 1
+            last_loss_ts = max(last_loss_ts, float(row.get("timestamp") or 0.0))
+            continue
+        break
+    return streak, last_loss_ts
+
+
+def _try_micro_scalp_trade(
+    symbol: str,
+    current_price: float,
+    *,
+    spread_pct: float | None = None,
+    df_5m=None,
+    df_1m=None,
+) -> None:
+    """5m 셋업 + 1m 트리거 소액 canary 실주문."""
+    if not MICRO_SCALP_ENABLED or not AUTO_TRADE or DRY_RUN or FAST_RADAR:
+        return
+    if symbol in MICRO_SCALP_SYMBOL_DENYLIST:
+        return
+    if MICRO_SCALP_SYMBOL_ALLOWLIST and symbol not in MICRO_SCALP_SYMBOL_ALLOWLIST:
+        return
+
+    from trade_router import (
+        _append_trade, _load_state, _save_state, active_exchange,
+        build_trade_notification, execute, get_usdt_balance, get_usdt_equity,
+        has_open_position, log_execution_journal, log_trade_candidate,
+    )
+    from scalping_engine import evaluate_live_permission
+
+    venue = active_exchange()
+    if has_open_position(symbol):
+        return
+
+    try:
+        if df_5m is None:
+            df_5m = fetch_ohlcv(
+                symbol,
+                MICRO_SCALP_SETUP_TIMEFRAME,
+                TIMEFRAMES.get(MICRO_SCALP_SETUP_TIMEFRAME, {}).get("limit", 200),
+            )
+        if df_1m is None:
+            df_1m = fetch_ohlcv(
+                symbol,
+                MICRO_SCALP_TRIGGER_TIMEFRAME,
+                TIMEFRAMES.get(MICRO_SCALP_TRIGGER_TIMEFRAME, {}).get("limit", 120),
+            )
+    except Exception as e:
+        print(f"  [MICRO] {symbol} OHLCV 실패: {e}")
+        return
+
+    execution_cost = (
+        BINANCE_ROUND_TRIP_EXECUTION_COST
+        if venue == "binance" else BYBIT_ROUND_TRIP_EXECUTION_COST
+    )
+    plan = evaluate_micro_scalp(
+        df_5m,
+        df_1m,
+        live_price=current_price,
+        round_trip_cost=execution_cost,
+        spread_pct=spread_pct,
+        long_only=bool(MICRO_SCALP_LONG_ONLY),
+        min_score=float(MICRO_SCALP_MIN_SCORE),
+        min_volume_ratio_5m=float(MICRO_SCALP_MIN_VOLUME_5M),
+        min_trigger_volume=float(MICRO_SCALP_MIN_TRIGGER_VOLUME),
+        max_stop_atr=float(MICRO_SCALP_MAX_STOP_ATR),
+        max_stop_pct=float(MICRO_SCALP_MAX_STOP_PCT),
+        max_spread_pct=float(MICRO_SCALP_MAX_SPREAD_PCT),
+        min_tp1_net_fee_mult=float(MICRO_SCALP_MIN_TP1_FEE_MULT),
+    )
+    direction = plan.direction
+    signal_type = f"micro_scalp_{direction.lower()}"
+    if not plan.eligible:
+        if plan.score >= 50 or "1m 트리거" in (plan.reason or ""):
+            print(f"  [MICRO후보] {symbol} score={plan.score:.0f} — {plan.reason}")
+            log_trade_candidate(
+                symbol, MICRO_SCALP_SETUP_TIMEFRAME, MICRO_SCALP_STRATEGY,
+                direction, "MICRO", "blocked", plan.reason,
+                signal_type=signal_type,
+                engine_version=MICRO_SCALP_ENGINE_VERSION,
+                engine_plan=plan.to_dict(),
+            )
+        return
+
+    state = _load_state()
+    streak, last_loss_ts = _micro_symbol_loss_streak(state, symbol)
+    if streak >= int(MICRO_SCALP_SYMBOL_LOSS_STREAK_LIMIT):
+        import time as _time
+        cooldown_s = float(MICRO_SCALP_SYMBOL_LOSS_STREAK_COOLDOWN_H) * 3600.0
+        if last_loss_ts and (_time.time() - last_loss_ts) < cooldown_s:
+            reason = (
+                f"{symbol} MICRO 연패 {streak}회 쿨다운 "
+                f"{MICRO_SCALP_SYMBOL_LOSS_STREAK_COOLDOWN_H}h"
+            )
+            print(f"  [MICRO] {reason}")
+            log_trade_candidate(
+                symbol, MICRO_SCALP_SETUP_TIMEFRAME, MICRO_SCALP_STRATEGY,
+                direction, "MICRO", "blocked", reason,
+                engine_version=MICRO_SCALP_ENGINE_VERSION,
+                engine_plan=plan.to_dict(),
+            )
+            return
+
+    # 당일 심볼 진입 횟수
+    from datetime import datetime as _dt
+    today = _dt.now().strftime("%m/%d")
+    day_entries = 0
+    for row in state.get("trade_history") or []:
+        if row.get("strategy") != MICRO_SCALP_STRATEGY:
+            continue
+        if row.get("symbol") != symbol:
+            continue
+        if str(row.get("time") or "").startswith(today):
+            day_entries += 1
+    if day_entries >= int(MICRO_SCALP_MAX_ENTRIES_PER_SYMBOL_PER_DAY):
+        reason = (
+            f"오늘 {symbol} MICRO 진입 {day_entries}회 >= "
+            f"{MICRO_SCALP_MAX_ENTRIES_PER_SYMBOL_PER_DAY}"
+        )
+        print(f"  [MICRO] {reason}")
+        log_trade_candidate(
+            symbol, MICRO_SCALP_SETUP_TIMEFRAME, MICRO_SCALP_STRATEGY,
+            direction, "MICRO", "blocked", reason,
+            engine_version=MICRO_SCALP_ENGINE_VERSION,
+            engine_plan=plan.to_dict(),
+        )
+        return
+
+    engine_state = state.setdefault("micro_scalp_engine", {})
+    last_bars = engine_state.setdefault("last_entry_bar_by_symbol", {})
+    bar_key = f"{plan.signal_bar}|{plan.trigger_bar}"
+    if last_bars.get(symbol) == bar_key:
+        print(f"  [MICRO] {symbol} 동일 셋업/트리거 재진입 차단")
+        return
+
+    permission = evaluate_live_permission(
+        root=Path(__file__).resolve().parent,
+        venue=venue,
+        engine_version=MICRO_SCALP_ENGINE_VERSION,
+        strategy=MICRO_SCALP_STRATEGY,
+        canary_min_closed=int(MICRO_SCALP_CANARY_MIN_CLOSED),
+    )
+    if not permission.allow:
+        reason = f"MICRO 승격게이트: {permission.reason}"
+        print(f"  [MICRO] {symbol} {reason}")
+        log_trade_candidate(
+            symbol, MICRO_SCALP_SETUP_TIMEFRAME, MICRO_SCALP_STRATEGY,
+            direction, "MICRO", "blocked", reason,
+            engine_version=MICRO_SCALP_ENGINE_VERSION,
+            engine_plan=plan.to_dict(),
+            live_permission=permission.to_dict(),
+        )
+        return
+
+    balance = float(get_usdt_balance() or 0.0)
+    equity = float(get_usdt_equity() or balance)
+    if balance <= 0 or equity <= 0:
+        print(f"  [MICRO] {symbol} 잔고 확인 실패")
+        return
+
+    leverage = max(1, int(MICRO_SCALP_LEVERAGE))
+    entry = float(plan.entry)
+    stop = float(plan.stop)
+    stop_fraction = abs(entry - stop) / entry
+    loss_fraction = stop_fraction + execution_cost
+    account_risk = min(
+        float(getattr(permission, "account_risk_pct", MICRO_SCALP_ACCOUNT_RISK_PCT) or MICRO_SCALP_ACCOUNT_RISK_PCT),
+        float(MICRO_SCALP_ACCOUNT_RISK_PCT),
+    )
+    # canary mode: always pin to micro risk budget
+    if str(getattr(permission, "mode", "")) == "canary":
+        account_risk = float(MICRO_SCALP_ACCOUNT_RISK_PCT)
+    risk_budget = equity * account_risk
+    max_margin = min(balance, equity * float(MICRO_SCALP_MAX_MARGIN_PCT))
+    margin = min(risk_budget / max(leverage * loss_fraction, 1e-9), max_margin)
+    if margin + 1e-9 < MICRO_SCALP_MIN_MARGIN_USD:
+        # 소액 시드: fallback 하한까지 상향 시도
+        margin = min(max(margin, MICRO_SCALP_MIN_MARGIN_USD), max_margin, balance)
+    if margin + 1e-9 < MICRO_SCALP_MIN_MARGIN_USD:
+        reason = f"MICRO 증거금 ${margin:.2f} < ${MICRO_SCALP_MIN_MARGIN_USD:.2f}"
+        print(f"  [MICRO] {symbol} {reason}")
+        log_trade_candidate(
+            symbol, MICRO_SCALP_SETUP_TIMEFRAME, MICRO_SCALP_STRATEGY,
+            direction, "MICRO", "blocked", reason,
+            engine_version=MICRO_SCALP_ENGINE_VERSION,
+            engine_plan=plan.to_dict(),
+        )
+        return
+
+    position_pct = min(margin / balance, MICRO_SCALP_MAX_MARGIN_PCT)
+    margin = min(balance * position_pct, max_margin)
+    est_sl_loss = margin * leverage * loss_fraction
+    max_sl_loss_usd = risk_budget
+    position_pct, est_sl_loss, portfolio_notes, portfolio_block = _apply_portfolio_capacity_gate(
+        balance,
+        position_pct,
+        est_sl_loss,
+        max_margin,
+        direction,
+        high_opportunity=False,
+        label="MICRO 포트폴리오",
+        min_execution_margin_usd=MICRO_SCALP_MIN_MARGIN_USD,
+        max_open_positions_override=MICRO_SCALP_MAX_OPEN_POSITIONS,
+    )
+    if portfolio_block:
+        print(f"  [MICRO] {symbol} {portfolio_block}")
+        log_trade_candidate(
+            symbol, MICRO_SCALP_SETUP_TIMEFRAME, MICRO_SCALP_STRATEGY,
+            direction, "MICRO", "blocked", portfolio_block,
+            engine_version=MICRO_SCALP_ENGINE_VERSION,
+            engine_plan=plan.to_dict(),
+        )
+        return
+
+    tps = [
+        {"price": _round_price(float(tp["price"])), "pct": int(tp["pct"]), "rr": float(tp["rr"])}
+        for tp in plan.tps
+    ]
+    reasons = [
+        "MICRO: 5m 돌파·눌림 + 1m 재가속",
+        f"점수 {plan.score:.0f}/100, 5m vol {plan.volume_ratio:.2f}x, "
+        f"1m vol {plan.trigger_volume_ratio:.2f}x",
+        f"구조손절 {plan.stop_atr:.2f}ATR/{plan.stop_pct:.2f}%",
+        f"비용후 BE승률 {plan.required_win_rate*100:.1f}%",
+        getattr(permission, "reason", "canary"),
+        *portfolio_notes,
+    ]
+    entry_context = {
+        "engine_version": MICRO_SCALP_ENGINE_VERSION,
+        "strategy": MICRO_SCALP_STRATEGY,
+        "strategy_family": "Micro Scalp Canary",
+        "core_strategy": "5m 돌파 눌림 + 1m 트리거",
+        "strategy_mode": "micro_scalp",
+        "signal_type": signal_type,
+        "direction": direction,
+        "tf": MICRO_SCALP_SETUP_TIMEFRAME,
+        "reasons": reasons,
+        "entry_price": entry,
+        "sl": stop,
+        "sl_pct": plan.stop_pct,
+        "tps": tps,
+        "risk_pct": account_risk,
+        "position_pct": position_pct,
+        "est_sl_loss": est_sl_loss,
+        "leverage": leverage,
+        "signal_bar": plan.signal_bar,
+        "trigger_bar": plan.trigger_bar,
+        "engine_plan": plan.to_dict(),
+        "live_permission": (
+            permission.to_dict() if hasattr(permission, "to_dict") else {}
+        ),
+        "is_divergence": False,
+        "asymmetric_mode": False,
+    }
+    result = execute(
+        symbol=symbol,
+        direction=direction,
+        leverage=leverage,
+        entry_price=entry,
+        sl=stop,
+        tps=tps,
+        position_pct=position_pct,
+        atr=plan.atr,
+        is_elite=False,
+        max_margin_usd=max_margin,
+        min_margin_usd=MICRO_SCALP_MIN_MARGIN_USD,
+        max_sl_loss_usd=max_sl_loss_usd,
+        position_meta={
+            "engine_version": MICRO_SCALP_ENGINE_VERSION,
+            "strategy": MICRO_SCALP_STRATEGY,
+            "signal_bar": plan.signal_bar,
+            "max_hold_minutes": MICRO_SCALP_MAX_HOLD_MINUTES,
+            "disable_pre_tp_be": True,
+        },
+        require_full_protection=True,
+    )
+    if not result.get("ok"):
+        reason = f"MICRO 주문 실패: {result.get('error') or 'unknown'}"
+        print(f"  [MICRO] {symbol} {reason}")
+        log_trade_candidate(
+            symbol, MICRO_SCALP_SETUP_TIMEFRAME, MICRO_SCALP_STRATEGY,
+            direction, "MICRO", "order_failed", reason,
+            engine_version=MICRO_SCALP_ENGINE_VERSION,
+            engine_plan=plan.to_dict(),
+        )
+        return
+
+    filled_entry = float(result.get("entry_price") or entry)
+    qty = float(result.get("qty") or 0.0)
+    leverage = int(result.get("leverage") or leverage)
+    margin = float(result.get("margin_usd") or (qty * filled_entry / leverage if leverage else 0))
+    est_sl_loss = float(result.get("estimated_sl_loss_usd") or est_sl_loss)
+    entry_context["entry_price"] = filled_entry
+    trade_num = _append_trade(
+        symbol, direction, MICRO_SCALP_SETUP_TIMEFRAME, "MICRO-CANARY",
+        leverage, qty, filled_entry, stop, margin,
+        strategy=MICRO_SCALP_STRATEGY,
+        signal_type=signal_type,
+        tps=tps,
+        entry_reasons=reasons,
+        entry_context=entry_context,
+        engine_version=MICRO_SCALP_ENGINE_VERSION,
+        logic_stack_version=MICRO_SCALP_ENGINE_VERSION,
+        est_sl_loss=est_sl_loss,
+        risk_pct=account_risk,
+        position_pct=position_pct,
+        max_sl_loss_usd=max_sl_loss_usd,
+        entry_order_id=result.get("entry_order_id", ""),
+        entry_order_link_id=result.get("entry_order_link_id", ""),
+    )
+    log_trade_candidate(
+        symbol, MICRO_SCALP_SETUP_TIMEFRAME, MICRO_SCALP_STRATEGY,
+        direction, "MICRO-CANARY", "opened",
+        price=filled_entry, leverage=leverage, qty=qty,
+        position_pct=position_pct, risk_pct=account_risk,
+        est_sl_loss=est_sl_loss, rr=1.4, sl=stop, sl_pct=plan.stop_pct,
+        tps=tps, entry_reasons=reasons, entry_context=entry_context,
+        engine_version=MICRO_SCALP_ENGINE_VERSION,
+    )
+    log_execution_journal(
+        trade_num, "opened", symbol=symbol, tf=MICRO_SCALP_SETUP_TIMEFRAME,
+        strategy=MICRO_SCALP_STRATEGY, direction=direction, strength="MICRO-CANARY",
+        signal_type=signal_type, entry_price=filled_entry,
+        sl=stop, tps=tps, leverage=leverage, qty=qty, margin=margin,
+        risk_pct=account_risk, position_pct=position_pct,
+        est_sl_loss=est_sl_loss, entry_context=entry_context,
+        engine_version=MICRO_SCALP_ENGINE_VERSION,
+    )
+    state = _load_state()
+    engine_state = state.setdefault("micro_scalp_engine", {})
+    engine_state.setdefault("last_entry_bar_by_symbol", {})[symbol] = bar_key
+    engine_state["engine_version"] = MICRO_SCALP_ENGINE_VERSION
+    _save_state(state)
+
+    notification = build_trade_notification(
+        symbol, direction, leverage, qty, filled_entry, stop, tps, balance,
+        tf_key=MICRO_SCALP_SETUP_TIMEFRAME, strength="MICRO-CANARY",
+        strategy=MICRO_SCALP_STRATEGY, trade_num=trade_num,
+        reasons=reasons, timing_note=f"1m 트리거 {plan.trigger_bar}",
+        rr=1.4, risk_pct=account_risk,
+        est_sl_loss=est_sl_loss, sl_pct=plan.stop_pct,
+        signal_type=signal_type, confirmed_count=0,
+        is_divergence=False, entry_context=entry_context,
+    )
+    send(notification)
+    print(
+        f"  [MICRO체결] {symbol} {direction} score={plan.score:.0f} "
+        f"margin≈${margin:.2f} risk=${est_sl_loss:.3f} "
+        f"hold≤{MICRO_SCALP_MAX_HOLD_MINUTES}m"
+    )
+
+
 def _try_auto_trade(symbol: str, tf_key: str, signals: list,
                     current_price: float, scalp: bool = False,
                     mtf_boost: float = 1.0,
@@ -2502,6 +2887,45 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
             f"  [SHORT게이트] MTF={mtf_boost:.2f} EMA정렬={ema_aligned} "
             f"전역리스크×{SHORT_GLOBAL_RISK_MULT:.2f}"
         )
+
+    # ── EMA 15m + 1m 재가속 타이밍 레이어 ───────────────────────────────────
+    timing_1m_note = ""
+    if (
+        EMA_1M_TRIGGER_ENABLED
+        and strategy in AUTO_TRADE_STRATEGY_WHITELIST
+        and tf_key in LIVE_AUTO_TRADE_TIMEFRAMES
+    ):
+        try:
+            df_1m = fetch_ohlcv(
+                symbol,
+                EMA_1M_TRIGGER_TIMEFRAME,
+                TIMEFRAMES.get(EMA_1M_TRIGGER_TIMEFRAME, {}).get("limit", 120),
+            )
+            trig = evaluate_reaccel_trigger(
+                df_1m,
+                direction,
+                timeframe=EMA_1M_TRIGGER_TIMEFRAME,
+                min_volume_ratio=float(EMA_1M_TRIGGER_MIN_VOLUME),
+                max_extension_atr=float(EMA_1M_TRIGGER_MAX_EXTENSION_ATR),
+                require_ema_stack=bool(EMA_1M_TRIGGER_REQUIRE_STACK),
+            )
+        except Exception as e:
+            _block(f"1m 트리거 데이터 실패: {e}", send_diag=True)
+            return
+        if not trig.ok:
+            _block(
+                f"1m 타이밍 대기 — {trig.reason}",
+                paper_only=True,
+                timing_1m=trig.to_dict(),
+            )
+            return
+        timing_1m_note = trig.reason
+        print(f"  [1m트리거] {timing_1m_note}")
+        best = dict(best)
+        best["timing_1m"] = trig.to_dict()
+        if float(EMA_1M_TRIGGER_SOFT_MULT) < 1.0:
+            # 예비: 감액 모드 (현재 기본 1.0)
+            pass
 
     # ── 레짐 라우터 P1 (trend/range/high_vol) ────────────────────────────────
     regime_risk_mult = 1.0
@@ -6678,6 +7102,30 @@ def scan():
                 except Exception as scalp_err:
                     # One malformed symbol may never abort the venue-wide scan.
                     print(f"  [S1] {symbol} 엔진 평가 오류: {scalp_err}")
+            if (
+                AUTO_TRADE
+                and MICRO_SCALP_ENABLED
+                and tf_key == MICRO_SCALP_SETUP_TIMEFRAME
+            ):
+                try:
+                    m1 = ohlcv_cache.get(MICRO_SCALP_TRIGGER_TIMEFRAME)
+                    if m1 is None:
+                        m1_limit = TIMEFRAMES.get(
+                            MICRO_SCALP_TRIGGER_TIMEFRAME, {}
+                        ).get("limit", 120)
+                        m1 = fetch_ohlcv(
+                            symbol, MICRO_SCALP_TRIGGER_TIMEFRAME, m1_limit
+                        )
+                        ohlcv_cache[MICRO_SCALP_TRIGGER_TIMEFRAME] = m1
+                    _try_micro_scalp_trade(
+                        symbol,
+                        current_price,
+                        spread_pct=spread_by_symbol.get(symbol),
+                        df_5m=df,
+                        df_1m=m1,
+                    )
+                except Exception as micro_err:
+                    print(f"  [MICRO] {symbol} 엔진 평가 오류: {micro_err}")
             for _sig in signals:
                 _sig["current_price"] = current_price
                 _attach_hyperliquid_lead(_sig, hl_lead)

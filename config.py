@@ -702,7 +702,8 @@ REGIME_HIGH_VOL_BLOCK_MEANREV = True
 # 2026-07-11 이후 진입은 이 버전 문자열로 묶어서 복기한다.
 # 2026-08-03: EMA 코어 체결 재활성 — Bybit/Binance 공통 게이트 완화 + BN canary.
 # 2026-08-04: A안 — S1 OFF + EMA soft 완화 + SHORT 재개 + 계단형 수익락.
-LOGIC_STACK_VERSION = "2026-08-04-ema-fill-short-lock"
+# 2026-08-04b: EMA 1m 타이밍 레이어 + MICRO 스캘프 소액 canary.
+LOGIC_STACK_VERSION = "2026-08-04-ema1m-micro"
 
 # ─── S1 비용후 스캘핑 엔진 (2026-07-18 도입, 2026-07-29 품질 v2) ─────────────
 # 기존 confirmed_count/예외 누적 엔진은 같은 과거 표본을 반복 선택해 과최적화됐고,
@@ -801,6 +802,67 @@ EMA_COMPOUND_HTF_SOFT_MULT = 0.60
 EMA_COMPOUND_HTF_DOUBLE_BLOCK = True
 # S1 Binance canary는 EMA 코어와 분리 — 당분간 OFF (EMA 우선)
 SCALP_BINANCE_CANARY_ENABLED = False
+
+# ─── EMA 15m 승인 + 1m 재가속 타이밍 레이어 ────────────────────────────────
+# 화이트리스트 EMA가 다른 게이트를 통과한 뒤, 완료된 1m 재가속 트리거가 있을 때만
+# 실주문. 추격 진입을 줄이고 진입 타이밍을 개선한다 (본진 전략은 15m 유지).
+EMA_1M_TRIGGER_ENABLED = True
+EMA_1M_TRIGGER_TIMEFRAME = "1m"
+EMA_1M_TRIGGER_MIN_VOLUME = 0.75
+EMA_1M_TRIGGER_MAX_EXTENSION_ATR = 1.25
+EMA_1M_TRIGGER_REQUIRE_STACK = True
+# 1m 트리거 통과 시 소폭 리스크 유지(1.0) — 실패 시 진입 차단(soft 감액 없음)
+EMA_1M_TRIGGER_SOFT_MULT = 1.0
+
+# ─── MICRO 스캘프 소액 canary (5m 셋업 + 1m 트리거) ─────────────────────────
+# S1(15m/5m)과 분리. 눈으로 추적 가능한 초소액 실체결 OOS 수집용.
+# 본진 EMA 장부를 대체하지 않으며, 일 손실·동시 1포지션·심볼 denylist 적용.
+MICRO_SCALP_ENABLED = True
+MICRO_SCALP_SETUP_TIMEFRAME = "5m"
+MICRO_SCALP_TRIGGER_TIMEFRAME = "1m"
+MICRO_SCALP_LEVERAGE = 3
+MICRO_SCALP_MAX_MARGIN_PCT = 0.04          # equity 대비 증거금 상한 ~4%
+MICRO_SCALP_MIN_MARGIN_USD = 1.0
+MICRO_SCALP_ACCOUNT_RISK_PCT = 0.0025      # 계좌 위험 0.25% canary
+MICRO_SCALP_MAX_OPEN_POSITIONS = 1
+MICRO_SCALP_MAX_HOLD_MINUTES = 20
+MICRO_SCALP_LONG_ONLY = False              # 품질 통과 시 숏도 소액 허용
+MICRO_SCALP_MIN_SCORE = 72.0
+MICRO_SCALP_MIN_VOLUME_5M = 1.05
+MICRO_SCALP_MIN_TRIGGER_VOLUME = 0.80
+MICRO_SCALP_MAX_STOP_ATR = 1.80
+MICRO_SCALP_MAX_STOP_PCT = 1.80
+MICRO_SCALP_MAX_SPREAD_PCT = 0.12
+MICRO_SCALP_MIN_TP1_FEE_MULT = 2.0
+MICRO_SCALP_CANARY_MIN_CLOSED = 12
+MICRO_SCALP_MAX_ENTRIES_PER_SYMBOL_PER_DAY = 2
+MICRO_SCALP_SYMBOL_LOSS_STREAK_LIMIT = 2
+MICRO_SCALP_SYMBOL_LOSS_STREAK_COOLDOWN_H = 8
+# 유동성 중심 소수 심볼 (밈/주식 무기한 제외). 비어 있으면 CORE 스캔 심볼 사용.
+MICRO_SCALP_SYMBOL_ALLOWLIST: set = {
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT",
+    "XRP/USDT",
+    "DOGE/USDT",
+    "AVAX/USDT",
+    "LINK/USDT",
+    "BNB/USDT",
+    "SUI/USDT",
+    "HYPE/USDT",
+    "NEAR/USDT",
+    "ARB/USDT",
+    "OP/USDT",
+    "ENA/USDT",
+    "WLD/USDT",
+    "PEPE/USDT",
+    "1000PEPE/USDT",
+}
+# 1000PEPE는 과거 손실군 — allowlist에 넣되 denylist가 우선
+MICRO_SCALP_SYMBOL_DENYLIST: set = set(SCALP_SYMBOL_DENYLIST) | {
+    "1000PEPE/USDT",
+    "PEPE/USDT",
+}
 
 # ─── Binance D2 다이버전스·거래량 비대칭 실매매 엔진 ────────────────────────
 # 전체 USDⓈ-M USDT 무기한 종목의 15m/1h/4h 다이버전스를 함께 평가하고,
@@ -1066,6 +1128,7 @@ TIMEFRAMES = {
     "1h":  {"label": "1시간봉", "limit": 200},
     "15m": {"label": "15분봉",  "limit": 200},
     "5m":  {"label": "5분봉",   "limit": 200},
+    "1m":  {"label": "1분봉",   "limit": 120},
 }
 
 # ─── MTF (다중 타임프레임) 설정 ──────────────────────────────────────────────
