@@ -2439,7 +2439,7 @@ def _try_auto_trade(symbol: str, tf_key: str, signals: list,
         )
         return
 
-    # SHORT 임시 차단: SHORT 22건 36% 승률·손실 84% → EMA LONG 집중
+    # SHORT 전면 차단 플래그 (기본 OFF: 품질 게이트 통과 시 숏 허용)
     if BLOCK_SHORT_AUTO_TRADE and direction == "SHORT":
         _block("SHORT 실거래 임시 차단 — EMA LONG 전략 집중", paper_only=True)
         return

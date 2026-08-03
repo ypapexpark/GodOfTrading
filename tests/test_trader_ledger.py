@@ -46,5 +46,26 @@ class TraderLedgerTest(unittest.TestCase):
         self.assertEqual(by_num[3]["status"], "open")
 
 
+class ProfitLockStepTest(unittest.TestCase):
+    def test_profit_lock_levels_step_by_five(self):
+        self.assertIsNone(trader.profit_lock_level_for_roi(9.99))
+        self.assertEqual(trader.profit_lock_level_for_roi(10.0), 10.0)
+        self.assertEqual(trader.profit_lock_level_for_roi(14.9), 10.0)
+        self.assertEqual(trader.profit_lock_level_for_roi(15.0), 15.0)
+        self.assertEqual(trader.profit_lock_level_for_roi(19.9), 15.0)
+        self.assertEqual(trader.profit_lock_level_for_roi(20.0), 20.0)
+        self.assertEqual(trader.profit_lock_level_for_roi(33.0), 30.0)
+
+    def test_position_records_profit_lock_level_field(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "trade_state.json"
+            with patch.object(trader, "STATE_FILE", state_path):
+                trader._save_position("ETH/USDT", "SHORT", 200.0, 0.5, 205.0)
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        pos = state["positions"]["ETH/USDT"]
+        self.assertEqual(pos["profit_lock_level"], 0.0)
+        self.assertFalse(pos["profit_lock_10_done"])
+
+
 if __name__ == "__main__":
     unittest.main()

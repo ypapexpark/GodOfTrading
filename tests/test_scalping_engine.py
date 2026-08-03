@@ -172,10 +172,10 @@ class ScalpingEngineTest(unittest.TestCase):
         self.assertEqual(permission.closed, 12)
 
     def test_dual_engine_mode_keeps_s1_and_legacy_ema_long(self):
-        """S1 + 검증된 EMA-LONG 레거시 병행 (v3 리셋 포함)."""
-        self.assertTrue(config.SCALP_ENGINE_ENABLED)
+        """2026-08-04 A안: S1 신규 OFF + EMA 코어 + SHORT 품질게이트 재개."""
+        self.assertFalse(config.SCALP_ENGINE_ENABLED)
         self.assertTrue(config.LEGACY_AUTO_TRADE_ENABLED)
-        self.assertTrue(config.BLOCK_SHORT_AUTO_TRADE)
+        self.assertFalse(config.BLOCK_SHORT_AUTO_TRADE)
         self.assertTrue(config.SCALP_LONG_ONLY)
         self.assertIn("EMA눌림목+거래량급등", config.AUTO_TRADE_STRATEGY_WHITELIST)
         self.assertTrue(config.EMA_LIVE_LOWER_TF_SOFT_ENABLED)
@@ -184,6 +184,9 @@ class ScalpingEngineTest(unittest.TestCase):
         self.assertTrue(config.S1_DISABLE_PRE_TP_BE)
         self.assertTrue(config.S1_BLOCK_LONG_WHEN_HTF_SHORT)
         self.assertGreaterEqual(config.S1_MIN_TP1_NET_FEE_MULT, 2.0)
+        self.assertIn("EMA눌림목+돌파", config.SHORT_15M_STRATEGY_WHITELIST)
+        self.assertEqual(config.EMA_LIVE_MTF_SOFT_MIN_CONFIRMED, 4)
+        self.assertLessEqual(config.MIN_TRADE_MARGIN_USD, 1.0 + 1e-9)
 
     def test_tp1_below_fee_floor_is_blocked(self):
         d15, d5, now = _valid_frames()

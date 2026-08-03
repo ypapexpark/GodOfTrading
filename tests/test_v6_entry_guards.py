@@ -99,3 +99,8 @@ def test_ema_lower_tf_soft_config_is_bounded():
     assert 0.4 <= config.EMA_LIVE_LOWER_TF_SOFT_MULT <= 0.85
     assert config.EMA_LIVE_LOWER_TF_MAX_VWAP_EXT_PCT < config.EXTENSION_HARD_BLOCK_PCT
     assert config.EMA_LIVE_COUNTERTREND_MIN_CONFIRMED == 4
+    assert config.EMA_LIVE_MTF_SOFT_MIN_CONFIRMED == 4
+    assert config.EMA_LIVE_MTF_SOFT_MIN_VOL <= 1.0 + 1e-9
+    assert config.EMA_LIVE_LOWER_TF_MAX_VWAP_EXT_PCT >= 3.0
+    assert config.BLOCK_SHORT_AUTO_TRADE is False
+    assert config.SCALP_ENGINE_ENABLED is False

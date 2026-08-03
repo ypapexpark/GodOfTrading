@@ -109,8 +109,33 @@ PRE_TP_BE_LOCK_FRACTION = 0.25
 POST_TP1_LOCK_R = 0.50
 # 일반 포지션도 TP1 이후 트레일 허용 (기존 ELITE only → 러너 기회 확대)
 TRAIL_AFTER_TP1_ALL = True
-PROFIT_LOCK_TRIGGER_MARGIN_ROI_PCT = 10.0 # 레버리지 포함 +10% 수익권 진입 시
-PROFIT_LOCK_SL_MARGIN_ROI_PCT = 10.0      # SL도 증거금 ROI +10% 부근으로 이동
+# 레버리지 포함 증거금 ROI 계단 수익락:
+# +10% 도달 → SL을 +10% 이익권으로, 이후 +15% / +20% / … 5%p 단위로 상향.
+PROFIT_LOCK_TRIGGER_MARGIN_ROI_PCT = 10.0
+PROFIT_LOCK_STEP_MARGIN_ROI_PCT = 5.0
+PROFIT_LOCK_SL_MARGIN_ROI_PCT = 10.0  # 호환: 첫 락 레벨 (= TRIGGER)
+
+
+def profit_lock_level_for_roi(
+    margin_roi_pct: float,
+    trigger_pct: float = PROFIT_LOCK_TRIGGER_MARGIN_ROI_PCT,
+    step_pct: float = PROFIT_LOCK_STEP_MARGIN_ROI_PCT,
+) -> float | None:
+    """증거금 ROI(%)에 대응하는 잠금 계단 레벨을 반환한다.
+
+    예: 9.9 → None, 10~14.9 → 10, 15~19.9 → 15, 20~24.9 → 20 …
+    """
+    try:
+        roi = float(margin_roi_pct)
+        trigger = float(trigger_pct)
+        step = float(step_pct)
+    except (TypeError, ValueError):
+        return None
+    if step <= 0 or roi + 1e-12 < trigger:
+        return None
+    steps = int((roi - trigger + 1e-12) // step)
+    return round(trigger + steps * step, 6)
+
 
 MIN_QTY  = MIN_QTY_MAP
 QTY_STEP = QTY_STEP_MAP
@@ -1231,12 +1256,32 @@ def execute(symbol: str, direction: str, leverage: int,
         max_margin = max_margin_usd
     planned_margin = min(balance * position_pct, max_margin)
     if planned_margin + 1e-9 < min_required_margin:
-        msg = (
-            f"예정 증거금 ${planned_margin:.2f} < 최소 실행 증거금 "
-            f"${min_required_margin:.2f}"
-        )
-        print(f"[자동매매] {msg}")
-        return {"ok": False, "qty": 0, "leverage": leverage, "error": msg}
+        # 소액 시드 + risk 감액 후 예정 마진이 하한 미만일 때:
+        # 1) 잔고·max_margin 한도 안에서 최소 증거금까지 상향
+        # 2) 그래도 부족하면 fallback 이상이면 하한을 예정값으로 완화 (order_failed 방지)
+        boost_cap = min(balance, max_margin)
+        boost_to = min(min_required_margin, boost_cap)
+        if boost_to > planned_margin + 1e-9 and boost_to + 1e-9 >= MIN_FALLBACK_TRADE_MARGIN_USD:
+            position_pct = max(float(position_pct), boost_to / max(balance, 1e-9))
+            planned_margin = min(balance * position_pct, max_margin)
+            print(
+                f"[자동매매] 최소증거금 맞춤 상향 "
+                f"→ 예정 ${planned_margin:.2f} (목표 ${min_required_margin:.2f})"
+            )
+    if planned_margin + 1e-9 < min_required_margin:
+        if planned_margin + 1e-9 >= MIN_FALLBACK_TRADE_MARGIN_USD:
+            print(
+                f"[자동매매] 최소증거금 하한 완화 "
+                f"${min_required_margin:.2f} → ${planned_margin:.2f} (fallback 허용)"
+            )
+            min_required_margin = planned_margin
+        else:
+            msg = (
+                f"예정 증거금 ${planned_margin:.2f} < 최소 실행 증거금 "
+                f"${min_required_margin:.2f}"
+            )
+            print(f"[자동매매] {msg}")
+            return {"ok": False, "qty": 0, "leverage": leverage, "error": msg}
     qty, leverage = calc_qty(symbol, entry_price, leverage, balance, position_pct, max_margin, exchange=ex)
     if qty <= 0:
         return {"ok": False, "qty": 0, "leverage": leverage, "error": "수량 계산 실패"}
@@ -1517,7 +1562,8 @@ def _save_position(symbol: str, direction: str, entry_price: float,
         "initial_sl_price": sl,
         "be_done":     False,
         "pre_tp_be_done": False,
-        "profit_lock_10_done": False,
+        "profit_lock_10_done": False,  # 호환: 첫 10% 락 여부
+        "profit_lock_level": 0.0,      # 마지막 잠금 ROI 계단 (10/15/20…)
         "atr":         round(atr, 4),
         "leverage":    int(leverage or 1),
         "entry_order_id": entry_order_id,
@@ -1827,71 +1873,78 @@ def monitor_positions():
             except Exception as time_exit_err:
                 print(f"[시간청산] {symbol} 실패 — SL 유지: {time_exit_err}")
 
-        # 레버리지 포함 수익률이 +10%를 넘으면 SL도 +10% 이익권으로 끌어올린다.
-        if not info.get("profit_lock_10_done"):
-            direction = info["direction"]
-            entry_price = float(info.get("entry_price", 0) or 0)
+        # 레버리지 포함 ROI 계단 수익락:
+        # +10% → SL +10%, +15% → SL +15%, +20% → SL +20% … (5%p 단위, 하향 금지)
+        direction = info["direction"]
+        entry_price = float(info.get("entry_price", 0) or 0)
+        if entry_price > 0:
             current_sl = float(info.get("sl_price") or info.get("initial_sl_price") or 0)
             favorable = (
                 current_price - entry_price if direction == "LONG"
                 else entry_price - current_price
             )
-            price_move_pct = favorable / entry_price * 100 if entry_price > 0 else 0.0
+            price_move_pct = favorable / entry_price * 100
             margin_roi_pct = price_move_pct * max(current_leverage, 1.0)
-            lock_frac = (PROFIT_LOCK_SL_MARGIN_ROI_PCT / 100) / max(current_leverage, 1.0)
-            protect_sl = (
-                entry_price * (1 + lock_frac) if direction == "LONG"
-                else entry_price * (1 - lock_frac)
+            target_lock = profit_lock_level_for_roi(margin_roi_pct)
+            prev_lock = float(
+                info.get("profit_lock_level")
+                or (PROFIT_LOCK_TRIGGER_MARGIN_ROI_PCT if info.get("profit_lock_10_done") else 0.0)
+                or 0.0
             )
-            improves_sl = (
-                (direction == "LONG" and (current_sl <= 0 or protect_sl > current_sl))
-                or (direction == "SHORT" and (current_sl <= 0 or protect_sl < current_sl))
-            )
-            valid_trigger = (
-                (direction == "LONG" and current_price > protect_sl)
-                or (direction == "SHORT" and current_price < protect_sl)
-            )
-            if (
-                margin_roi_pct >= PROFIT_LOCK_TRIGGER_MARGIN_ROI_PCT
-                and improves_sl
-                and valid_trigger
-            ):
-                close_side = "sell" if direction == "LONG" else "buy"
-                tg_dir = 2 if direction == "LONG" else 1
-                try:
+            if target_lock is not None and target_lock > prev_lock + 1e-9:
+                lock_frac = (target_lock / 100.0) / max(current_leverage, 1.0)
+                protect_sl = (
+                    entry_price * (1 + lock_frac) if direction == "LONG"
+                    else entry_price * (1 - lock_frac)
+                )
+                improves_sl = (
+                    (direction == "LONG" and (current_sl <= 0 or protect_sl > current_sl))
+                    or (direction == "SHORT" and (current_sl <= 0 or protect_sl < current_sl))
+                )
+                valid_trigger = (
+                    (direction == "LONG" and current_price > protect_sl)
+                    or (direction == "SHORT" and current_price < protect_sl)
+                )
+                if improves_sl and valid_trigger:
+                    close_side = "sell" if direction == "LONG" else "buy"
+                    tg_dir = 2 if direction == "LONG" else 1
                     try:
-                        protect_sl = float(ex.price_to_precision(fsym, protect_sl))
-                    except Exception:
-                        protect_sl = round(protect_sl, 4)
-                    ex.cancel_all_orders(fsym, params={
-                        "category": "linear", "orderFilter": "StopOrder"
-                    })
-                    time.sleep(0.3)
-                    ex.create_order(
-                        fsym, "market", close_side, current_qty,
-                        params={
-                            "category":         "linear",
-                            "stopOrderType":    "StopLoss",
-                            "triggerPrice":     str(protect_sl),
-                            "triggerDirection": tg_dir,
-                            "reduceOnly":       True,
-                        }
-                    )
-                    print(
-                        f"[+10%락] {symbol} {direction} 증거금ROI {margin_roi_pct:+.1f}% "
-                        f"→ SL ${protect_sl:,.4f} (텔레그램 스킵·로그전용)"
-                    )
-                    s = _load_state()
-                    if symbol in s.get("positions", {}):
-                        s["positions"][symbol]["profit_lock_10_done"] = True
-                        s["positions"][symbol]["pre_tp_be_done"] = True
-                        s["positions"][symbol]["sl_price"] = protect_sl
-                    _save_state(s)
-                    info["profit_lock_10_done"] = True
-                    info["pre_tp_be_done"] = True
-                    info["sl_price"] = protect_sl
-                except Exception as e:
-                    print(f"[+10%락] {symbol} SL 이동 실패: {e}")
+                        try:
+                            protect_sl = float(ex.price_to_precision(fsym, protect_sl))
+                        except Exception:
+                            protect_sl = round(protect_sl, 4)
+                        ex.cancel_all_orders(fsym, params={
+                            "category": "linear", "orderFilter": "StopOrder"
+                        })
+                        time.sleep(0.3)
+                        ex.create_order(
+                            fsym, "market", close_side, current_qty,
+                            params={
+                                "category":         "linear",
+                                "stopOrderType":    "StopLoss",
+                                "triggerPrice":     str(protect_sl),
+                                "triggerDirection": tg_dir,
+                                "reduceOnly":       True,
+                            }
+                        )
+                        print(
+                            f"[+{target_lock:.0f}%락] {symbol} {direction} "
+                            f"증거금ROI {margin_roi_pct:+.1f}% "
+                            f"→ SL ${protect_sl:,.4f} (계단 {prev_lock:.0f}→{target_lock:.0f})"
+                        )
+                        s = _load_state()
+                        if symbol in s.get("positions", {}):
+                            s["positions"][symbol]["profit_lock_level"] = float(target_lock)
+                            s["positions"][symbol]["profit_lock_10_done"] = True
+                            s["positions"][symbol]["pre_tp_be_done"] = True
+                            s["positions"][symbol]["sl_price"] = protect_sl
+                        _save_state(s)
+                        info["profit_lock_level"] = float(target_lock)
+                        info["profit_lock_10_done"] = True
+                        info["pre_tp_be_done"] = True
+                        info["sl_price"] = protect_sl
+                    except Exception as e:
+                        print(f"[+{target_lock:.0f}%락] {symbol} SL 이동 실패: {e}")
 
         # TP1 전이라도 충분히 수익권이면 손실 거래로 되돌아가지 않게 SL을 당긴다.
         # S1 스캘프는 실측상 PRE_TP BE가 승을 +$0.00x로 깎아 EV를 죽임 → TP1 전 금지.

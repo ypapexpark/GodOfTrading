@@ -193,14 +193,24 @@ def evaluate_live_candidate(
         version_closed=version_metrics.closed,
         version_pnl_usd=version_metrics.pnl_usd,
     )
-    if strategy not in approved or direction != "LONG":
+    if strategy not in approved:
         return QuantDecision(
             allow=False,
             mode="shadow",
             risk_mult=0.0,
-            reason="승인된 EMA-LONG 챔피언 코호트가 아님",
+            reason="승인된 EMA 화이트리스트 전략이 아님",
             **base,
         )
+    if direction not in {"LONG", "SHORT"}:
+        return QuantDecision(
+            allow=False,
+            mode="shadow",
+            risk_mult=0.0,
+            reason=f"지원하지 않는 방향: {direction or '?'}",
+            **base,
+        )
+    # SHORT는 챔피언 코호트(롱 실측) 증거를 전략군 품질 기준으로만 빌려 쓰고,
+    # 실제 진입 품질은 main.py SHORT_STRICT(MTF/EMA 정렬) + 사이즈 감액이 담당한다.
 
     # 사용자가 승인한 Binance 초소액 실전 OOS 수집 경로. 과거 Binance 손실을
     # 무시해 정상 사이즈를 주는 것이 아니라 현재 로직 버전만 별도 canary로 본다.

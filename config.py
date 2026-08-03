@@ -220,7 +220,8 @@ ROI_RESCUE_MIN_BEST_RR = 1.4
 # 실거래 1회당 최소 투입 증거금. 단, 이 하한을 맞추면 일손실 한도를 넘는 경우는 진입하지 않는다.
 # 2026-08-03: $8 하한이 equity~$60 + probation risk×0.5 에서 예정 증거금 $3.5를
 # 전부 order_failed 로 죽임 (BTC/HYPE EMA눌림목+돌파). 소액 시드 실행 가능 하한으로 조정.
-MIN_TRADE_MARGIN_USD = 3.0
+# 2026-08-04: $3도 감액 후 $2.5 신호(CL)를 order_failed 시킴 → 하한 $1 + execute 상향 보정.
+MIN_TRADE_MARGIN_USD = 1.0
 MIN_TRADE_MARGIN_MAX_BALANCE_PCT = 0.12  # 단일 포지션 최대 계좌 12%
 # 목표 증거금/일손실 소프트캡 때문에 좋은 자리가 사라지지 않도록 쓰는 축소진입 하한.
 # 실제 거래소 최소수량은 주문 직전 calc_qty()가 다시 확인한다.
@@ -629,7 +630,9 @@ AUTO_TRADE_STRATEGY_WHITELIST: set = {
 }
 # 2026-07-12: Bybit SHORT n=44 pnl-$25.4 exp-$0.58 (롱은 ≈본전).
 # 전역 SHORT 신규 실주문 차단. 시그널 알림은 유지. 재개는 별도 승인.
-BLOCK_SHORT_AUTO_TRADE = True
+# 2026-08-04: 사용자 요청 — 자리 품질(MTF/EMA 정렬 등 SHORT_STRICT) 통과 시 SHORT 재개.
+# 전면 무필터 숏이 아니라 화이트리스트 전략 + 엄격 게이트 통과분만 실주문.
+BLOCK_SHORT_AUTO_TRADE = False
 
 # ─── 비-EMA(거래량급등) SHORT 강등 ──────────────────────────────────────────
 # 2026-07-06 진단: live SHORT을 방향+전략으로 분해하니 순수 EMA눌림목 계열 SHORT
@@ -650,8 +653,12 @@ SHORT_STRICT_GATES_ENABLED = True
 SHORT_REQUIRE_MTF_ALIGNED = True   # mtf_boost > 1.0 (상위봉 전정렬) 필수
 SHORT_REQUIRE_EMA_ALIGNED = True   # EMA 방향 일치 필수
 SHORT_GLOBAL_RISK_MULT = 0.50      # BLOCK_SHORT 시 미사용; 재개 시 상한
-# BLOCK_SHORT_AUTO_TRADE=True 동안 빈 set 유지
-SHORT_15M_STRATEGY_WHITELIST: set = set()
+# SHORT 재개 시 15m도 EMA 코어 2종만 (LIVE_15M_STRATEGIES 와 동일 철학).
+# 빈 set = 추가 제한 없음(상위 화이트리스트만 적용).
+SHORT_15M_STRATEGY_WHITELIST: set = {
+    "EMA눌림목+거래량급등",
+    "EMA눌림목+돌파",
+}
 
 # ─── 15m 실거래 전략 제한 ───────────────────────────────────────────────────
 # 2026-07-12: 코어 2종만 (15m EMA 롱은 반사실 +EV → 유지)
@@ -694,7 +701,8 @@ REGIME_HIGH_VOL_BLOCK_MEANREV = True
 # 실거래 A/B 귀속 태그 (journal/history에 남겨 "기존 vs 신규 스택" 구분)
 # 2026-07-11 이후 진입은 이 버전 문자열로 묶어서 복기한다.
 # 2026-08-03: EMA 코어 체결 재활성 — Bybit/Binance 공통 게이트 완화 + BN canary.
-LOGIC_STACK_VERSION = "2026-08-03-ema-core-fill"
+# 2026-08-04: A안 — S1 OFF + EMA soft 완화 + SHORT 재개 + 계단형 수익락.
+LOGIC_STACK_VERSION = "2026-08-04-ema-fill-short-lock"
 
 # ─── S1 비용후 스캘핑 엔진 (2026-07-18 도입, 2026-07-29 품질 v2) ─────────────
 # 기존 confirmed_count/예외 누적 엔진은 같은 과거 표본을 반복 선택해 과최적화됐고,
@@ -712,8 +720,11 @@ LOGIC_STACK_VERSION = "2026-08-03-ema-core-fill"
 #   - 레거시 EMA 퀀트게이트 allow(probation×0.5) 인데 5m VWAP hard-block + 역추세 6/6
 #     요구로 실체결 0. EMA 롱 코호트는 여전히 유일 +EV.
 # 조치: S1 v3 리셋(주식/반복진입 차단·stop% 소폭완화·canary 12건) + EMA 경미 soft.
-SCALP_ENGINE_ENABLED = True
-LEGACY_AUTO_TRADE_ENABLED = True  # EMA 롱 코어 재개 (BLOCK_SHORT + 화이트리스트 유지)
+#
+# 2026-08-04: S1 canary 최근 체결 전부 −EV·수익 체감 0 → 신규 실주문 OFF.
+# 후보/스캐너 코드는 유지하되 SCALP_ENGINE_ENABLED=False 로 진입 경로만 닫음.
+SCALP_ENGINE_ENABLED = False
+LEGACY_AUTO_TRADE_ENABLED = True  # EMA 코어 실거래 (SHORT 재개 + 화이트리스트 유지)
 SCALP_ENGINE_TIMEFRAME = "15m"
 SCALP_ENGINE_TRIGGER_TIMEFRAME = "5m"
 SCALP_ENGINE_LEVERAGE = 3
@@ -772,17 +783,19 @@ SCALP_SYMBOL_DENYLIST: set = {
 # 눌림 반등(캔들 순방향)을 전부 굶김 → 2.0%로 상향. EXTENSION_HARD(8%)와 여유 유지.
 EMA_LIVE_LOWER_TF_SOFT_ENABLED = True
 EMA_LIVE_LOWER_TF_SOFT_MULT = 0.70
-EMA_LIVE_LOWER_TF_MAX_VWAP_EXT_PCT = 2.50  # 경미 반등 허용 소폭 확대
+# 2026-08-04: 2.5%는 건강한 알트 반등(VWAP 이격 2.6~3.3%)을 hard 학살 → 3.5%
+EMA_LIVE_LOWER_TF_MAX_VWAP_EXT_PCT = 3.50
 # 화이트리스트 EMA LONG 15m: 역추세 confirmed 하한 (실측 conf=5 +EV, conf=4 관찰 확대)
 EMA_LIVE_COUNTERTREND_MIN_CONFIRMED = 4
 EMA_LIVE_COUNTERTREND_MIN_VOL = 1.0
 # 로컬 EMA 중립(0)도 허용 — 완전 역행(-1)만 제외
 EMA_LIVE_ALLOW_NEUTRAL_EMA_TREND = True
-# MTF 완전역방향: EMA 롱 화이트리스트도 고품질이면 soft 감액 (전면 금지가 공백 원인)
+# MTF 완전역방향: EMA 화이트리스트도 고품질이면 soft 감액 (전면 금지가 공백 원인)
+# 2026-08-04: conf 5/vol 1.15 가 WL 탈락 1위 → conf 4 / vol 1.0 (countertrend 하한과 정합)
 EMA_LIVE_MTF_SOFT_ENABLED = True
 EMA_LIVE_MTF_SOFT_MULT = 0.55
-EMA_LIVE_MTF_SOFT_MIN_CONFIRMED = 5
-EMA_LIVE_MTF_SOFT_MIN_VOL = 1.15
+EMA_LIVE_MTF_SOFT_MIN_CONFIRMED = 4
+EMA_LIVE_MTF_SOFT_MIN_VOL = 1.0
 # 스캘핑복리 HTF: 한쪽만 반대면 soft, 주봉+일봉 둘 다 반대만 hard
 EMA_COMPOUND_HTF_SOFT_MULT = 0.60
 EMA_COMPOUND_HTF_DOUBLE_BLOCK = True

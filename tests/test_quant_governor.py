@@ -63,17 +63,33 @@ class QuantGovernorTest(unittest.TestCase):
         self.assertEqual(d.mode, "shadow")
         self.assertEqual(d.risk_mult, 0.0)
 
-    def test_unapproved_direction_never_borrows_champion_evidence(self):
+    def test_unapproved_strategy_never_borrows_champion_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._write(root, "bybit", [trade(2) for _ in range(25)])
             d = evaluate_live_candidate(
-                venue="bybit", strategy=APPROVED[0], direction="SHORT",
+                venue="bybit", strategy="RSI2반전", direction="LONG",
                 timeframe="15m", approved_strategies=APPROVED,
                 root=root,
             )
         self.assertFalse(d.allow)
-        self.assertIn("EMA-LONG", d.reason)
+        self.assertIn("화이트리스트", d.reason)
+
+    def test_approved_short_can_use_champion_family_evidence(self):
+        """SHORT는 차단이 아니라 승인 전략군이면 품질게이트 이후 진입 가능."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # 챔피언 표본: 승인 전략 LONG 실측 (approved_cohort는 LONG만 집계)
+            rows = [trade(2, version="legacy") for _ in range(12)]
+            rows += [trade(-1, version="legacy") for _ in range(8)]
+            self._write(root, "bybit", rows)
+            d = evaluate_live_candidate(
+                venue="bybit", strategy=APPROVED[0], direction="SHORT",
+                timeframe="15m", approved_strategies=APPROVED,
+                logic_stack_version="v2", root=root,
+            )
+        self.assertTrue(d.allow)
+        self.assertGreater(d.risk_mult, 0.0)
 
     def test_negative_current_version_cannot_hide_behind_legacy_profit(self):
         with tempfile.TemporaryDirectory() as tmp:

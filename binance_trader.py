@@ -1777,39 +1777,57 @@ def monitor_positions() -> dict:
                         print(f"[Binance {policy_label} TP1] 잔량 SL 동기화 실패: {exc}")
             continue
 
-        # +10% 수익락
-        if not info.get("profit_lock_10_done") and entry_price > 0:
+        # 증거금 ROI 계단 수익락 (+10 → +15 → +20 … 5%p)
+        if entry_price > 0:
             price_move_pct = favorable / entry_price * 100
             margin_roi = price_move_pct * max(leverage, 1.0)
-            lock_frac = (PROFIT_LOCK_SL / 100) / max(leverage, 1.0)
-            protect_sl = (
-                entry_price * (1 + lock_frac) if direction == "LONG"
-                else entry_price * (1 - lock_frac)
+            step_pct = float(getattr(st, "PROFIT_LOCK_STEP_MARGIN_ROI_PCT", 5.0))
+            target_lock = st.profit_lock_level_for_roi(
+                margin_roi,
+                trigger_pct=PROFIT_LOCK_TRIGGER,
+                step_pct=step_pct,
             )
-            improves = (
-                (direction == "LONG" and (current_sl <= 0 or protect_sl > current_sl))
-                or (direction == "SHORT" and (current_sl <= 0 or protect_sl < current_sl))
+            prev_lock = float(
+                info.get("profit_lock_level")
+                or (PROFIT_LOCK_TRIGGER if info.get("profit_lock_10_done") else 0.0)
+                or 0.0
             )
-            valid = (
-                (direction == "LONG" and current_price > protect_sl)
-                or (direction == "SHORT" and current_price < protect_sl)
-            )
-            if margin_roi >= PROFIT_LOCK_TRIGGER and improves and valid:
-                try:
-                    px = _set_stop_loss(ex, fsym, direction, current_qty, protect_sl)
-                    print(f"[Binance +10%락] {symbol} ROI {margin_roi:+.1f}% → SL ${px}")
-                    s = st._load_state()
-                    if symbol in s.get("positions", {}):
-                        s["positions"][symbol]["profit_lock_10_done"] = True
-                        s["positions"][symbol]["pre_tp_be_done"] = True
-                        s["positions"][symbol]["sl_price"] = px
-                    st._save_state(s)
-                    info["profit_lock_10_done"] = True
-                    info["pre_tp_be_done"] = True
-                    info["sl_price"] = px
-                    current_sl = px
-                except Exception as e:
-                    print(f"[Binance +10%락] 실패: {e}")
+            if target_lock is not None and target_lock > prev_lock + 1e-9:
+                lock_frac = (target_lock / 100.0) / max(leverage, 1.0)
+                protect_sl = (
+                    entry_price * (1 + lock_frac) if direction == "LONG"
+                    else entry_price * (1 - lock_frac)
+                )
+                improves = (
+                    (direction == "LONG" and (current_sl <= 0 or protect_sl > current_sl))
+                    or (direction == "SHORT" and (current_sl <= 0 or protect_sl < current_sl))
+                )
+                valid = (
+                    (direction == "LONG" and current_price > protect_sl)
+                    or (direction == "SHORT" and current_price < protect_sl)
+                )
+                if improves and valid:
+                    try:
+                        px = _set_stop_loss(ex, fsym, direction, current_qty, protect_sl)
+                        print(
+                            f"[Binance +{target_lock:.0f}%락] {symbol} "
+                            f"ROI {margin_roi:+.1f}% → SL ${px} "
+                            f"(계단 {prev_lock:.0f}→{target_lock:.0f})"
+                        )
+                        s = st._load_state()
+                        if symbol in s.get("positions", {}):
+                            s["positions"][symbol]["profit_lock_level"] = float(target_lock)
+                            s["positions"][symbol]["profit_lock_10_done"] = True
+                            s["positions"][symbol]["pre_tp_be_done"] = True
+                            s["positions"][symbol]["sl_price"] = px
+                        st._save_state(s)
+                        info["profit_lock_level"] = float(target_lock)
+                        info["profit_lock_10_done"] = True
+                        info["pre_tp_be_done"] = True
+                        info["sl_price"] = px
+                        current_sl = px
+                    except Exception as e:
+                        print(f"[Binance +{target_lock:.0f}%락] 실패: {e}")
 
         # pre-TP 수익보호
         if (
