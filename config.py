@@ -218,9 +218,10 @@ ROI_RESCUE_MIN_TP1_RR = 1.0
 ROI_RESCUE_MIN_BEST_RR = 1.4
 
 # 실거래 1회당 최소 투입 증거금. 단, 이 하한을 맞추면 일손실 한도를 넘는 경우는 진입하지 않는다.
-# 소액 계좌에서 $20 하한이 계좌의 31%를 강제 투입해 리스크 과대가 발생하던 문제 수정.
-MIN_TRADE_MARGIN_USD = 8.0
-MIN_TRADE_MARGIN_MAX_BALANCE_PCT = 0.12  # 2026-07-06: 0.25 → 0.12 (2026-07-07 원복). 단일 포지션 최대 계좌 12%
+# 2026-08-03: $8 하한이 equity~$60 + probation risk×0.5 에서 예정 증거금 $3.5를
+# 전부 order_failed 로 죽임 (BTC/HYPE EMA눌림목+돌파). 소액 시드 실행 가능 하한으로 조정.
+MIN_TRADE_MARGIN_USD = 3.0
+MIN_TRADE_MARGIN_MAX_BALANCE_PCT = 0.12  # 단일 포지션 최대 계좌 12%
 # 목표 증거금/일손실 소프트캡 때문에 좋은 자리가 사라지지 않도록 쓰는 축소진입 하한.
 # 실제 거래소 최소수량은 주문 직전 calc_qty()가 다시 확인한다.
 MIN_FALLBACK_TRADE_MARGIN_USD = 1.0
@@ -261,12 +262,14 @@ BINANCE_CANARY_MAX_OPEN_POSITIONS = 3
 # 확신도 높은 자리는 "맞췄는데 수익금이 너무 작음"을 막기 위해 증거금 하한을 따로 둔다.
 # 목표 증거금 = max(고정 USD, 잔고 비율). 단, 일손실/DD 하드스톱은 그대로 유지한다.
 CONVICTION_SIZING_ENABLED = True
+# 소액 시드($60)에서도 확신도 티어가 $8~20 강제를 걸면 위험 사이징과 충돌한다.
+# 절대 USD는 보수적 하한, 비율 바닥이 실제 스케일을 담당한다.
 CONVICTION_MARGIN_USD_BY_TIER = {
-    "BASE": 8.0,
-    "STRONG": 12.0,
-    "VERY STRONG": 20.0,
-    "ELITE": 20.0,
-    "GOLDEN": 25.0,
+    "BASE": 3.0,
+    "STRONG": 4.0,
+    "VERY STRONG": 5.0,
+    "ELITE": 6.0,
+    "GOLDEN": 8.0,
 }
 # 2026-07-06 긴급 하향: VERY STRONG/ELITE 신호마다 계좌의 20%를 강제베팅하던 게
 # 오버사이징 근본원인(넓은 SL 20~27%와 겹쳐 단건위험 4%+로 폭증). 하한 대폭 축소.

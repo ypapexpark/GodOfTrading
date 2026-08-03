@@ -672,10 +672,12 @@ def _conviction_margin_target(balance: float, raw_strength: str,
     pct_floor = float(CONVICTION_MARGIN_PCT_BY_TIER.get(tier, 0.0))
     target = max(MIN_TRADE_MARGIN_USD, fixed_usd, balance * pct_floor)
     hard_cap_usd = balance * MIN_TRADE_MARGIN_MAX_BALANCE_PCT
+    # 소액 계좌: hard cap($60×12%=$7.2)이 예전 $8 하한보다 작아 강제 $8 → order_failed.
+    # hard cap 이하면 cap과 fallback 사이로 맞춘다.
     if hard_cap_usd >= MIN_TRADE_MARGIN_USD:
         target = min(target, hard_cap_usd)
     else:
-        target = MIN_TRADE_MARGIN_USD
+        target = max(MIN_FALLBACK_TRADE_MARGIN_USD, min(target, hard_cap_usd))
     note = (
         f"확신도 시드 {tier}: 목표증거금 ${target:.2f}"
         + (f" — {', '.join(reasons)}" if reasons else "")
